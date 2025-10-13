@@ -11,6 +11,7 @@ import (
 	"github.com/Raezil/go-agent-development-kit/pkg/agent"
 	"github.com/Raezil/go-agent-development-kit/pkg/memory"
 	"github.com/Raezil/go-agent-development-kit/pkg/models"
+	mcptools "github.com/Raezil/go-agent-development-kit/pkg/tools/mcp"
 )
 
 // ModelLoader constructs a language model instance for the primary agent.
@@ -34,6 +35,7 @@ type Config struct {
 	SubAgents            []agent.SubAgent
 	MemoryFactory        MemoryBankFactory
 	SessionMemoryBuilder SessionMemoryFactory
+	MCPClients           []mcptools.ClientFactory
 }
 
 // Validate ensures the configuration has the minimum information required to build a runtime.
@@ -84,11 +86,12 @@ func (c Config) sessionMemoryFactory() SessionMemoryFactory {
 
 // Runtime wires together models, tools, memory and sub-agents into a cohesive execution environment.
 type Runtime struct {
-	agent     *agent.Agent
-	memory    *memory.SessionMemory
-	bank      *memory.MemoryBank
-	tools     []agent.Tool
-	subagents []agent.SubAgent
+	agent      *agent.Agent
+	memory     *memory.SessionMemory
+	bank       *memory.MemoryBank
+	tools      []agent.Tool
+	subagents  []agent.SubAgent
+	mcpClients []mcptools.Client
 
 	sessionCounter atomic.Uint64
 }
@@ -115,11 +118,44 @@ func New(ctx context.Context, cfg Config) (*Runtime, error) {
 
 	sessionMemory := cfg.sessionMemoryFactory()(bank, cfg.sessionWindow())
 
+	allTools := append([]agent.Tool(nil), cfg.Tools...)
+	var mcpClients []mcptools.Client
+	for _, factory := range cfg.MCPClients {
+		if factory == nil {
+			continue
+		}
+		client, err := factory(ctx)
+		if err != nil {
+			closeMCPClients(ctx, mcpClients)
+			if bank.DB != nil {
+				bank.DB.Close()
+			}
+			return nil, fmt.Errorf("initialise mcp client: %w", err)
+		}
+		mcpClients = append(mcpClients, client)
+
+		toolFactory := mcptools.NewToolFactory(client)
+		discovered, err := toolFactory.Tools(ctx)
+		if err != nil {
+			closeMCPClients(ctx, mcpClients)
+			if bank.DB != nil {
+				bank.DB.Close()
+			}
+			return nil, fmt.Errorf("load mcp tools for %s: %w", client.Name(), err)
+		}
+		allTools = append(allTools, discovered...)
+
+		if resourceTool := mcptools.NewResourceTool(client); resourceTool != nil {
+			allTools = append(allTools, resourceTool)
+		}
+	}
+
 	coordinator, err := cfg.CoordinatorModel(ctx)
 	if err != nil {
 		if bank.DB != nil {
 			bank.DB.Close()
 		}
+		closeMCPClients(ctx, mcpClients)
 		return nil, fmt.Errorf("load coordinator model: %w", err)
 	}
 
@@ -128,22 +164,24 @@ func New(ctx context.Context, cfg Config) (*Runtime, error) {
 		Memory:       sessionMemory,
 		SystemPrompt: cfg.systemPrompt(),
 		ContextLimit: cfg.contextLimit(),
-		Tools:        append([]agent.Tool(nil), cfg.Tools...),
+		Tools:        append([]agent.Tool(nil), allTools...),
 		SubAgents:    append([]agent.SubAgent(nil), cfg.SubAgents...),
 	})
 	if err != nil {
 		if bank.DB != nil {
 			bank.DB.Close()
 		}
+		closeMCPClients(ctx, mcpClients)
 		return nil, fmt.Errorf("initialise coordinator agent: %w", err)
 	}
 
 	rt := &Runtime{
-		agent:     agentInstance,
-		memory:    sessionMemory,
-		bank:      bank,
-		tools:     append([]agent.Tool(nil), cfg.Tools...),
-		subagents: append([]agent.SubAgent(nil), cfg.SubAgents...),
+		agent:      agentInstance,
+		memory:     sessionMemory,
+		bank:       bank,
+		tools:      append([]agent.Tool(nil), allTools...),
+		subagents:  append([]agent.SubAgent(nil), cfg.SubAgents...),
+		mcpClients: mcpClients,
 	}
 	return rt, nil
 }
@@ -170,6 +208,7 @@ func (rt *Runtime) SubAgents() []agent.SubAgent {
 
 // Close releases database connections associated with the runtime.
 func (rt *Runtime) Close() error {
+	closeMCPClients(context.Background(), rt.mcpClients)
 	if rt.bank != nil && rt.bank.DB != nil {
 		rt.bank.DB.Close()
 	}
@@ -220,4 +259,13 @@ func (s *Session) CloseFlush(ctx context.Context, logger func(error)) {
 // Sleep is a small helper to make demos deterministic in tests by injecting delays.
 func Sleep(d time.Duration) {
 	time.Sleep(d)
+}
+
+func closeMCPClients(ctx context.Context, clients []mcptools.Client) {
+	for _, client := range clients {
+		if client == nil {
+			continue
+		}
+		_ = client.Close(ctx)
+	}
 }

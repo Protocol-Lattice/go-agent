@@ -13,6 +13,8 @@ sub-agents so you can focus on domain logic instead of orchestration glue.
   demonstrates how to bolt on personas such as a researcher that drafts background briefs.
 - **Tooling ecosystem** – Implement the `agent.Tool` interface and register it with the runtime. Reference
   implementations (echo, calculator, clock) live in `pkg/tools`.
+- **Model Context Protocol connectors** – `pkg/tools/mcp` adapts MCP servers (for example via
+  [`mark3labs/mcp-go`](https://github.com/mark3labs/mcp-go)) into runtime tools and resource helpers.
 - **Retrieval-augmented memory** – `pkg/memory` combines a short-term window with an optional Postgres + pgvector
   backend for long-term recall. The package gracefully degrades to in-memory only mode when a database is not
   provided (useful for tests and local hacking).
@@ -50,11 +52,17 @@ cfg := runtime.Config{
         },
         Tools: []agent.Tool{&tools.CalculatorTool{}},
         SubAgents: []agent.SubAgent{subagents.NewResearcher(researcherModel)},
+        MCPClients: []mcp.ClientFactory{loadMCPServer},
 }
 rt, _ := runtime.New(ctx, cfg)
 session := rt.NewSession("")
 reply, _ := session.Ask(ctx, "How do I wire an agent?")
 ```
+
+`loadMCPServer` is any factory that returns an implementation of `mcp.Client`. The
+[`mark3labs/mcp-go`](https://github.com/mark3labs/mcp-go) project provides a reference Go client—wrap it in a
+lightweight adapter that satisfies the interface and the runtime will automatically expose the remote tools and
+resources.
 
 ## Requirements
 
@@ -109,6 +117,8 @@ reply, _ := session.Ask(ctx, "How do I wire an agent?")
   Anthropic, Ollama). Supply a loader function via `runtime.Config.CoordinatorModel`.
 - **Add or remove tools** – Create new implementations of `agent.Tool` and append them to `runtime.Config.Tools`.
   Tools are automatically exposed to the coordinator prompt and invocable with the `tool:<name>` convention.
+- **Attach MCP servers** – Use `pkg/tools/mcp` to wrap Model Context Protocol clients. Provide one or more
+  factories via `runtime.Config.MCPClients` to automatically surface remote tools and resources.
 - **Add sub-agents** – Any `agent.SubAgent` can be registered through `runtime.Config.SubAgents`. Delegate tasks in
   conversation with `subagent:<name> do something`.
 - **Memory backends** – The runtime defaults to Postgres but you can provide a custom `MemoryFactory` or
