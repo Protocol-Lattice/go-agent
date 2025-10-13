@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Raezil/go-agent-development-kit/pkg/agent"
@@ -83,15 +84,45 @@ func main() {
 	fmt.Printf("Tools: %s\n", names(rt.Tools()))
 	fmt.Printf("Sub-agents: %s\n\n", names(rt.SubAgents()))
 
-	for _, prompt := range prompts {
-		start := time.Now()
-		reply, err := session.Ask(ctx, prompt)
-		duration := time.Since(start)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+	type promptResult struct {
+		index    int
+		prompt   string
+		reply    string
+		err      error
+		duration time.Duration
+	}
+
+	results := make([]promptResult, len(prompts))
+	resultsCh := make(chan promptResult, len(prompts))
+
+	var wg sync.WaitGroup
+	for idx, prompt := range prompts {
+		idx, prompt := idx, prompt
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			start := time.Now()
+			reply, err := session.Ask(ctx, prompt)
+			duration := time.Since(start)
+			resultsCh <- promptResult{index: idx, prompt: prompt, reply: reply, err: err, duration: duration}
+		}()
+	}
+
+	go func() {
+		wg.Wait()
+		close(resultsCh)
+	}()
+
+	for res := range resultsCh {
+		results[res.index] = res
+	}
+
+	for _, res := range results {
+		if res.err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", res.err)
 			continue
 		}
-		fmt.Printf("User: %s\nAgent: %s\n(%.2fs)\n\n", prompt, reply, duration.Seconds())
+		fmt.Printf("User: %s\nAgent: %s\n(%.2fs)\n\n", res.prompt, res.reply, res.duration.Seconds())
 	}
 }
 
