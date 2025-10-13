@@ -109,7 +109,8 @@ resources.
 
    Flags let you customise the coordinator model (`--model`), session identifier (`--session`), context limit
    (`--context`), and short-term memory window (`--window`). Provide additional prompts as positional arguments to
-   override the default script.
+   override the default script. You can also attach Model Context Protocol servers with the repeatable `--mcp`
+   flag, for example `--mcp "node ./scripts/my-server.js"`.
 
 ## Customisation Guide
 

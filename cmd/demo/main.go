@@ -15,6 +15,7 @@ import (
 	"github.com/Raezil/go-agent-development-kit/pkg/runtime"
 	"github.com/Raezil/go-agent-development-kit/pkg/subagents"
 	"github.com/Raezil/go-agent-development-kit/pkg/tools"
+	mcptools "github.com/Raezil/go-agent-development-kit/pkg/tools/mcp"
 )
 
 func main() {
@@ -26,6 +27,8 @@ func main() {
 		promptLimit = flag.Int("context", 6, "Number of conversation turns to send to the model")
 		windowSize  = flag.Int("window", 8, "Short-term memory window size per session")
 	)
+	var mcpServers stringSliceFlag
+	flag.Var(&mcpServers, "mcp", "Command that launches an MCP server (repeat for multiple). Example: --mcp \"node server.js\"")
 	flag.Parse()
 
 	ctx := context.Background()
@@ -52,6 +55,13 @@ func main() {
 		SubAgents: []agent.SubAgent{
 			subagents.NewResearcher(researcherModel),
 		},
+	}
+
+	for _, command := range mcpServers {
+		command := command
+		cfg.MCPClients = append(cfg.MCPClients, func(ctx context.Context) (mcptools.Client, error) {
+			return loadMCPServer(ctx, command)
+		})
 	}
 
 	rt, err := runtime.New(ctx, cfg)
@@ -135,4 +145,19 @@ func names[T interface{ Name() string }](items []T) string {
 		values = append(values, item.Name())
 	}
 	return strings.Join(values, ", ")
+}
+
+type stringSliceFlag []string
+
+func (s *stringSliceFlag) String() string {
+	return strings.Join(*s, ", ")
+}
+
+func (s *stringSliceFlag) Set(value string) error {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return fmt.Errorf("mcp command cannot be empty")
+	}
+	*s = append(*s, trimmed)
+	return nil
 }

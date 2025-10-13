@@ -3,12 +3,13 @@ module github.com/Raezil/go-agent-development-kit
 go 1.25.0
 
 require (
-	github.com/anthropics/anthropic-sdk-go v1.13.0
-	github.com/google/generative-ai-go v0.20.1
-	github.com/jackc/pgx/v5 v5.7.6
-	github.com/ollama/ollama v0.12.5
-	github.com/sashabaranov/go-openai v1.41.2
-	google.golang.org/api v0.252.0
+        github.com/anthropics/anthropic-sdk-go v1.13.0
+        github.com/google/generative-ai-go v0.20.1
+        github.com/jackc/pgx/v5 v5.7.6
+        github.com/ollama/ollama v0.12.5
+        github.com/sashabaranov/go-openai v1.41.2
+        google.golang.org/api v0.252.0
+        github.com/mark3labs/mcp-go v0.0.0
 )
 
 require (
@@ -50,3 +51,5 @@ require (
 	google.golang.org/grpc v1.75.1 // indirect
 	google.golang.org/protobuf v1.36.10 // indirect
 )
+
+replace github.com/mark3labs/mcp-go => ./third_party/mark3labs/mcp-go
