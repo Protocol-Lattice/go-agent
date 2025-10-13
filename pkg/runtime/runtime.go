@@ -196,9 +196,6 @@ func (s *Session) ID() string { return s.id }
 
 // Ask forwards a user prompt to the coordinator agent and captures the response.
 func (s *Session) Ask(ctx context.Context, userInput string) (string, error) {
-	if s.runtime == nil {
-		return "", errors.New("session runtime is nil")
-	}
 	return s.runtime.agent.Respond(ctx, s.id, userInput)
 }
 

@@ -101,7 +101,7 @@ func (a *Agent) Respond(ctx context.Context, sessionID, userInput string) (strin
 		return "", errors.New("user input is empty")
 	}
 
-	a.storeMemory(sessionID, "user", userInput, nil)
+	a.storeMemory(sessionID, "user", userInput, nil) // 🧠 ← called here
 
 	if handled, output, err := a.handleCommand(ctx, sessionID, userInput); handled {
 		if err != nil {
