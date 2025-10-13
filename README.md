@@ -12,7 +12,9 @@ sub-agents so you can focus on domain logic instead of orchestration glue.
 - **Coordinator + specialists** – `pkg/agent` provides the core orchestration logic while `pkg/subagents`
   demonstrates how to bolt on personas such as a researcher that drafts background briefs.
 - **Tooling ecosystem** – Implement the `agent.Tool` interface and register it with the runtime. Reference
-  implementations (echo, calculator, clock) live in `pkg/tools`.
+  implementations (echo, calculator, clock) live in `pkg/tools`. A thin adapter for
+  [Model Context Protocol](https://modelcontextprotocol.io/) servers—compatible with
+  the mark3lab client API—is available via `pkg/mcp` and `pkg/tools/mcp.go`.
 - **Retrieval-augmented memory** – `pkg/memory` combines a short-term window with an optional Postgres + pgvector
   backend for long-term recall. The package gracefully degrades to in-memory only mode when a database is not
   provided (useful for tests and local hacking).
@@ -102,6 +104,13 @@ reply, _ := session.Ask(ctx, "How do I wire an agent?")
    Flags let you customise the coordinator model (`--model`), session identifier (`--session`), context limit
    (`--context`), and short-term memory window (`--window`). Provide additional prompts as positional arguments to
    override the default script.
+
+    To expose tools from an MCP server, pass the `--mcp-command` flag with the executable that implements the
+    protocol. Tool names are pulled from the server during startup and exposed directly to the coordinator.
+
+    ```bash
+    go run ./cmd/demo --mcp-command "./start-mcp-server"
+    ```
 
 ## Customisation Guide
 

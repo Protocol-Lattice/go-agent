@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Raezil/go-agent-development-kit/pkg/agent"
+	"github.com/Raezil/go-agent-development-kit/pkg/mcp"
 	"github.com/Raezil/go-agent-development-kit/pkg/models"
 	"github.com/Raezil/go-agent-development-kit/pkg/runtime"
 	"github.com/Raezil/go-agent-development-kit/pkg/subagents"
@@ -25,6 +26,8 @@ func main() {
 		sessionID   = flag.String("session", "", "Optional fixed session identifier")
 		promptLimit = flag.Int("context", 6, "Number of conversation turns to send to the model")
 		windowSize  = flag.Int("window", 8, "Short-term memory window size per session")
+		mcpCommand  = flag.String("mcp-command", "", "Optional command that starts an MCP server exposing additional tools")
+		mcpPrefix   = flag.String("mcp-prefix", "", "Optional prefix applied to MCP tool names when registered")
 	)
 	flag.Parse()
 
@@ -54,6 +57,40 @@ func main() {
 		},
 	}
 
+	var mcpClient *mcp.Client
+	if cmd := strings.TrimSpace(*mcpCommand); cmd != "" {
+		fields := strings.Fields(cmd)
+		if len(fields) == 0 {
+			log.Fatalf("invalid --mcp-command value: %q", cmd)
+		}
+
+		client, err := mcp.NewStdioClient(ctx, mcp.StdioConfig{Command: fields[0], Args: fields[1:]})
+		if err != nil {
+			log.Fatalf("failed to connect to MCP server: %v", err)
+		}
+		mcpClient = client
+
+		toolsFromServer, err := client.ListTools(ctx)
+		if err != nil {
+			log.Fatalf("failed to list MCP tools: %v", err)
+		}
+
+		prefix := strings.TrimSpace(*mcpPrefix)
+		if len(toolsFromServer) == 0 {
+			log.Printf("connected to MCP server %s (no tools registered)", client.Server().Name)
+		}
+		for _, def := range toolsFromServer {
+			name := def.Name
+			if prefix != "" {
+				name = prefix + def.Name
+			}
+			cfg.Tools = append(cfg.Tools, tools.NewMCPTool(client, def, tools.WithMCPDisplayName(name)))
+		}
+		if len(toolsFromServer) > 0 {
+			log.Printf("registered %d MCP tools from %s", len(toolsFromServer), client.Server().Name)
+		}
+	}
+
 	rt, err := runtime.New(ctx, cfg)
 	if err != nil {
 		log.Fatalf("failed to create runtime: %v", err)
@@ -61,6 +98,14 @@ func main() {
 	defer func() {
 		if err := rt.Close(); err != nil {
 			log.Printf("runtime shutdown warning: %v", err)
+		}
+		if mcpClient != nil {
+			if err := mcpClient.Shutdown(context.Background()); err != nil {
+				log.Printf("mcp shutdown warning: %v", err)
+			}
+			if err := mcpClient.Close(); err != nil {
+				log.Printf("mcp close warning: %v", err)
+			}
 		}
 	}()
 
