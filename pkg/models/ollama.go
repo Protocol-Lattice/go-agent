@@ -15,11 +15,12 @@ import (
 // ---------------------------- Ollama -----------------------------------------
 
 type OllamaLLM struct {
-	Client *ollama.Client
-	Model  string
+	Client       *ollama.Client
+	Model        string
+	PromptPrefix string
 }
 
-func NewOllamaLLM(model string) (*OllamaLLM, error) {
+func NewOllamaLLM(model string, promptPrefix string) (*OllamaLLM, error) {
 	host := os.Getenv("OLLAMA_HOST")
 	if host == "" {
 		host = "http://localhost:11434"
@@ -40,17 +41,26 @@ func NewOllamaLLM(model string) (*OllamaLLM, error) {
 }
 
 func (o *OllamaLLM) Generate(ctx context.Context, prompt string) (any, error) {
+	fullPrompt := prompt
+	if o.PromptPrefix != "" {
+		fullPrompt = fmt.Sprintf("%s\n\n%s", o.PromptPrefix, prompt)
+	}
+
 	var (
 		text strings.Builder
 		last ollama.GenerateResponse
 	)
 
-	req := &ollama.GenerateRequest{Model: o.Model, Prompt: prompt}
+	req := &ollama.GenerateRequest{
+		Model:  o.Model,
+		Prompt: fullPrompt,
+	}
+
 	if err := o.Client.Generate(ctx, req, func(gr ollama.GenerateResponse) error {
 		if gr.Response != "" {
 			text.WriteString(gr.Response)
 		}
-		last = gr // updated each chunk; final one has Done=true
+		last = gr
 		return nil
 	}); err != nil {
 		return nil, err
@@ -60,5 +70,9 @@ func (o *OllamaLLM) Generate(ctx context.Context, prompt string) (any, error) {
 		Text       string
 		Done       bool
 		DoneReason string
-	}{Text: text.String(), Done: last.Done, DoneReason: last.DoneReason}, nil
+	}{
+		Text:       text.String(),
+		Done:       last.Done,
+		DoneReason: last.DoneReason,
+	}, nil
 }

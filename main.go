@@ -6,51 +6,78 @@ import (
 	"log"
 	"time"
 
+	"github.com/Raezil/go-agent-development-kit/pkg/agent"
 	"github.com/Raezil/go-agent-development-kit/pkg/memory"
+	"github.com/Raezil/go-agent-development-kit/pkg/models"
+	"github.com/Raezil/go-agent-development-kit/pkg/subagents"
+	"github.com/Raezil/go-agent-development-kit/pkg/tools"
 )
 
 func main() {
 	ctx := context.Background()
 
-	// Connection string (adjust user/password as needed)
 	connStr := "postgres://admin:admin@localhost:5432/ragdb?sslmode=disable"
 
-	// 1️⃣ Initialize Postgres connection
 	bank, err := memory.NewMemoryBank(ctx, connStr)
 	if err != nil {
-		log.Fatalf("❌ failed to init memory bank: %v", err)
+		log.Fatalf("failed to init memory bank: %v", err)
 	}
 	defer bank.DB.Close()
 
-	// 2️⃣ Ensure schema (vector + table) exists
 	if err := bank.CreateSchema(ctx, "schema.sql"); err != nil {
-		log.Fatalf("❌ failed to create schema: %v", err)
+		log.Fatalf("failed to create schema: %v", err)
 	}
 
-	// 3️⃣ Create a session memory manager (short-term cache of 5 messages)
-	sessionMemory := memory.NewSessionMemory(bank, 5)
+	sessionMemory := memory.NewSessionMemory(bank, 8)
 	sessionID := fmt.Sprintf("session-%d", time.Now().Unix())
+	const model = "gemini-2.5-pro" // ✅ specify Gemini 2.5 Pro
 
-	// 4️⃣ Add short-term memories (simulate recent conversation)
-	sessionMemory.AddShortTerm(sessionID, "User likes Go and AI agent development.", `{}`, memory.VertexAIEmbedding("Go AI agent"))
-	sessionMemory.AddShortTerm(sessionID, "User is learning about pgvector for semantic search.", `{}`, memory.VertexAIEmbedding("pgvector semantic search"))
-	sessionMemory.AddShortTerm(sessionID, "User asked how to connect Vertex AI with Postgres memory bank.", `{}`, memory.VertexAIEmbedding("Vertex AI Postgres memory bank"))
-
-	// 5️⃣ Optionally flush short-term to long-term (simulate persistence)
-	if err := sessionMemory.FlushToLongTerm(ctx, sessionID); err != nil {
-		log.Printf("⚠️ flush warning: %v", err)
-	} else {
-		log.Printf("✅ Flushed short-term memory for session %s to long-term storage", sessionID)
-	}
-
-	// 6️⃣ Build a prompt combining both memory layers
-	query := "How does pgvector improve retrieval for AI agents?"
-	prompt, err := sessionMemory.BuildPrompt(ctx, sessionID, query, 5)
+	coordinatorModel, err := models.NewGeminiLLM(context.Background(), model, "Coordinator response:")
 	if err != nil {
-		log.Fatalf("❌ failed to build prompt: %v", err)
+		panic(err)
+	}
+	researcherModel, err := models.NewGeminiLLM(context.Background(), model, "Research summary:")
+	if err != nil {
+		panic(err)
+	}
+	researcher := subagents.NewResearcher(researcherModel)
+
+	toolset := []agent.Tool{&tools.EchoTool{}, &tools.CalculatorTool{}, &tools.TimeTool{}}
+	subagentsList := []agent.SubAgent{researcher}
+
+	primaryAgent, err := agent.New(agent.Options{
+		Model:        coordinatorModel,
+		Memory:       sessionMemory,
+		SystemPrompt: "You orchestrate tooling and specialists to help the user build AI agents.",
+		ContextLimit: 6,
+		Tools:        toolset,
+		SubAgents:    subagentsList,
+	})
+	if err != nil {
+		log.Fatalf("failed to create agent: %v", err)
 	}
 
-	fmt.Println("----- Generated Prompt -----")
-	fmt.Println(prompt)
-	fmt.Println("----------------------------")
+	fmt.Println("--- Agent Development Kit Demo ---")
+
+	userQuestions := []string{
+		"I want to design an AI agent with both short term and long term memory. How should I start?",
+		"tool:calculator 21 / 3",
+		"subagent:researcher Provide a concise brief on pgvector usage for AI memory.",
+		"How can I wire everything together after gathering research?",
+	}
+
+	for _, msg := range userQuestions {
+		response, err := primaryAgent.Respond(ctx, sessionID, msg)
+		if err != nil {
+			fmt.Printf("Agent error: %v\n", err)
+			continue
+		}
+		fmt.Printf("User: %s\nAgent: %s\n\n", msg, response)
+	}
+
+	if err := primaryAgent.Flush(ctx, sessionID); err != nil {
+		log.Printf("flush warning: %v", err)
+	} else {
+		log.Printf("flushed short-term memory for %s to long-term storage", sessionID)
+	}
 }

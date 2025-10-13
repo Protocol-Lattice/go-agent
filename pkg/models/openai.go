@@ -9,25 +9,31 @@ import (
 )
 
 type OpenAILLM struct {
-	Client *openai.Client
-	Model  string
+	Client       *openai.Client
+	Model        string
+	PromptPrefix string
 }
 
-func NewOpenAILLM(model string) *OpenAILLM {
+func NewOpenAILLM(model string, promptPrefix string) *OpenAILLM {
 	apiKey := os.Getenv("OPENAI_API_KEY")
 	if apiKey == "" {
 		apiKey = os.Getenv("OPENAI_KEY") // fallback
 	}
 	client := openai.NewClient(apiKey)
-	return &OpenAILLM{Client: client, Model: model}
+	return &OpenAILLM{Client: client, Model: model, PromptPrefix: promptPrefix}
 }
 
 func (o *OpenAILLM) Generate(ctx context.Context, prompt string) (any, error) {
+	fullPrompt := prompt
+	if o.PromptPrefix != "" {
+		fullPrompt = o.PromptPrefix + "\n" + prompt
+	}
+
 	resp, err := o.Client.CreateChatCompletion(ctx, openai.ChatCompletionRequest{
 		Model: o.Model,
 		Messages: []openai.ChatCompletionMessage{{
 			Role:    openai.ChatMessageRoleUser,
-			Content: prompt,
+			Content: fullPrompt,
 		}},
 	})
 	if err != nil {

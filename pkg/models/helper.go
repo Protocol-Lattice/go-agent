@@ -5,16 +5,16 @@ import (
 	"fmt"
 )
 
-func NewLLMProvider(ctx context.Context, provider string, model string) (Agent, error) {
+func NewLLMProvider(ctx context.Context, provider string, model string, promptPrefix string) (Agent, error) {
 	switch provider {
 	case "openai":
-		return NewOpenAILLM(model), nil
+		return NewOpenAILLM(model, promptPrefix), nil
 	case "gemini", "google":
-		return NewGeminiLLM(ctx, model)
+		return NewGeminiLLM(ctx, model, promptPrefix)
 	case "ollama":
-		return NewOllamaLLM(model)
+		return NewOllamaLLM(model, promptPrefix)
 	case "anthropic", "claude":
-		return NewAnthropicLLM(model), nil
+		return NewAnthropicLLM(model, promptPrefix), nil
 	default:
 		return nil, fmt.Errorf("unknown provider: %s", provider)
 	}
