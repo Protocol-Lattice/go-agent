@@ -42,6 +42,9 @@ func main() {
 		log.Fatalf("❌ failed to ensure schema: %v", err)
 	}
 
+	embedding := memory.VertexAIEmbedding("system check")
+	fmt.Printf("✅ VertexAI embedding initialized: %d dims\n", len(embedding))
+
 	// --- 🧩 2. Create LLMs ---
 	researcherModel, err := models.NewGeminiLLM(ctx, *modelName, "Research summary:")
 	if err != nil {
