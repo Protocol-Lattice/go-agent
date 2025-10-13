@@ -30,10 +30,16 @@ func main() {
 
 	sessionMemory := memory.NewSessionMemory(bank, 8)
 	sessionID := fmt.Sprintf("session-%d", time.Now().Unix())
+	const model = "gemini-2.5-pro" // ✅ specify Gemini 2.5 Pro
 
-	coordinatorModel := models.NewDummyLLM("Coordinator response:")
-	researcherModel := models.NewDummyLLM("Research summary:")
-
+	coordinatorModel, err := models.NewGeminiLLM(context.Background(), model, "Coordinator response:")
+	if err != nil {
+		panic(err)
+	}
+	researcherModel, err := models.NewGeminiLLM(context.Background(), model, "Research summary:")
+	if err != nil {
+		panic(err)
+	}
 	researcher := subagents.NewResearcher(researcherModel)
 
 	toolset := []agent.Tool{&tools.EchoTool{}, &tools.CalculatorTool{}, &tools.TimeTool{}}
