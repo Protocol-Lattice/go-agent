@@ -1,32 +1,69 @@
 # Go Agent Development Kit
 
-A batteries-included starter project for building multi-modal AI agents in Go. The kit wires together a
-coordinator agent, specialist sub-agents, tool calling, and a hybrid short-term / long-term memory system so
-that you can focus on the domain logic of your agent instead of the plumbing.
+A batteries-included starter kit for building production-ready AI agents in Go. The kit now ships with a
+composable runtime that wires together language models, retrieval-augmented memory, tools, and specialist
+sub-agents so you can focus on domain logic instead of orchestration glue.
 
-## Features
+## Highlights
 
-- **Agent orchestration** – The `pkg/agent` package combines a primary LLM with configurable tools and
-  specialist sub-agents. The default coordinator prompt encourages explicit tool usage and delegation.
-- **LLM abstraction** – The `pkg/models` package currently ships with a Gemini 2.5 Pro integration powered by
-  the official `generative-ai-go` SDK.
-- **Memory architecture** – `pkg/memory` provides an in-memory short-term cache backed by PostgreSQL +
-  `pgvector` for retrieval-augmented, long-term recall. Session interactions can be flushed to persistent
-  storage at any time.
-- **Composable tooling** – `pkg/tools` exposes reusable tool interfaces and reference implementations for
-  echoing user input, calculator operations, and timestamp lookup.
-- **Research sub-agent** – `pkg/subagents` demonstrates how to delegate work to a secondary model persona that
-  returns structured research summaries.
-- **End-to-end demo** – `main.go` showcases a full conversation loop including tool invocation, sub-agent
-  delegation, memory retrieval, and persistence.
+- **Runtime orchestration** – `pkg/runtime` exposes a single entry point for creating an agent runtime with
+  configurable models, tools, memory, and sub-agents. It returns reusable sessions that encapsulate conversation
+  state and memory flushing.
+- **Coordinator + specialists** – `pkg/agent` provides the core orchestration logic while `pkg/subagents`
+  demonstrates how to bolt on personas such as a researcher that drafts background briefs.
+- **Tooling ecosystem** – Implement the `agent.Tool` interface and register it with the runtime. Reference
+  implementations (echo, calculator, clock) live in `pkg/tools`.
+- **Retrieval-augmented memory** – `pkg/memory` combines a short-term window with an optional Postgres + pgvector
+  backend for long-term recall. The package gracefully degrades to in-memory only mode when a database is not
+  provided (useful for tests and local hacking).
+- **Model abstraction** – `pkg/models` defines a tiny interface around `Generate(ctx, prompt)` with adapters for
+  Gemini 2.5 Pro and dummy models for offline testing.
+- **Command-line demo** – `cmd/demo` is a configurable CLI that spins up the runtime, walks through a scripted
+  conversation, and showcases tool usage, delegation, and memory persistence.
+
+## Architecture Overview
+
+```
+cmd/demo              # CLI entry point that configures and drives the runtime
+pkg/
+├── runtime          # High-level runtime + session management
+├── agent            # Coordinator agent, tool routing, sub-agent delegation
+├── memory           # Short-term cache with optional Postgres/pgvector persistence
+├── models           # Gemini, Ollama, Anthropic, Dummy model adapters
+├── subagents        # Example researcher persona powered by an LLM
+└── tools            # Built-in tools (echo, calculator, time)
+```
+
+At the heart of the kit is `runtime.Config`. Provide a database DSN (or your own memory factory), a coordinator
+model loader, and any tools/sub-agents you want to expose. The runtime takes care of schema creation, memory
+wiring, and returning a `Session` that you can use to `Ask` questions and `Flush` the conversation to long-term
+storage.
+
+```go
+cfg := runtime.Config{
+        DSN:          "postgres://admin:admin@localhost:5432/ragdb?sslmode=disable",
+        SchemaPath:   "schema.sql",
+        SessionWindow: 8,
+        ContextLimit:  6,
+        CoordinatorModel: func(ctx context.Context) (models.Agent, error) {
+                return models.NewGeminiLLM(ctx, "gemini-2.5-pro", "Coordinator response:" )
+        },
+        Tools: []agent.Tool{&tools.CalculatorTool{}},
+        SubAgents: []agent.SubAgent{subagents.NewResearcher(researcherModel)},
+}
+rt, _ := runtime.New(ctx, cfg)
+session := rt.NewSession("")
+reply, _ := session.Ask(ctx, "How do I wire an agent?")
+```
 
 ## Requirements
 
-- Go 1.22 or later
-- PostgreSQL 15+ with the [`pgvector`](https://github.com/pgvector/pgvector) extension installed
+- Go 1.22+
+- PostgreSQL 15+ with the [`pgvector`](https://github.com/pgvector/pgvector) extension (optional for local
+  experimentation, required for long-term memory persistence)
 - A Google Gemini API key exported as either `GOOGLE_API_KEY` or `GEMINI_API_KEY`
 
-## Quick start
+## Getting Started
 
 1. **Clone the repository**
 
@@ -35,84 +72,60 @@ that you can focus on the domain logic of your agent instead of the plumbing.
    cd go-agent-development-kit
    ```
 
-2. **Provision PostgreSQL with pgvector**
+2. **Install dependencies**
 
-   Create a database (the demo uses `ragdb`) and enable the `pgvector` extension:
-
-   ```sql
-   CREATE EXTENSION IF NOT EXISTS vector;
+   ```bash
+   go mod download
    ```
 
-3. **Configure environment variables**
+3. **Configure environment**
 
    ```bash
    export GOOGLE_API_KEY="<your-gemini-api-key>"
    export DATABASE_URL="postgres://admin:admin@localhost:5432/ragdb?sslmode=disable"
    ```
 
-   > The demo reads the connection string directly inside `main.go`. You can either export `DATABASE_URL` and
-   > change the code to read from it, or update the hard-coded string to match your environment.
+4. **Provision PostgreSQL with pgvector (optional but recommended)**
 
-4. **Initialize dependencies**
-
-   ```bash
-   go mod download
+   ```sql
+   CREATE EXTENSION IF NOT EXISTS vector;
    ```
+
+   The CLI will execute [`schema.sql`](schema.sql) automatically if the connection succeeds.
 
 5. **Run the demo conversation**
 
    ```bash
-   go run ./...
+   go run ./cmd/demo --dsn "$DATABASE_URL"
    ```
 
-   On startup the program creates the database schema from `schema.sql`, spins up the coordinator agent, and
-   walks through a short scripted conversation that exercises tool use, research delegation, and memory flush.
+   Flags let you customise the coordinator model (`--model`), session identifier (`--session`), context limit
+   (`--context`), and short-term memory window (`--window`). Provide additional prompts as positional arguments to
+   override the default script.
 
-## Project structure
+## Customisation Guide
 
-```
-.
-├── main.go              # End-to-end orchestration example
-├── schema.sql           # Database schema (pgvector table + indexes)
-└── pkg
-    ├── agent            # Primary agent implementation and configuration options
-    ├── memory           # Short-term cache + Postgres-backed long-term memory
-    ├── models           # LLM client integrations (Gemini 2.5 Pro)
-    ├── subagents        # Example researcher persona
-    └── tools            # Built-in tools: echo, calculator, clock
-```
-
-## Customising your agent
-
-- **Switch the model** – Replace the Gemini client in `main.go` with another implementation of the `models.Agent`
-  interface. You can create new adapters in `pkg/models` as long as they implement `Generate`.
-- **Add tools** – Implement the `agent.Tool` interface and register the tool via the `Options.Tools` slice when
-  constructing the agent. See `pkg/tools` for examples.
-- **Add sub-agents** – Sub-agents must satisfy the `agent.SubAgent` interface. They can use different prompts or
-  even different LLM providers. Register them through `Options.SubAgents` and call them with the
-  `subagent:<name>` convention.
-- **Tune memory behaviour** – `SessionMemory` accepts a configurable short-term context window. Persisted
-  memories are stored in PostgreSQL and retrieved using `pgvector` similarity search.
-
-## Database schema
-
-The provided [`schema.sql`](schema.sql) file ensures the required extension, table, and indexes exist:
-
-- `memory_bank` table stores session messages, optional metadata, and the vector embedding
-- GIN / ivfflat indexes accelerate similarity search via the `<->` operator
-
-Run the script against your database before starting the agent, or let `main.go` run `CreateSchema` at startup.
+- **Swap language models** – Implement the `models.Agent` interface or use one of the bundled adapters (Gemini,
+  Anthropic, Ollama). Supply a loader function via `runtime.Config.CoordinatorModel`.
+- **Add or remove tools** – Create new implementations of `agent.Tool` and append them to `runtime.Config.Tools`.
+  Tools are automatically exposed to the coordinator prompt and invocable with the `tool:<name>` convention.
+- **Add sub-agents** – Any `agent.SubAgent` can be registered through `runtime.Config.SubAgents`. Delegate tasks in
+  conversation with `subagent:<name> do something`.
+- **Memory backends** – The runtime defaults to Postgres but you can provide a custom `MemoryFactory` or
+  `SessionMemoryBuilder` to plug in alternative storage engines during testing.
 
 ## Testing
 
-The project currently ships without automated tests. When you extend the kit, prefer adding table-driven Go tests
-under the relevant package directories and run them with:
+Run the full test suite:
 
 ```bash
 go test ./...
 ```
 
+Unit coverage includes deterministic embeddings, agent orchestration, model adapters, tool behaviours, and the new
+runtime/session lifecycle.
+
 ## Contributing
 
-Issues and pull requests are welcome! If you add new models, tools, or memory backends, please document the setup
-steps in this README to keep the developer experience smooth.
+Issues and pull requests are welcome! If you add new models, tools, or memory backends, please update the README
+and examples so others can benefit from your improvements.

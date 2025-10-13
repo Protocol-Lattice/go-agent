@@ -80,10 +80,14 @@ func (sm *SessionMemory) FlushToLongTerm(ctx context.Context, sessionID string) 
 
 // RetrieveContext returns combined short- and long-term memory
 func (sm *SessionMemory) RetrieveContext(ctx context.Context, sessionID, query string, limit int) ([]MemoryRecord, error) {
-	queryEmbedding := VertexAIEmbedding(query)
-	longTerm, err := sm.Bank.SearchMemory(ctx, queryEmbedding, limit)
-	if err != nil {
-		return nil, err
+	var longTerm []MemoryRecord
+	if sm.Bank != nil {
+		queryEmbedding := VertexAIEmbedding(query)
+		records, err := sm.Bank.SearchMemory(ctx, queryEmbedding, limit)
+		if err != nil {
+			return nil, err
+		}
+		longTerm = records
 	}
 
 	sm.mu.RLock()
@@ -95,22 +99,28 @@ func (sm *SessionMemory) RetrieveContext(ctx context.Context, sessionID, query s
 
 // StoreMemory inserts a long-term record
 func (mb *MemoryBank) StoreMemory(ctx context.Context, sessionID, content, metadata string, embedding []float32) error {
+	if mb == nil || mb.DB == nil {
+		return nil
+	}
 	jsonEmbed, _ := json.Marshal(embedding)
 	query := `
-		INSERT INTO memory_bank (session_id, content, metadata, embedding)
-		VALUES ($1, $2, $3::jsonb, $4::vector);
-	`
+                INSERT INTO memory_bank (session_id, content, metadata, embedding)
+                VALUES ($1, $2, $3::jsonb, $4::vector);
+        `
 	_, err := mb.DB.Exec(ctx, query, sessionID, content, metadata, fmt.Sprintf("[%s]", trimJSON(string(jsonEmbed))))
 	return err
 }
 
 // SearchMemory returns top-k similar memories
 func (mb *MemoryBank) SearchMemory(ctx context.Context, queryEmbedding []float32, limit int) ([]MemoryRecord, error) {
+	if mb == nil || mb.DB == nil {
+		return nil, nil
+	}
 	jsonEmbed, _ := json.Marshal(queryEmbedding)
 	rows, err := mb.DB.Query(ctx, `
-	SELECT id, session_id, content, metadata, (embedding <-> $1::vector) AS score
-	FROM memory_bank
-	ORDER BY embedding <-> $1::vector
+        SELECT id, session_id, content, metadata, (embedding <-> $1::vector) AS score
+        FROM memory_bank
+        ORDER BY embedding <-> $1::vector
 	LIMIT $2;
 	`, fmt.Sprintf("[%s]", trimJSON(string(jsonEmbed))), limit)
 	if err != nil {
@@ -133,6 +143,9 @@ func trimJSON(s string) string { return strings.Trim(s, "[]") }
 
 // CreateSchema ensures pgvector extension and memory table are available
 func (mb *MemoryBank) CreateSchema(ctx context.Context, schemaPath string) error {
+	if mb == nil || mb.DB == nil {
+		return nil
+	}
 	data, err := os.ReadFile(schemaPath)
 	if err != nil {
 		return fmt.Errorf("failed to read schema file: %w", err)
