@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -23,6 +24,14 @@ type MemoryBank struct {
 	DB *pgxpool.Pool
 }
 
+// SessionMemory wraps MemoryBank with short- and long-term layers
+type SessionMemory struct {
+	Bank          *MemoryBank
+	shortTerm     map[string][]MemoryRecord
+	mu            sync.RWMutex
+	shortTermSize int
+}
+
 // NewMemoryBank creates a new connection to Postgres
 func NewMemoryBank(ctx context.Context, connStr string) (*MemoryBank, error) {
 	db, err := pgxpool.New(ctx, connStr)
@@ -32,17 +41,59 @@ func NewMemoryBank(ctx context.Context, connStr string) (*MemoryBank, error) {
 	return &MemoryBank{DB: db}, nil
 }
 
-// CreateSchema ensures pgvector and tables are ready
-func (mb *MemoryBank) CreateSchema(ctx context.Context, schemaPath string) error {
-	schema, err := os.ReadFile(schemaPath)
-	if err != nil {
-		return fmt.Errorf("failed to read schema file: %w", err)
+// NewSessionMemory wraps MemoryBank with short-term cache
+func NewSessionMemory(bank *MemoryBank, shortTermSize int) *SessionMemory {
+	return &SessionMemory{
+		Bank:          bank,
+		shortTerm:     make(map[string][]MemoryRecord),
+		shortTermSize: shortTermSize,
 	}
-	_, err = mb.DB.Exec(ctx, string(schema))
-	return err
 }
 
-// StoreMemory inserts a memory record
+// AddShortTerm stores in ephemeral session cache
+func (sm *SessionMemory) AddShortTerm(sessionID, content, metadata string, embedding []float32) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
+	record := MemoryRecord{SessionID: sessionID, Content: content, Metadata: metadata, Embedding: embedding}
+	sm.shortTerm[sessionID] = append(sm.shortTerm[sessionID], record)
+
+	if len(sm.shortTerm[sessionID]) > sm.shortTermSize {
+		sm.shortTerm[sessionID] = sm.shortTerm[sessionID][len(sm.shortTerm[sessionID])-sm.shortTermSize:]
+	}
+}
+
+// FlushToLongTerm writes short-term cache to Postgres
+func (sm *SessionMemory) FlushToLongTerm(ctx context.Context, sessionID string) error {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
+	records := sm.shortTerm[sessionID]
+	for _, r := range records {
+		if err := sm.Bank.StoreMemory(ctx, sessionID, r.Content, r.Metadata, r.Embedding); err != nil {
+			return err
+		}
+	}
+	delete(sm.shortTerm, sessionID)
+	return nil
+}
+
+// RetrieveContext returns combined short- and long-term memory
+func (sm *SessionMemory) RetrieveContext(ctx context.Context, sessionID, query string, limit int) ([]MemoryRecord, error) {
+	queryEmbedding := VertexAIEmbedding(query)
+	longTerm, err := sm.Bank.SearchMemory(ctx, queryEmbedding, limit)
+	if err != nil {
+		return nil, err
+	}
+
+	sm.mu.RLock()
+	shortTerm := sm.shortTerm[sessionID]
+	sm.mu.RUnlock()
+
+	return append(shortTerm, longTerm...), nil
+}
+
+// StoreMemory inserts a long-term record
 func (mb *MemoryBank) StoreMemory(ctx context.Context, sessionID, content, metadata string, embedding []float32) error {
 	jsonEmbed, _ := json.Marshal(embedding)
 	query := `
@@ -53,7 +104,6 @@ func (mb *MemoryBank) StoreMemory(ctx context.Context, sessionID, content, metad
 	return err
 }
 
-// SearchMemory returns top-k similar memories
 // SearchMemory returns top-k similar memories
 func (mb *MemoryBank) SearchMemory(ctx context.Context, queryEmbedding []float32, limit int) ([]MemoryRecord, error) {
 	jsonEmbed, _ := json.Marshal(queryEmbedding)
@@ -79,6 +129,19 @@ func (mb *MemoryBank) SearchMemory(ctx context.Context, queryEmbedding []float32
 	return records, nil
 }
 
-func trimJSON(s string) string {
-	return strings.Trim(s, "[]")
+func trimJSON(s string) string { return strings.Trim(s, "[]") }
+
+// CreateSchema ensures pgvector extension and memory table are available
+func (mb *MemoryBank) CreateSchema(ctx context.Context, schemaPath string) error {
+	data, err := os.ReadFile(schemaPath)
+	if err != nil {
+		return fmt.Errorf("failed to read schema file: %w", err)
+	}
+
+	// Execute schema SQL (CREATE EXTENSION, TABLE, INDEXES)
+	_, err = mb.DB.Exec(ctx, string(data))
+	if err != nil {
+		return fmt.Errorf("failed to execute schema: %w", err)
+	}
+	return nil
 }

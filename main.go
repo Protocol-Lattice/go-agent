@@ -4,8 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"os"
-	"strings"
+	"time"
 
 	"github.com/Raezil/go-agent-development-kit/pkg/memory"
 )
@@ -13,54 +12,45 @@ import (
 func main() {
 	ctx := context.Background()
 
-	connStr := os.Getenv("DATABASE_URL")
-	if connStr == "" {
-		connStr = "postgres://admin:admin@localhost:5432/ragdb?sslmode=disable"
-	}
+	// Connection string (adjust user/password as needed)
+	connStr := "postgres://admin:admin@localhost:5432/ragdb?sslmode=disable"
 
-	// -----------------------------------
-	// 🧠 Connect and prepare schema
-	// -----------------------------------
-	mb, err := memory.NewMemoryBank(ctx, connStr)
+	// 1️⃣ Initialize Postgres connection
+	bank, err := memory.NewMemoryBank(ctx, connStr)
 	if err != nil {
-		log.Fatalf("DB connect error: %v", err)
+		log.Fatalf("❌ failed to init memory bank: %v", err)
 	}
-	defer mb.DB.Close()
+	defer bank.DB.Close()
 
-	if err := mb.CreateSchema(ctx, "pkg/memory/schema.sql"); err != nil {
-		log.Fatalf("Schema apply failed: %v", err)
-	}
-
-	// -----------------------------------
-	// 💬 Store a few sample memories
-	// -----------------------------------
-	texts := []string{
-		"The Go agent learns pgvector memory.",
-		"Postgres vector search is efficient for RAG.",
-		"Embeddings can be generated locally or via LLMs.",
+	// 2️⃣ Ensure schema (vector + table) exists
+	if err := bank.CreateSchema(ctx, "schema.sql"); err != nil {
+		log.Fatalf("❌ failed to create schema: %v", err)
 	}
 
-	for i, text := range texts {
-		embed := memory.DummyEmbedding(text) // or memory.dummyEmbedding(text)
-		meta := fmt.Sprintf(`{"index": %d}`, i)
-		err := mb.StoreMemory(ctx, "session-001", text, meta, embed)
-		if err != nil {
-			log.Fatalf("Insert failed: %v", err)
-		}
-		fmt.Printf("✅ Stored: %s\n", text)
+	// 3️⃣ Create a session memory manager (short-term cache of 5 messages)
+	sessionMemory := memory.NewSessionMemory(bank, 5)
+	sessionID := fmt.Sprintf("session-%d", time.Now().Unix())
+
+	// 4️⃣ Add short-term memories (simulate recent conversation)
+	sessionMemory.AddShortTerm(sessionID, "User likes Go and AI agent development.", `{}`, memory.VertexAIEmbedding("Go AI agent"))
+	sessionMemory.AddShortTerm(sessionID, "User is learning about pgvector for semantic search.", `{}`, memory.VertexAIEmbedding("pgvector semantic search"))
+	sessionMemory.AddShortTerm(sessionID, "User asked how to connect Vertex AI with Postgres memory bank.", `{}`, memory.VertexAIEmbedding("Vertex AI Postgres memory bank"))
+
+	// 5️⃣ Optionally flush short-term to long-term (simulate persistence)
+	if err := sessionMemory.FlushToLongTerm(ctx, sessionID); err != nil {
+		log.Printf("⚠️ flush warning: %v", err)
+	} else {
+		log.Printf("✅ Flushed short-term memory for session %s to long-term storage", sessionID)
 	}
 
-	// -----------------------------------
-	// 🧩 Build a contextual prompt
-	// -----------------------------------
-	query := "How does the agent use vector memory?"
-	prompt, err := mb.BuildPrompt(ctx, query, 3)
+	// 6️⃣ Build a prompt combining both memory layers
+	query := "How does pgvector improve retrieval for AI agents?"
+	prompt, err := sessionMemory.BuildPrompt(ctx, sessionID, query, 5)
 	if err != nil {
-		log.Fatalf("Prompt build failed: %v", err)
+		log.Fatalf("❌ failed to build prompt: %v", err)
 	}
 
-	fmt.Println("\n🧩 Generated Prompt:")
-	fmt.Println(strings.Repeat("-", 60))
+	fmt.Println("----- Generated Prompt -----")
 	fmt.Println(prompt)
-	fmt.Println(strings.Repeat("-", 60))
+	fmt.Println("----------------------------")
 }

@@ -6,30 +6,16 @@ import (
 	"strings"
 )
 
-func DummyEmbedding(text string) []float32 {
-	vec := make([]float32, 768)
-	for i, ch := range []byte(text) {
-		vec[i%768] += float32(ch) / 255.0
-	}
-	return vec
-}
-
-// BuildPrompt retrieves top-k similar memories and composes a context-aware prompt
-func (mb *MemoryBank) BuildPrompt(ctx context.Context, query string, limit int) (string, error) {
-	// Step 1: Embed query using the same embedding strategy
-	queryEmbedding := DummyEmbedding(query) // placeholder — replace with real embedding provider
-
-	// Step 2: Search memory bank for relevant context
-	results, err := mb.SearchMemory(ctx, queryEmbedding, limit)
+// BuildPrompt now supports short- and long-term context
+func (sm *SessionMemory) BuildPrompt(ctx context.Context, sessionID, query string, limit int) (string, error) {
+	results, err := sm.RetrieveContext(ctx, sessionID, query, limit)
 	if err != nil {
-		return "", fmt.Errorf("memory search failed: %w", err)
+		return "", fmt.Errorf("context retrieval failed: %w", err)
 	}
 
-	// Step 3: Build prompt string
 	var sb strings.Builder
-
-	sb.WriteString("You are a helpful and knowledgeable AI agent.\n")
-	sb.WriteString("Use the context below to answer the question accurately.\n\n")
+	sb.WriteString("You are a helpful AI agent.\n")
+	sb.WriteString("Use the context below to answer accurately.\n\n")
 	sb.WriteString("Context:\n")
 
 	if len(results) == 0 {
