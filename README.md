@@ -53,7 +53,7 @@ cfg := runtime.Config{
 }
 rt, _ := runtime.New(ctx, cfg)
 session := rt.NewSession("")
-reply, _ := session.Ask(ctx, "How do I wire an agent?")
+reply, _ := rt.Generate(ctx, session.ID(), "How do I wire an agent?")
 ```
 
 ## Requirements
