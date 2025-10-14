@@ -37,7 +37,7 @@ pkg/
 
 At the heart of the kit is `runtime.Config`. Provide a database DSN (or your own memory factory), a coordinator
 model loader, and any tools/sub-agents you want to expose. The runtime takes care of schema creation, memory wiring,
-and returning a `Session` that you can use to `Ask` questions and `Flush` the conversation to long-term storage. Tool
+and returning a `Session` that you can use to `Generate` questions and `Flush` the conversation to long-term storage. Tool
 and specialist registration now flows through `agent.ToolCatalog` and `agent.SubAgentDirectory`, matching the core
 ADK abstractions and making it easy to override the registries when embedding the runtime into larger systems.
 
