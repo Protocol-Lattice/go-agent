@@ -21,14 +21,19 @@ func (m *stubModel) Generate(ctx context.Context, prompt string) (any, error) {
 }
 
 type stubTool struct {
-	name        string
-	description string
+	spec      ToolSpec
+	lastInput ToolRequest
 }
 
-func (t *stubTool) Name() string        { return t.name }
-func (t *stubTool) Description() string { return t.description }
-func (t *stubTool) Run(ctx context.Context, input string) (string, error) {
-	return input, nil
+func (t *stubTool) Spec() ToolSpec { return t.spec }
+func (t *stubTool) Invoke(ctx context.Context, req ToolRequest) (ToolResponse, error) {
+	t.lastInput = req
+	val := req.Arguments["input"]
+	if val == nil {
+		return ToolResponse{Content: ""}, nil
+	}
+	str, _ := val.(string)
+	return ToolResponse{Content: str}, nil
 }
 
 type stubSubAgent struct {
@@ -63,7 +68,7 @@ func TestNewRegistersToolsAndSubagents(t *testing.T) {
 	model := &stubModel{response: "ok"}
 	mem := memory.NewSessionMemory(&memory.MemoryBank{}, 4)
 
-	tool := &stubTool{name: "Echo", description: "desc"}
+	tool := &stubTool{spec: ToolSpec{Name: "Echo", Description: "desc"}}
 	researcher := &stubSubAgent{name: "Researcher", description: "desc"}
 
 	agent, err := New(Options{
@@ -79,7 +84,10 @@ func TestNewRegistersToolsAndSubagents(t *testing.T) {
 	if _, ok := agent.tools["echo"]; !ok {
 		t.Fatalf("expected tool to be registered in lowercase")
 	}
-	if len(agent.toolOrder) != 1 || agent.toolOrder[0] != tool {
+	if spec := agent.toolSpecs["echo"]; spec.Name != "Echo" {
+		t.Fatalf("expected tool spec to keep original casing")
+	}
+	if len(agent.toolOrder) != 1 || agent.toolOrder[0] != "echo" {
 		t.Fatalf("expected tool order to preserve insertion")
 	}
 
@@ -149,7 +157,7 @@ func TestToolsWithEmptyNamesAreSkipped(t *testing.T) {
 	model := &stubModel{response: "ok"}
 	mem := memory.NewSessionMemory(&memory.MemoryBank{}, 0)
 
-	tool := &stubTool{name: ""}
+	tool := &stubTool{spec: ToolSpec{Name: ""}}
 	agent, err := New(Options{Model: model, Memory: mem, Tools: []Tool{tool}})
 	if err != nil {
 		t.Fatalf("New returned error: %v", err)
