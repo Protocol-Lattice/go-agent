@@ -5,7 +5,6 @@ composable runtime that wires together language models, retrieval-augmented memo
 sub-agents so you can focus on domain logic instead of orchestration glue.
 
 ## Highlights
-
 - **Runtime orchestration** – `pkg/runtime` exposes a single entry point for creating an agent runtime with
   configurable models, tools, memory, and sub-agents. The runtime now uses an ADK-style session manager that keeps
   the active session registry thread-safe and deterministic.
@@ -21,6 +20,7 @@ sub-agents so you can focus on domain logic instead of orchestration glue.
   Gemini 2.5 Pro and dummy models for offline testing.
 - **Command-line demo** – `cmd/demo` is a configurable CLI that spins up the runtime, walks through a scripted
   conversation, and showcases tool usage, delegation, and memory persistence.
+- **UTCP Support** - The Universal Tool Calling Protocol (UTCP) is a modern, flexible, and scalable standard for defining and interacting with tools across a wide variety of communication protocols. 
 
 ## Architecture Overview
 
