@@ -85,6 +85,7 @@ reply, _ := rt.Generate(ctx, session.ID(), "How do I wire an agent?")
    ```bash
    export GOOGLE_API_KEY="<your-gemini-api-key>"
    export DATABASE_URL="postgres://admin:admin@localhost:5432/ragdb?sslmode=disable"
+   export ADK_EMBED_PROVIDER="gemini"
    ```
 
 4. **Provision PostgreSQL with pgvector (optional but recommended)**
