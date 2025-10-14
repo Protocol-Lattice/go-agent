@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -106,6 +107,33 @@ func (qs *QdrantStore) SearchMemory(ctx context.Context, queryEmbedding []float3
 	return records, nil
 }
 
+// CreateSchema initialises the Qdrant collection using the provided schema file when available.
+func (qs *QdrantStore) CreateSchema(ctx context.Context, schemaPath string) error {
+	if qs == nil || qs.Client == nil {
+		return nil
+	}
+
+	schema := qdrantSchema{VectorSize: 768, Distance: "Cosine"}
+	if schemaPath != "" {
+		data, err := os.ReadFile(schemaPath)
+		if err != nil {
+			return fmt.Errorf("failed to read qdrant schema file: %w", err)
+		}
+		if err := json.Unmarshal(data, &schema); err != nil {
+			return fmt.Errorf("failed to parse qdrant schema file: %w", err)
+		}
+	}
+
+	if schema.VectorSize <= 0 {
+		schema.VectorSize = 768
+	}
+	if schema.Distance == "" {
+		schema.Distance = "Cosine"
+	}
+
+	return qs.EnsureCollection(ctx, schema.VectorSize, schema.Distance)
+}
+
 // EnsureCollection creates the collection in Qdrant if it does not exist.
 func (qs *QdrantStore) EnsureCollection(ctx context.Context, vectorSize int, distance string) error {
 	if qs == nil || qs.Client == nil {
@@ -203,4 +231,9 @@ type qdrantPoint struct {
 	ID      any            `json:"id"`
 	Score   float64        `json:"score"`
 	Payload map[string]any `json:"payload"`
+}
+
+type qdrantSchema struct {
+	VectorSize int    `json:"vector_size"`
+	Distance   string `json:"distance"`
 }

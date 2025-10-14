@@ -71,12 +71,16 @@ func (ps *PostgresStore) CreateSchema(ctx context.Context, schemaPath string) er
 	if ps == nil || ps.DB == nil {
 		return nil
 	}
-	data, err := os.ReadFile(schemaPath)
-	if err != nil {
-		return fmt.Errorf("failed to read schema file: %w", err)
+	schema := defaultPostgresSchema
+	if schemaPath != "" {
+		data, err := os.ReadFile(schemaPath)
+		if err != nil {
+			return fmt.Errorf("failed to read schema file: %w", err)
+		}
+		schema = string(data)
 	}
 
-	_, err = ps.DB.Exec(ctx, string(data))
+	_, err := ps.DB.Exec(ctx, schema)
 	if err != nil {
 		return fmt.Errorf("failed to execute schema: %w", err)
 	}
@@ -93,3 +97,19 @@ func (ps *PostgresStore) Close() error {
 }
 
 func trimJSON(s string) string { return strings.Trim(s, "[]") }
+
+const defaultPostgresSchema = `
+CREATE EXTENSION IF NOT EXISTS vector;
+
+CREATE TABLE IF NOT EXISTS memory_bank (
+    id BIGSERIAL PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    content TEXT NOT NULL,
+    metadata JSONB,
+    embedding vector(768),
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS memory_session_idx ON memory_bank (session_id);
+CREATE INDEX IF NOT EXISTS memory_embedding_idx ON memory_bank USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
+`
