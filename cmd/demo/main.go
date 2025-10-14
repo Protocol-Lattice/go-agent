@@ -209,7 +209,7 @@ func main() {
 	fmt.Println(resp)
 	// --- 🧩 5. Reuse session if provided ---
 	session := rt.NewSession(*sessionID)
-	fmt.Println("🧠 Using session: %s\n", session.ID())
+	fmt.Printf("🧠 Using session: %s\n", session.ID())
 
 	defer session.CloseFlush(ctx, func(err error) {
 		if err != nil {
