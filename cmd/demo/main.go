@@ -122,7 +122,7 @@ func main() {
 		go func(i int, prompt string) {
 			defer wg.Done()
 			start := time.Now()
-			reply, err := session.Ask(ctx, prompt)
+			reply, err := rt.Generate(ctx, *sessionID, prompt)
 			resultsCh <- result{i, prompt, reply, err, time.Since(start)}
 		}(i, prompt)
 	}

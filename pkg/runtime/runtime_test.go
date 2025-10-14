@@ -55,7 +55,7 @@ func TestRuntimeNewSessionAndAsk(t *testing.T) {
 		t.Fatalf("expected session id to be 'test', got %q", session.ID())
 	}
 
-	reply, err := session.Ask(ctx, "hello world")
+	reply, err := rt.Generate(ctx, session.ID(), "hello world")
 	if err != nil {
 		t.Fatalf("session ask returned error: %v", err)
 	}

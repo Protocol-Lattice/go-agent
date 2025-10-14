@@ -91,6 +91,7 @@ type Runtime struct {
 	subagents []agent.SubAgent
 
 	sessionCounter atomic.Uint64
+	activeSessions map[string]*Session
 }
 
 // New builds a runtime based on the supplied configuration.
@@ -139,11 +140,12 @@ func New(ctx context.Context, cfg Config) (*Runtime, error) {
 	}
 
 	rt := &Runtime{
-		agent:     agentInstance,
-		memory:    sessionMemory,
-		bank:      bank,
-		tools:     append([]agent.Tool(nil), cfg.Tools...),
-		subagents: append([]agent.SubAgent(nil), cfg.SubAgents...),
+		agent:          agentInstance,
+		memory:         sessionMemory,
+		bank:           bank,
+		tools:          append([]agent.Tool(nil), cfg.Tools...),
+		subagents:      append([]agent.SubAgent(nil), cfg.SubAgents...),
+		activeSessions: make(map[string]*Session),
 	}
 	return rt, nil
 }
@@ -182,7 +184,37 @@ func (rt *Runtime) NewSession(id string) *Session {
 		counter := rt.sessionCounter.Add(1)
 		id = fmt.Sprintf("session-%d", counter)
 	}
-	return &Session{runtime: rt, id: id}
+	session := &Session{runtime: rt, id: id}
+	rt.activeSessions[id] = session
+	return session
+}
+
+// GetSession retrieves an active session by its ID.
+func (rt *Runtime) GetSession(id string) (*Session, error) {
+	session, exists := rt.activeSessions[id]
+	if !exists {
+		return nil, fmt.Errorf("session %s not found", id)
+	}
+	return session, nil
+}
+
+// RemoveSession removes a session from the active sessions map.
+func (rt *Runtime) RemoveSession(id string) {
+	delete(rt.activeSessions, id)
+}
+
+// ActiveSessions returns a copy of all active session IDs.
+func (rt *Runtime) ActiveSessions() []string {
+	ids := make([]string, 0, len(rt.activeSessions))
+	for id := range rt.activeSessions {
+		ids = append(ids, id)
+	}
+	return ids
+}
+
+// Generate forwards a user prompt to the coordinator agent and captures the response.
+func (rt *Runtime) Generate(ctx context.Context, sessionID string, userInput string) (string, error) {
+	return rt.agent.Respond(ctx, sessionID, userInput)
 }
 
 // Session encapsulates the conversational context for a single user.
@@ -193,11 +225,6 @@ type Session struct {
 
 // ID returns the unique identifier associated with the session.
 func (s *Session) ID() string { return s.id }
-
-// Ask forwards a user prompt to the coordinator agent and captures the response.
-func (s *Session) Ask(ctx context.Context, userInput string) (string, error) {
-	return s.runtime.agent.Respond(ctx, s.id, userInput)
-}
 
 // Flush persists short-term memory into the configured long-term store.
 func (s *Session) Flush(ctx context.Context) error {
