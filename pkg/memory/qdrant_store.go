@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -106,6 +108,61 @@ func (qs *QdrantStore) SearchMemory(ctx context.Context, queryEmbedding []float3
 	return records, nil
 }
 
+// CreateSchema initialises the Qdrant collection using the provided schema file when available.
+func (qs *QdrantStore) CreateSchema(ctx context.Context, baseURL, apiKey, collection string, req CreateCollectionRequest) error {
+	if baseURL == "" {
+		baseURL = "http://localhost:6333"
+	}
+	endpoint := fmt.Sprintf("%s/collections/%s", strings.TrimRight(baseURL, "/"), url.PathEscape(collection))
+
+	body, err := json.Marshal(req)
+	if err != nil {
+		return fmt.Errorf("marshal request: %w", err)
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPut, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("new request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	if apiKey != "" {
+		httpReq.Header.Set("api-key", apiKey)                 // Qdrant supports this header
+		httpReq.Header.Set("Authorization", "Bearer "+apiKey) // optional alternative
+	}
+
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Do(httpReq)
+	if err != nil {
+		return fmt.Errorf("do request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	data, _ := io.ReadAll(resp.Body)
+
+	// Happy path
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		var ok qdrantOKResponse
+		if err := json.Unmarshal(data, &ok); err == nil && strings.EqualFold(ok.Status, "ok") {
+			return nil
+		}
+		// Some versions/situations might omit "ok"; consider a 2xx as success if JSON is parseable.
+		return nil
+	}
+
+	// Try to parse the "status.error" form
+	var qErr qdrantErrorResponse
+	if err := json.Unmarshal(data, &qErr); err == nil && qErr.Status.Error != "" {
+		// Make idempotent: ignore "already exists"
+		if strings.Contains(strings.ToLower(qErr.Status.Error), "already exists") {
+			return nil
+		}
+		return errors.New(qErr.Status.Error)
+	}
+
+	// Fallback
+	return fmt.Errorf("qdrant error: http %d: %s", resp.StatusCode, string(data))
+}
+
 // EnsureCollection creates the collection in Qdrant if it does not exist.
 func (qs *QdrantStore) EnsureCollection(ctx context.Context, vectorSize int, distance string) error {
 	if qs == nil || qs.Client == nil {
@@ -203,4 +260,52 @@ type qdrantPoint struct {
 	ID      any            `json:"id"`
 	Score   float64        `json:"score"`
 	Payload map[string]any `json:"payload"`
+}
+
+type qdrantSchema struct {
+	VectorSize int    `json:"vector_size"`
+	Distance   string `json:"distance"`
+}
+
+// ----- models -----
+
+type Distance string
+
+const (
+	DistanceCosine Distance = "Cosine"
+	DistanceDot    Distance = "Dot"
+	DistanceEuclid Distance = "Euclid"
+)
+
+type VectorParams struct {
+	Size     int      `json:"size"`
+	Distance Distance `json:"distance"`
+}
+
+// Vectors can be either a single VectorParams or a map[string]VectorParams.
+type CreateCollectionRequest struct {
+	Vectors                any            `json:"vectors"` // VectorParams or map[string]VectorParams
+	OptimizersConfig       map[string]any `json:"optimizers_config,omitempty"`
+	HnswConfig             map[string]any `json:"hnsw_config,omitempty"`
+	QuantizationConfig     map[string]any `json:"quantization_config,omitempty"`
+	ShardNumber            *int           `json:"shard_number,omitempty"`
+	WriteConsistencyFactor *int           `json:"write_consistency_factor,omitempty"`
+}
+
+// Success shape (typical):
+// { "result": {...}, "status": "ok", "time": 0.0 }
+type qdrantOKResponse struct {
+	Status string `json:"status"`
+	Time   any    `json:"time"`
+	Result any    `json:"result"`
+}
+
+// Error shape sometimes differs, e.g.:
+// { "status": { "error":"Not found: Collection ..."}, "time": 0.0 }
+type qdrantErrorStatus struct {
+	Error string `json:"error"`
+}
+type qdrantErrorResponse struct {
+	Status qdrantErrorStatus `json:"status"`
+	Time   any               `json:"time"`
 }
