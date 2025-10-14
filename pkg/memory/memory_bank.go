@@ -2,13 +2,8 @@ package memory
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
-	"os"
-	"strings"
+	"io"
 	"sync"
-
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type MemoryRecord struct {
@@ -21,7 +16,7 @@ type MemoryRecord struct {
 }
 
 type MemoryBank struct {
-	DB *pgxpool.Pool
+	Store VectorStore
 }
 
 // SessionMemory wraps MemoryBank with short- and long-term layers
@@ -33,13 +28,18 @@ type SessionMemory struct {
 	Embedder      Embedder
 }
 
-// NewMemoryBank creates a new connection to Postgres
+// NewMemoryBank creates a new Postgres-backed memory bank.
 func NewMemoryBank(ctx context.Context, connStr string) (*MemoryBank, error) {
-	db, err := pgxpool.New(ctx, connStr)
+	store, err := NewPostgresStore(ctx, connStr)
 	if err != nil {
-		return nil, fmt.Errorf("failed to connect to Postgres: %w", err)
+		return nil, err
 	}
-	return &MemoryBank{DB: db}, nil
+	return &MemoryBank{Store: store}, nil
+}
+
+// NewMemoryBankWithStore creates a memory bank backed by a custom vector store implementation.
+func NewMemoryBankWithStore(store VectorStore) *MemoryBank {
+	return &MemoryBank{Store: store}
 }
 
 // NewSessionMemory wraps MemoryBank with short-term cache
@@ -65,7 +65,7 @@ func (sm *SessionMemory) AddShortTerm(sessionID, content, metadata string, embed
 	}
 }
 
-// FlushToLongTerm writes short-term cache to Postgres
+// FlushToLongTerm writes the short-term cache to the configured vector store.
 func (sm *SessionMemory) FlushToLongTerm(ctx context.Context, sessionID string) error {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
@@ -123,62 +123,39 @@ func (sm *SessionMemory) WithEmbedder(e Embedder) *SessionMemory {
 
 // StoreMemory inserts a long-term record
 func (mb *MemoryBank) StoreMemory(ctx context.Context, sessionID, content, metadata string, embedding []float32) error {
-	if mb == nil || mb.DB == nil {
+	if mb == nil || mb.Store == nil {
 		return nil
 	}
-	jsonEmbed, _ := json.Marshal(embedding)
-	query := `
-                INSERT INTO memory_bank (session_id, content, metadata, embedding)
-                VALUES ($1, $2, $3::jsonb, $4::vector);
-        `
-	_, err := mb.DB.Exec(ctx, query, sessionID, content, metadata, fmt.Sprintf("[%s]", trimJSON(string(jsonEmbed))))
-	return err
+	return mb.Store.StoreMemory(ctx, sessionID, content, metadata, embedding)
 }
 
 // SearchMemory returns top-k similar memories
 func (mb *MemoryBank) SearchMemory(ctx context.Context, queryEmbedding []float32, limit int) ([]MemoryRecord, error) {
-	if mb == nil || mb.DB == nil {
+	if mb == nil || mb.Store == nil {
 		return nil, nil
 	}
-	jsonEmbed, _ := json.Marshal(queryEmbedding)
-	rows, err := mb.DB.Query(ctx, `
-        SELECT id, session_id, content, metadata, (embedding <-> $1::vector) AS score
-        FROM memory_bank
-        ORDER BY embedding <-> $1::vector
-	LIMIT $2;
-	`, fmt.Sprintf("[%s]", trimJSON(string(jsonEmbed))), limit)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var records []MemoryRecord
-	for rows.Next() {
-		var rec MemoryRecord
-		if err := rows.Scan(&rec.ID, &rec.SessionID, &rec.Content, &rec.Metadata, &rec.Score); err != nil {
-			return nil, err
-		}
-		records = append(records, rec)
-	}
-	return records, nil
+	return mb.Store.SearchMemory(ctx, queryEmbedding, limit)
 }
 
-func trimJSON(s string) string { return strings.Trim(s, "[]") }
-
-// CreateSchema ensures pgvector extension and memory table are available
+// CreateSchema initialises the backing store if it supports schema management.
 func (mb *MemoryBank) CreateSchema(ctx context.Context, schemaPath string) error {
-	if mb == nil || mb.DB == nil {
+	if mb == nil || mb.Store == nil {
 		return nil
 	}
-	data, err := os.ReadFile(schemaPath)
-	if err != nil {
-		return fmt.Errorf("failed to read schema file: %w", err)
+	initializer, ok := mb.Store.(SchemaInitializer)
+	if !ok {
+		return nil
 	}
+	return initializer.CreateSchema(ctx, schemaPath)
+}
 
-	// Execute schema SQL (CREATE EXTENSION, TABLE, INDEXES)
-	_, err = mb.DB.Exec(ctx, string(data))
-	if err != nil {
-		return fmt.Errorf("failed to execute schema: %w", err)
+// Close releases underlying resources if the store implements io.Closer.
+func (mb *MemoryBank) Close() error {
+	if mb == nil || mb.Store == nil {
+		return nil
+	}
+	if closer, ok := mb.Store.(io.Closer); ok {
+		return closer.Close()
 	}
 	return nil
 }
