@@ -7,10 +7,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/rand"
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -67,6 +70,26 @@ type qdrantEnvelope[T any] struct {
 	Result T            `json:"result"`
 }
 
+type qdrantPointResult struct {
+	ID      json.RawMessage `json:"id"`
+	Score   float64         `json:"score"`
+	Payload map[string]any  `json:"payload"`
+	Vector  []float32       `json:"vector"`
+}
+
+type qdrantScrollResult struct {
+	Points []qdrantPointResult `json:"points"`
+	Offset json.RawMessage     `json:"next_page_offset"`
+}
+
+type qdrantCountResult struct {
+	Count int `json:"count"`
+}
+
+type qdrantGetResult struct {
+	Points []qdrantPointResult `json:"points"`
+}
+
 // schema file format expected at schemaPath (JSON)
 type qdrantSchemaFile struct {
 	BaseURL    string                  `json:"base_url"`   // e.g. "http://localhost:6333"
@@ -77,7 +100,24 @@ type qdrantSchemaFile struct {
 
 // Your store type.
 type QdrantStore struct {
-	// add fields if needed
+	baseURL    string
+	apiKey     string
+	collection string
+	client     *http.Client
+	mu         sync.Mutex
+}
+
+// NewQdrantStore creates a Qdrant-backed VectorStore implementation.
+func NewQdrantStore(baseURL, collection, apiKey string) *QdrantStore {
+	if baseURL == "" {
+		baseURL = "http://localhost:6333"
+	}
+	return &QdrantStore{
+		baseURL:    strings.TrimRight(baseURL, "/"),
+		apiKey:     apiKey,
+		collection: collection,
+		client:     &http.Client{Timeout: 15 * time.Second},
+	}
 }
 
 // CreateSchema implements SchemaInitializer.
@@ -180,4 +220,298 @@ func (qs *QdrantStore) createCollection(ctx context.Context, baseURL, apiKey, co
 	}
 
 	return fmt.Errorf("qdrant error: http %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
+}
+
+// StoreMemory upserts a memory point into Qdrant.
+func (qs *QdrantStore) StoreMemory(ctx context.Context, sessionID, content string, metadata map[string]any, embedding []float32) error {
+	if qs == nil {
+		return errors.New("nil qdrant store")
+	}
+	if qs.collection == "" {
+		return errors.New("qdrant collection is empty")
+	}
+	now := time.Now().UTC()
+	importance, source, summary, lastEmbedded, normalized := normalizeMetadata(metadata, now)
+	payload := map[string]any{
+		"session_id":    sessionID,
+		"content":       content,
+		"metadata":      decodeMetadata(normalized),
+		"importance":    importance,
+		"source":        source,
+		"summary":       summary,
+		"created_at":    now.Format(time.RFC3339Nano),
+		"last_embedded": lastEmbedded.Format(time.RFC3339Nano),
+	}
+	pointID := qs.generateID()
+	req := map[string]any{
+		"points": []map[string]any{{
+			"id":      pointID,
+			"vector":  embedding,
+			"payload": payload,
+		}},
+	}
+	var resp qdrantEnvelope[json.RawMessage]
+	if err := qs.do(ctx, http.MethodPut, fmt.Sprintf("/collections/%s/points", url.PathEscape(qs.collection)), req, &resp); err != nil {
+		return err
+	}
+	if !strings.EqualFold(resp.Status.State, "ok") && resp.Status.Error != "" {
+		return errors.New(resp.Status.Error)
+	}
+	return nil
+}
+
+// SearchMemory performs a similarity search.
+func (qs *QdrantStore) SearchMemory(ctx context.Context, queryEmbedding []float32, limit int) ([]MemoryRecord, error) {
+	if qs == nil {
+		return nil, errors.New("nil qdrant store")
+	}
+	if limit <= 0 {
+		return nil, nil
+	}
+	reqBody := map[string]any{
+		"vector":       queryEmbedding,
+		"limit":        limit,
+		"with_vector":  true,
+		"with_payload": true,
+	}
+	var resp qdrantEnvelope[[]qdrantPointResult]
+	if err := qs.do(ctx, http.MethodPost, fmt.Sprintf("/collections/%s/points/search", url.PathEscape(qs.collection)), reqBody, &resp); err != nil {
+		return nil, err
+	}
+	results := make([]MemoryRecord, 0, len(resp.Result))
+	for _, point := range resp.Result {
+		id, _ := parseQdrantID(point.ID)
+		meta := mapFromPayload(point.Payload)
+		record := MemoryRecord{
+			ID:           id,
+			SessionID:    stringFromAny(meta["session_id"]),
+			Content:      stringFromAny(meta["content"]),
+			Metadata:     encodeMetadata(meta["metadata"]),
+			Embedding:    point.Vector,
+			Score:        point.Score,
+			Importance:   floatFromAny(meta["importance"]),
+			Source:       stringFromAny(meta["source"]),
+			Summary:      stringFromAny(meta["summary"]),
+			CreatedAt:    timeFromAny(meta["created_at"]),
+			LastEmbedded: timeFromAny(meta["last_embedded"]),
+		}
+		hydrateRecordFromMetadata(&record, decodeMetadata(record.Metadata))
+		results = append(results, record)
+	}
+	return results, nil
+}
+
+// UpdateEmbedding updates the vector and last embedded timestamp.
+func (qs *QdrantStore) UpdateEmbedding(ctx context.Context, id int64, embedding []float32, lastEmbedded time.Time) error {
+	if qs == nil {
+		return errors.New("nil qdrant store")
+	}
+	point, err := qs.getPoint(ctx, id)
+	if err != nil {
+		return err
+	}
+	if point.Payload == nil {
+		point.Payload = map[string]any{}
+	}
+	point.Payload["last_embedded"] = lastEmbedded.Format(time.RFC3339Nano)
+	req := map[string]any{
+		"points": []map[string]any{{
+			"id":      id,
+			"vector":  embedding,
+			"payload": point.Payload,
+		}},
+	}
+	return qs.do(ctx, http.MethodPut, fmt.Sprintf("/collections/%s/points", url.PathEscape(qs.collection)), req, nil)
+}
+
+// DeleteMemory removes points by id.
+func (qs *QdrantStore) DeleteMemory(ctx context.Context, ids []int64) error {
+	if qs == nil || len(ids) == 0 {
+		return nil
+	}
+	req := map[string]any{
+		"points": ids,
+	}
+	return qs.do(ctx, http.MethodPost, fmt.Sprintf("/collections/%s/points/delete", url.PathEscape(qs.collection)), req, nil)
+}
+
+// Iterate streams through all points in created_at order.
+func (qs *QdrantStore) Iterate(ctx context.Context, fn func(MemoryRecord) bool) error {
+	if qs == nil {
+		return nil
+	}
+	var offset any
+	for {
+		req := map[string]any{
+			"limit":        128,
+			"with_payload": true,
+			"with_vector":  true,
+			"offset":       offset,
+		}
+		var resp qdrantEnvelope[qdrantScrollResult]
+		if err := qs.do(ctx, http.MethodPost, fmt.Sprintf("/collections/%s/points/scroll", url.PathEscape(qs.collection)), req, &resp); err != nil {
+			return err
+		}
+		for _, point := range resp.Result.Points {
+			id, _ := parseQdrantID(point.ID)
+			meta := mapFromPayload(point.Payload)
+			rec := MemoryRecord{
+				ID:           id,
+				SessionID:    stringFromAny(meta["session_id"]),
+				Content:      stringFromAny(meta["content"]),
+				Metadata:     encodeMetadata(meta["metadata"]),
+				Embedding:    point.Vector,
+				Importance:   floatFromAny(meta["importance"]),
+				Source:       stringFromAny(meta["source"]),
+				Summary:      stringFromAny(meta["summary"]),
+				CreatedAt:    timeFromAny(meta["created_at"]),
+				LastEmbedded: timeFromAny(meta["last_embedded"]),
+			}
+			hydrateRecordFromMetadata(&rec, decodeMetadata(rec.Metadata))
+			if cont := fn(rec); !cont {
+				return nil
+			}
+		}
+		if resp.Result.Offset == nil {
+			return nil
+		}
+		offset = resp.Result.Offset
+	}
+}
+
+// Count returns the total number of points in the collection.
+func (qs *QdrantStore) Count(ctx context.Context) (int, error) {
+	if qs == nil {
+		return 0, nil
+	}
+	req := map[string]any{"exact": true}
+	var resp qdrantEnvelope[qdrantCountResult]
+	if err := qs.do(ctx, http.MethodPost, fmt.Sprintf("/collections/%s/points/count", url.PathEscape(qs.collection)), req, &resp); err != nil {
+		return 0, err
+	}
+	return resp.Result.Count, nil
+}
+
+func (qs *QdrantStore) do(ctx context.Context, method, path string, body any, out any) error {
+	if qs == nil {
+		return errors.New("nil qdrant store")
+	}
+	u := qs.baseURL + path
+	var buf io.Reader
+	if body != nil {
+		data, err := json.Marshal(body)
+		if err != nil {
+			return err
+		}
+		buf = bytes.NewReader(data)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, u, buf)
+	if err != nil {
+		return err
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	if qs.apiKey != "" {
+		req.Header.Set("api-key", qs.apiKey)
+		req.Header.Set("Authorization", "Bearer "+qs.apiKey)
+	}
+	if qs.client == nil {
+		qs.client = &http.Client{Timeout: 15 * time.Second}
+	}
+	resp, err := qs.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	payload, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("qdrant http %d: %s", resp.StatusCode, strings.TrimSpace(string(payload)))
+	}
+	if out != nil && len(payload) > 0 {
+		if err := json.Unmarshal(payload, out); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (qs *QdrantStore) getPoint(ctx context.Context, id int64) (*qdrantPointResult, error) {
+	req := map[string]any{
+		"ids":          []int64{id},
+		"with_payload": true,
+		"with_vector":  true,
+	}
+	var resp qdrantEnvelope[qdrantGetResult]
+	if err := qs.do(ctx, http.MethodPost, fmt.Sprintf("/collections/%s/points/get", url.PathEscape(qs.collection)), req, &resp); err != nil {
+		return nil, err
+	}
+	if len(resp.Result.Points) == 0 {
+		return nil, fmt.Errorf("point %d not found", id)
+	}
+	return &resp.Result.Points[0], nil
+}
+
+func (qs *QdrantStore) generateID() int64 {
+	qs.mu.Lock()
+	defer qs.mu.Unlock()
+	return time.Now().UnixNano() + rand.Int63()
+}
+
+func parseQdrantID(raw json.RawMessage) (int64, error) {
+	if len(raw) == 0 {
+		return 0, nil
+	}
+	var idInt int64
+	if err := json.Unmarshal(raw, &idInt); err == nil {
+		return idInt, nil
+	}
+	var idStr string
+	if err := json.Unmarshal(raw, &idStr); err == nil {
+		if val, err := strconv.ParseInt(idStr, 10, 64); err == nil {
+			return val, nil
+		}
+	}
+	return 0, errors.New("unrecognised qdrant id")
+}
+
+func mapFromPayload(payload map[string]any) map[string]any {
+	if payload == nil {
+		return map[string]any{}
+	}
+	if md, ok := payload["metadata"]; ok {
+		switch t := md.(type) {
+		case string:
+			payload["metadata"] = decodeMetadata(t)
+		case json.RawMessage:
+			payload["metadata"] = decodeMetadata(string(t))
+		case map[string]any:
+			// already a map
+		default:
+			payload["metadata"] = map[string]any{}
+		}
+	} else {
+		payload["metadata"] = map[string]any{}
+	}
+	return payload
+}
+
+func encodeMetadata(v any) string {
+	switch m := v.(type) {
+	case string:
+		return m
+	case json.RawMessage:
+		return string(m)
+	case map[string]any:
+		b, _ := json.Marshal(m)
+		return string(b)
+	case nil:
+		return "{}"
+	default:
+		b, _ := json.Marshal(m)
+		return string(b)
+	}
 }

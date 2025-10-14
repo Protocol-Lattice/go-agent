@@ -2,17 +2,25 @@ package memory
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"sync"
+	"time"
 )
 
 type MemoryRecord struct {
-	ID        int64     `json:"id"`
-	SessionID string    `json:"session_id"`
-	Content   string    `json:"content"`
-	Metadata  string    `json:"metadata"`
-	Embedding []float32 `json:"embedding"`
-	Score     float64   `json:"score"`
+	ID            int64     `json:"id"`
+	SessionID     string    `json:"session_id"`
+	Content       string    `json:"content"`
+	Metadata      string    `json:"metadata"`
+	Embedding     []float32 `json:"embedding"`
+	Score         float64   `json:"score"`
+	Importance    float64   `json:"importance"`
+	Source        string    `json:"source"`
+	Summary       string    `json:"summary"`
+	CreatedAt     time.Time `json:"created_at"`
+	LastEmbedded  time.Time `json:"last_embedded"`
+	WeightedScore float64   `json:"weighted_score"`
 }
 
 type MemoryBank struct {
@@ -26,6 +34,7 @@ type SessionMemory struct {
 	mu            sync.RWMutex
 	shortTermSize int
 	Embedder      Embedder
+	Engine        *Engine
 }
 
 // NewMemoryBank creates a new Postgres-backed memory bank.
@@ -72,8 +81,15 @@ func (sm *SessionMemory) FlushToLongTerm(ctx context.Context, sessionID string) 
 
 	records := sm.shortTerm[sessionID]
 	for _, r := range records {
-		if err := sm.Bank.StoreMemory(ctx, sessionID, r.Content, r.Metadata, r.Embedding); err != nil {
-			return err
+		if sm.Engine != nil {
+			meta := decodeMetadata(r.Metadata)
+			if _, err := sm.Engine.Store(ctx, sessionID, r.Content, meta); err != nil {
+				return err
+			}
+		} else {
+			if err := sm.Bank.StoreMemory(ctx, sessionID, r.Content, r.Metadata, r.Embedding); err != nil {
+				return err
+			}
 		}
 	}
 	delete(sm.shortTerm, sessionID)
@@ -94,8 +110,13 @@ func (sm *SessionMemory) Embed(ctx context.Context, text string) ([]float32, err
 // RetrieveContext returns combined short- and long-term memory
 func (sm *SessionMemory) RetrieveContext(ctx context.Context, sessionID, query string, limit int) ([]MemoryRecord, error) {
 	var longTerm []MemoryRecord
-	if sm.Bank != nil {
-
+	if sm.Engine != nil {
+		records, err := sm.Engine.Retrieve(ctx, query, limit)
+		if err != nil {
+			return nil, err
+		}
+		longTerm = records
+	} else if sm.Bank != nil {
 		queryEmbedding, err := sm.Embed(ctx, query)
 		if err != nil {
 			return nil, err
@@ -121,12 +142,22 @@ func (sm *SessionMemory) WithEmbedder(e Embedder) *SessionMemory {
 	return sm
 }
 
+// WithEngine attaches an advanced memory engine for long-term storage and retrieval.
+func (sm *SessionMemory) WithEngine(engine *Engine) *SessionMemory {
+	sm.Engine = engine
+	return sm
+}
+
 // StoreMemory inserts a long-term record
 func (mb *MemoryBank) StoreMemory(ctx context.Context, sessionID, content, metadata string, embedding []float32) error {
 	if mb == nil || mb.Store == nil {
 		return nil
 	}
-	return mb.Store.StoreMemory(ctx, sessionID, content, metadata, embedding)
+	meta := map[string]any{}
+	if metadata != "" {
+		_ = json.Unmarshal([]byte(metadata), &meta)
+	}
+	return mb.Store.StoreMemory(ctx, sessionID, content, meta, embedding)
 }
 
 // SearchMemory returns top-k similar memories
