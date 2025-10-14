@@ -77,10 +77,6 @@ func (qs *QdrantStore) SearchMemory(ctx context.Context, queryEmbedding []float3
 		return nil, err
 	}
 
-	if resp.Status.Error != nil {
-		return nil, fmt.Errorf("qdrant search error: %v", resp.Status.Error)
-	}
-
 	records := make([]MemoryRecord, 0, len(resp.Result))
 	for _, point := range resp.Result {
 		record := MemoryRecord{Score: point.Score}
@@ -200,15 +196,11 @@ func isConflictError(err error) bool {
 
 type qdrantSearchResponse struct {
 	Result []qdrantPoint `json:"result"`
-	Status qdrantStatus  `json:"status"`
+	Status string        `json:"status"`
 }
 
 type qdrantPoint struct {
 	ID      any            `json:"id"`
 	Score   float64        `json:"score"`
 	Payload map[string]any `json:"payload"`
-}
-
-type qdrantStatus struct {
-	Error any `json:"error"`
 }
