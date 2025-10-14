@@ -404,6 +404,12 @@ func mmrSelect(records []MemoryRecord, query []float32, limit int, lambda float6
 		copy(out, records)
 		return out
 	}
+	if lambda < 0 {
+		lambda = 0
+	}
+	if lambda > 1 {
+		lambda = 1
+	}
 	remaining := make([]MemoryRecord, len(records))
 	copy(remaining, records)
 	selected := make([]MemoryRecord, 0, limit)
@@ -411,14 +417,20 @@ func mmrSelect(records []MemoryRecord, query []float32, limit int, lambda float6
 		bestIdx := 0
 		bestScore := math.Inf(-1)
 		for i, cand := range remaining {
-			simToQuery := cosineSimilarity(query, cand.Embedding)
+			relevance := cand.WeightedScore
+			if relevance == 0 {
+				relevance = cosineSimilarity(query, cand.Embedding)
+			}
 			var maxSim float64
 			for _, sel := range selected {
 				if sim := cosineSimilarity(cand.Embedding, sel.Embedding); sim > maxSim {
 					maxSim = sim
 				}
 			}
-			score := lambda*cand.WeightedScore + (1-lambda)*simToQuery - (1-lambda)*maxSim
+			score := lambda*relevance - (1-lambda)*maxSim
+			if lambda == 0 {
+				score = -maxSim
+			}
 			if score > bestScore {
 				bestScore = score
 				bestIdx = i
