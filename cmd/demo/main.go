@@ -148,7 +148,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("❌ failed to connect to Postgres: %v", err)
 	}
-	defer bank.DB.Close()
+	defer bank.Close()
 
 	if err := bank.CreateSchema(ctx, *schemaPath); err != nil {
 		log.Fatalf("❌ failed to ensure schema: %v", err)

@@ -16,7 +16,7 @@ import (
 // ModelLoader constructs a language model instance for the primary agent.
 type ModelLoader func(ctx context.Context) (models.Agent, error)
 
-// MemoryBankFactory creates the long-term memory store backed by Postgres.
+// MemoryBankFactory creates the long-term memory store used by the runtime.
 type MemoryBankFactory func(ctx context.Context, connStr string) (*memory.MemoryBank, error)
 
 // SessionMemoryFactory wraps the memory bank with a short-term cache implementation.
@@ -105,9 +105,7 @@ func New(ctx context.Context, cfg Config) (*Runtime, error) {
 
 	if cfg.SchemaPath != "" {
 		if err := bank.CreateSchema(ctx, cfg.SchemaPath); err != nil {
-			if bank.DB != nil {
-				bank.DB.Close()
-			}
+			bank.Close()
 			return nil, fmt.Errorf("apply schema: %w", err)
 		}
 	}
@@ -116,9 +114,7 @@ func New(ctx context.Context, cfg Config) (*Runtime, error) {
 
 	coordinator, err := cfg.CoordinatorModel(ctx)
 	if err != nil {
-		if bank.DB != nil {
-			bank.DB.Close()
-		}
+		bank.Close()
 		return nil, fmt.Errorf("load coordinator model: %w", err)
 	}
 
@@ -132,9 +128,7 @@ func New(ctx context.Context, cfg Config) (*Runtime, error) {
 		UTCPClient:   cfg.UTCPClient,
 	})
 	if err != nil {
-		if bank.DB != nil {
-			bank.DB.Close()
-		}
+		bank.Close()
 		return nil, fmt.Errorf("initialise coordinator agent: %w", err)
 	}
 
@@ -167,12 +161,9 @@ func (rt *Runtime) SubAgents() []agent.SubAgent {
 	return rt.agent.SubAgents()
 }
 
-// Close releases database connections associated with the runtime.
+// Close releases resources associated with the runtime's memory bank.
 func (rt *Runtime) Close() error {
-	if rt.bank != nil && rt.bank.DB != nil {
-		rt.bank.DB.Close()
-	}
-	return nil
+	return rt.bank.Close()
 }
 
 // NewSession provisions an interactive session. If id is empty a unique identifier is generated.
