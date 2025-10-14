@@ -187,7 +187,18 @@ func (e *Engine) Retrieve(ctx context.Context, query string, limit int) ([]Memor
 		e.logf("reembed drift: %v", err)
 	}
 	e.metrics.IncRetrieved(len(selected))
-	sort.Slice(selected, func(i, j int) bool { return selected[i].WeightedScore > selected[j].WeightedScore })
+	sort.Slice(selected, func(i, j int) bool {
+		scoreDiff := selected[i].WeightedScore - selected[j].WeightedScore
+		if math.Abs(scoreDiff) < weights.Importance*0.1 {
+			if selected[i].Importance != selected[j].Importance {
+				return selected[i].Importance > selected[j].Importance
+			}
+		}
+		if scoreDiff == 0 {
+			return selected[i].Importance > selected[j].Importance
+		}
+		return scoreDiff > 0
+	})
 	return selected, nil
 }
 
