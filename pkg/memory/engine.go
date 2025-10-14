@@ -55,6 +55,8 @@ func (e *Engine) WithEmbedder(embedder Embedder) *Engine {
 func (e *Engine) WithSummarizer(s Summarizer) *Engine {
 	if s != nil {
 		e.summarizer = s
+		// ✅ Auto-enable summaries when a summarizer is set
+		e.opts.EnableSummaries = true
 	}
 	return e
 }
@@ -188,17 +190,18 @@ func (e *Engine) Retrieve(ctx context.Context, query string, limit int) ([]Memor
 	}
 	e.metrics.IncRetrieved(len(selected))
 	sort.Slice(selected, func(i, j int) bool {
-		scoreDiff := selected[i].WeightedScore - selected[j].WeightedScore
-		if math.Abs(scoreDiff) < weights.Importance*0.1 {
-			if selected[i].Importance != selected[j].Importance {
-				return selected[i].Importance > selected[j].Importance
-			}
-		}
-		if scoreDiff == 0 {
+		// 1) Highest importance first (hard rule)
+		if selected[i].Importance != selected[j].Importance {
 			return selected[i].Importance > selected[j].Importance
 		}
-		return scoreDiff > 0
+		// 2) Then by weighted relevance
+		if selected[i].WeightedScore != selected[j].WeightedScore {
+			return selected[i].WeightedScore > selected[j].WeightedScore
+		}
+		// 3) Finally by recency (newer first)
+		return selected[i].CreatedAt.After(selected[j].CreatedAt)
 	})
+
 	return selected, nil
 }
 
@@ -385,15 +388,16 @@ func importanceScore(content string, metadata map[string]any) float64 {
 	}
 	tokens := strings.Fields(strings.ToLower(content))
 	lengthScore := math.Min(float64(len(tokens))/60.0, 1.0)
+
 	keywordBoost := 0.0
-	urgentKeywords := []string{"urgent", "critical", "deadline", "important", "alert", "error"}
+	urgentKeywords := []string{"urgent", "critical", "deadline", "important", "alert", "error", "outage", "failure"}
 	for _, kw := range urgentKeywords {
 		if strings.Contains(strings.ToLower(content), kw) {
-			keywordBoost += 0.1
+			keywordBoost += 0.25 // was 0.1 — give stronger boost
 		}
 	}
-	if keywordBoost > 0.5 {
-		keywordBoost = 0.5
+	if keywordBoost > 0.6 {
+		keywordBoost = 0.6
 	}
 	return clamp(lengthScore+keywordBoost, 0, 1)
 }
@@ -404,6 +408,12 @@ func mmrSelect(records []MemoryRecord, query []float32, limit int, lambda float6
 		copy(out, records)
 		return out
 	}
+	if lambda < 0 {
+		lambda = 0
+	}
+	if lambda > 1 {
+		lambda = 1
+	}
 	remaining := make([]MemoryRecord, len(records))
 	copy(remaining, records)
 	selected := make([]MemoryRecord, 0, limit)
@@ -411,14 +421,20 @@ func mmrSelect(records []MemoryRecord, query []float32, limit int, lambda float6
 		bestIdx := 0
 		bestScore := math.Inf(-1)
 		for i, cand := range remaining {
-			simToQuery := cosineSimilarity(query, cand.Embedding)
+			relevance := cand.WeightedScore
+			if relevance == 0 {
+				relevance = cosineSimilarity(query, cand.Embedding)
+			}
 			var maxSim float64
 			for _, sel := range selected {
 				if sim := cosineSimilarity(cand.Embedding, sel.Embedding); sim > maxSim {
 					maxSim = sim
 				}
 			}
-			score := lambda*cand.WeightedScore + (1-lambda)*simToQuery - (1-lambda)*maxSim
+			score := lambda*relevance - (1-lambda)*maxSim
+			if lambda == 0 {
+				score = -maxSim
+			}
 			if score > bestScore {
 				bestScore = score
 				bestIdx = i
