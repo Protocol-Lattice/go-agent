@@ -13,9 +13,9 @@ sub-agents so you can focus on domain logic instead of orchestration glue.
   registered through catalog/directory abstractions that mirror the Google ADK terminology.
 - **Tooling ecosystem** – Implement the `agent.Tool` interface and register it with the runtime. Reference
   implementations (echo, calculator, clock) live in `pkg/tools`.
-- **Retrieval-augmented memory** – `pkg/memory` combines a short-term window with an optional Postgres + pgvector
-  backend for long-term recall. The package gracefully degrades to in-memory only mode when a database is not
-  provided (useful for tests and local hacking).
+- **Retrieval-augmented memory** – pkg/memory now supports pluggable vector stores:
+  - Postgres + pgvector (first-party)
+  - Qdrant (first-party)
 - **Model abstraction** – `pkg/models` defines a tiny interface around `Generate(ctx, prompt)` with adapters for
   Gemini 2.5 Pro and dummy models for offline testing.
 - **Command-line demo** – `cmd/demo` is a configurable CLI that spins up the runtime, walks through a scripted
