@@ -9,265 +9,12 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
-
-	"github.com/google/uuid"
 )
 
-// QdrantStore implements VectorStore using the Qdrant HTTP API.
-type QdrantStore struct {
-	Endpoint   string
-	APIKey     string
-	Collection string
-	Client     *http.Client
-}
-
-// NewQdrantStore configures a Qdrant-backed VectorStore implementation.
-func NewQdrantStore(endpoint, apiKey, collection string) *QdrantStore {
-	endpoint = strings.TrimSuffix(endpoint, "/")
-	return &QdrantStore{
-		Endpoint:   endpoint,
-		APIKey:     apiKey,
-		Collection: collection,
-		Client: &http.Client{
-			Timeout: 30 * time.Second,
-		},
-	}
-}
-
-// StoreMemory writes a single memory record to Qdrant via the upsert endpoint.
-func (qs *QdrantStore) StoreMemory(ctx context.Context, sessionID, content, metadata string, embedding []float32) error {
-	if qs == nil || qs.Client == nil {
-		return nil
-	}
-
-	payload := map[string]any{
-		"session_id": sessionID,
-		"content":    content,
-		"metadata":   metadata,
-	}
-
-	body := map[string]any{
-		"points": []any{
-			map[string]any{
-				"id":      uuid.NewString(),
-				"vector":  embedding,
-				"payload": payload,
-			},
-		},
-	}
-
-	return qs.doRequest(ctx, http.MethodPut, fmt.Sprintf("%s/collections/%s/points", qs.Endpoint, qs.Collection), body, nil)
-}
-
-// SearchMemory queries Qdrant for the closest vectors.
-func (qs *QdrantStore) SearchMemory(ctx context.Context, queryEmbedding []float32, limit int) ([]MemoryRecord, error) {
-	if qs == nil || qs.Client == nil {
-		return nil, nil
-	}
-
-	body := map[string]any{
-		"vector":       queryEmbedding,
-		"limit":        limit,
-		"with_payload": true,
-		"with_vectors": false,
-	}
-
-	var resp qdrantSearchResponse
-	if err := qs.doRequest(ctx, http.MethodPost, fmt.Sprintf("%s/collections/%s/points/search", qs.Endpoint, qs.Collection), body, &resp); err != nil {
-		return nil, err
-	}
-
-	records := make([]MemoryRecord, 0, len(resp.Result))
-	for _, point := range resp.Result {
-		record := MemoryRecord{Score: point.Score}
-
-		switch v := point.ID.(type) {
-		case float64:
-			record.ID = int64(v)
-		case json.Number:
-			if i, err := v.Int64(); err == nil {
-				record.ID = i
-			}
-		}
-
-		if session, ok := point.Payload["session_id"].(string); ok {
-			record.SessionID = session
-		}
-		if content, ok := point.Payload["content"].(string); ok {
-			record.Content = content
-		}
-		if metadata := point.Payload["metadata"]; metadata != nil {
-			record.Metadata = stringifyPayload(metadata)
-		}
-
-		records = append(records, record)
-	}
-
-	return records, nil
-}
-
-// CreateSchema initialises the Qdrant collection using the provided schema file when available.
-func (qs *QdrantStore) CreateSchema(ctx context.Context, baseURL, apiKey, collection string, req CreateCollectionRequest) error {
-	if baseURL == "" {
-		baseURL = "http://localhost:6333"
-	}
-	endpoint := fmt.Sprintf("%s/collections/%s", strings.TrimRight(baseURL, "/"), url.PathEscape(collection))
-
-	body, err := json.Marshal(req)
-	if err != nil {
-		return fmt.Errorf("marshal request: %w", err)
-	}
-
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPut, endpoint, bytes.NewReader(body))
-	if err != nil {
-		return fmt.Errorf("new request: %w", err)
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	if apiKey != "" {
-		httpReq.Header.Set("api-key", apiKey)                 // Qdrant supports this header
-		httpReq.Header.Set("Authorization", "Bearer "+apiKey) // optional alternative
-	}
-
-	client := &http.Client{Timeout: 15 * time.Second}
-	resp, err := client.Do(httpReq)
-	if err != nil {
-		return fmt.Errorf("do request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	data, _ := io.ReadAll(resp.Body)
-
-	// Happy path
-	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-		var ok qdrantOKResponse
-		if err := json.Unmarshal(data, &ok); err == nil && strings.EqualFold(ok.Status, "ok") {
-			return nil
-		}
-		// Some versions/situations might omit "ok"; consider a 2xx as success if JSON is parseable.
-		return nil
-	}
-
-	// Try to parse the "status.error" form
-	var qErr qdrantErrorResponse
-	if err := json.Unmarshal(data, &qErr); err == nil && qErr.Status.Error != "" {
-		// Make idempotent: ignore "already exists"
-		if strings.Contains(strings.ToLower(qErr.Status.Error), "already exists") {
-			return nil
-		}
-		return errors.New(qErr.Status.Error)
-	}
-
-	// Fallback
-	return fmt.Errorf("qdrant error: http %d: %s", resp.StatusCode, string(data))
-}
-
-// EnsureCollection creates the collection in Qdrant if it does not exist.
-func (qs *QdrantStore) EnsureCollection(ctx context.Context, vectorSize int, distance string) error {
-	if qs == nil || qs.Client == nil {
-		return nil
-	}
-
-	body := map[string]any{
-		"vectors": map[string]any{
-			"size":     vectorSize,
-			"distance": distance,
-		},
-	}
-
-	// Qdrant returns 200 if the collection exists and 201 if created.
-	err := qs.doRequest(ctx, http.MethodPut, fmt.Sprintf("%s/collections/%s", qs.Endpoint, qs.Collection), body, nil)
-	if err != nil && !isConflictError(err) {
-		return err
-	}
-	return nil
-}
-
-func (qs *QdrantStore) doRequest(ctx context.Context, method, url string, body any, out any) error {
-	if qs == nil || qs.Client == nil {
-		return nil
-	}
-
-	var buf io.ReadWriter
-	if body != nil {
-		buf = &bytes.Buffer{}
-		if err := json.NewEncoder(buf).Encode(body); err != nil {
-			return fmt.Errorf("failed to encode qdrant request: %w", err)
-		}
-	}
-
-	req, err := http.NewRequestWithContext(ctx, method, url, buf)
-	if err != nil {
-		return fmt.Errorf("failed to create qdrant request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	if qs.APIKey != "" {
-		req.Header.Set("api-key", qs.APIKey)
-	}
-
-	resp, err := qs.Client.Do(req)
-	if err != nil {
-		return fmt.Errorf("qdrant request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode >= 400 {
-		data, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("qdrant request error: %s", strings.TrimSpace(string(data)))
-	}
-
-	if out != nil {
-		decoder := json.NewDecoder(resp.Body)
-		decoder.UseNumber()
-		if err := decoder.Decode(out); err != nil {
-			return fmt.Errorf("failed to decode qdrant response: %w", err)
-		}
-	}
-
-	return nil
-}
-
-// stringifyPayload converts arbitrary payload values into a string representation for MemoryRecord.Metadata.
-func stringifyPayload(value any) string {
-	switch v := value.(type) {
-	case string:
-		return v
-	case fmt.Stringer:
-		return v.String()
-	default:
-		data, err := json.Marshal(v)
-		if err != nil {
-			return fmt.Sprint(v)
-		}
-		return string(data)
-	}
-}
-
-func isConflictError(err error) bool {
-	if err == nil {
-		return false
-	}
-	return strings.Contains(err.Error(), "already exists") || strings.Contains(err.Error(), "409")
-}
-
-type qdrantSearchResponse struct {
-	Result []qdrantPoint `json:"result"`
-	Status string        `json:"status"`
-}
-
-type qdrantPoint struct {
-	ID      any            `json:"id"`
-	Score   float64        `json:"score"`
-	Payload map[string]any `json:"payload"`
-}
-
-type qdrantSchema struct {
-	VectorSize int    `json:"vector_size"`
-	Distance   string `json:"distance"`
-}
-
-// ----- models -----
+// --- Qdrant types ---
 
 type Distance string
 
@@ -277,35 +24,160 @@ const (
 	DistanceEuclid Distance = "Euclid"
 )
 
-type VectorParams struct {
-	Size     int      `json:"size"`
-	Distance Distance `json:"distance"`
-}
-
-// Vectors can be either a single VectorParams or a map[string]VectorParams.
+// CreateCollectionRequest matches Qdrant's API; Vectors supports single or named vectors.
 type CreateCollectionRequest struct {
-	Vectors                any            `json:"vectors"` // VectorParams or map[string]VectorParams
-	OptimizersConfig       map[string]any `json:"optimizers_config,omitempty"`
-	HnswConfig             map[string]any `json:"hnsw_config,omitempty"`
-	QuantizationConfig     map[string]any `json:"quantization_config,omitempty"`
-	ShardNumber            *int           `json:"shard_number,omitempty"`
-	WriteConsistencyFactor *int           `json:"write_consistency_factor,omitempty"`
+	Vectors                json.RawMessage `json:"vectors"` // {"size":1536,"distance":"Cosine"} OR {"text":{"size":768,"distance":"Cosine"}}
+	ShardNumber            *int            `json:"shard_number,omitempty"`
+	ReplicationFactor      *int            `json:"replication_factor,omitempty"`
+	WriteConsistencyFactor *int            `json:"write_consistency_factor,omitempty"`
+	OnDiskPayload          *bool           `json:"on_disk_payload,omitempty"`
 }
 
-// Success shape (typical):
-// { "result": {...}, "status": "ok", "time": 0.0 }
-type qdrantOKResponse struct {
-	Status string `json:"status"`
-	Time   any    `json:"time"`
-	Result any    `json:"result"`
+// qdrantStatus supports both `status: "ok"` and `status: {"error":"..."}`.
+type qdrantStatus struct {
+	State string // "ok" or "error"
+	Error string // non-empty if error
 }
 
-// Error shape sometimes differs, e.g.:
-// { "status": { "error":"Not found: Collection ..."}, "time": 0.0 }
-type qdrantErrorStatus struct {
-	Error string `json:"error"`
+func (s *qdrantStatus) UnmarshalJSON(b []byte) error {
+	if len(b) > 0 && b[0] == '"' {
+		var v string
+		if err := json.Unmarshal(b, &v); err != nil {
+			return err
+		}
+		s.State = strings.ToLower(v)
+		return nil
+	}
+	var obj struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(b, &obj); err != nil {
+		return err
+	}
+	if obj.Error != "" {
+		s.State = "error"
+		s.Error = obj.Error
+	}
+	return nil
 }
-type qdrantErrorResponse struct {
-	Status qdrantErrorStatus `json:"status"`
-	Time   any               `json:"time"`
+
+type qdrantEnvelope[T any] struct {
+	Status qdrantStatus `json:"status"`
+	Time   float64      `json:"time"`
+	Result T            `json:"result"`
+}
+
+// schema file format expected at schemaPath (JSON)
+type qdrantSchemaFile struct {
+	BaseURL    string                  `json:"base_url"`   // e.g. "http://localhost:6333"
+	APIKey     string                  `json:"api_key"`    // optional; falls back to env QDRANT_API_KEY
+	Collection string                  `json:"collection"` // required
+	Request    CreateCollectionRequest `json:"request"`    // required
+}
+
+// Your store type.
+type QdrantStore struct {
+	// add fields if needed
+}
+
+// CreateSchema implements SchemaInitializer.
+// schemaPath must point to a JSON file that matches qdrantSchemaFile.
+func (qs *QdrantStore) CreateSchema(ctx context.Context, schemaPath string) error {
+	if schemaPath == "" {
+		return errors.New("schemaPath is empty")
+	}
+
+	f, err := os.Open(schemaPath)
+	if err != nil {
+		return fmt.Errorf("open schema file: %w", err)
+	}
+	defer f.Close()
+
+	// Limit read to 1 MiB for safety.
+	data, err := io.ReadAll(io.LimitReader(f, 1<<20))
+	if err != nil {
+		return fmt.Errorf("read schema file: %w", err)
+	}
+
+	var cfg qdrantSchemaFile
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return fmt.Errorf("unmarshal schema file (JSON): %w", err)
+	}
+
+	// Defaults & validation
+	if cfg.BaseURL == "" {
+		cfg.BaseURL = "http://localhost:6333"
+	}
+	if cfg.APIKey == "" {
+		cfg.APIKey = os.Getenv("QDRANT_API_KEY")
+	}
+	if cfg.Collection == "" {
+		return errors.New("schema file missing 'collection'")
+	}
+	if len(cfg.Request.Vectors) == 0 {
+		return errors.New("schema file 'request.vectors' is required")
+	}
+
+	return qs.createCollection(ctx, cfg.BaseURL, cfg.APIKey, cfg.Collection, cfg.Request)
+}
+
+// --- Internal HTTP call with robust handling (idempotent, dual-status parsing) ---
+
+func (qs *QdrantStore) createCollection(ctx context.Context, baseURL, apiKey, collection string, req CreateCollectionRequest) error {
+	u, err := url.Parse(strings.TrimRight(baseURL, "/"))
+	if err != nil {
+		return fmt.Errorf("bad baseURL: %w", err)
+	}
+	u.Path = fmt.Sprintf("/collections/%s", url.PathEscape(collection))
+
+	body, err := json.Marshal(req)
+	if err != nil {
+		return fmt.Errorf("marshal request: %w", err)
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPut, u.String(), bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("new request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("User-Agent", "go-adk-qdrant/1.0")
+	if apiKey != "" {
+		// Either header works; sending both covers deployments with either check.
+		httpReq.Header.Set("api-key", apiKey)
+		httpReq.Header.Set("Authorization", "Bearer "+apiKey)
+	}
+
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Do(httpReq)
+	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+			return err
+		}
+		return fmt.Errorf("do request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+
+	var env qdrantEnvelope[json.RawMessage]
+	_ = json.Unmarshal(respBody, &env) // best-effort parse
+
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		// 2xx is success even if status isn't present in some versions.
+		if strings.EqualFold(env.Status.State, "ok") && env.Status.Error == "" {
+			return nil
+		}
+		return nil
+	}
+
+	// Non-2xx: surface structured error and make idempotent for existing collections.
+	if env.Status.Error != "" {
+		low := strings.ToLower(env.Status.Error)
+		if strings.Contains(low, "already exists") {
+			return nil
+		}
+		return errors.New(env.Status.Error)
+	}
+
+	return fmt.Errorf("qdrant error: http %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
 }
