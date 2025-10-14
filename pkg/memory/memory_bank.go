@@ -30,6 +30,7 @@ type SessionMemory struct {
 	shortTerm     map[string][]MemoryRecord
 	mu            sync.RWMutex
 	shortTermSize int
+	Embedder      Embedder
 }
 
 // NewMemoryBank creates a new connection to Postgres
@@ -47,6 +48,7 @@ func NewSessionMemory(bank *MemoryBank, shortTermSize int) *SessionMemory {
 		Bank:          bank,
 		shortTerm:     make(map[string][]MemoryRecord),
 		shortTermSize: shortTermSize,
+		Embedder:      AutoEmbedder(),
 	}
 }
 
@@ -78,11 +80,26 @@ func (sm *SessionMemory) FlushToLongTerm(ctx context.Context, sessionID string) 
 	return nil
 }
 
+func (sm *SessionMemory) Embed(ctx context.Context, text string) ([]float32, error) {
+	if sm.Embedder == nil {
+		sm.Embedder = AutoEmbedder()
+	}
+	vec, err := sm.Embedder.Embed(ctx, text)
+	if err != nil || len(vec) == 0 {
+		return DummyEmbedding(text), nil
+	}
+	return vec, nil
+}
+
 // RetrieveContext returns combined short- and long-term memory
 func (sm *SessionMemory) RetrieveContext(ctx context.Context, sessionID, query string, limit int) ([]MemoryRecord, error) {
 	var longTerm []MemoryRecord
 	if sm.Bank != nil {
-		queryEmbedding := VertexAIEmbedding(query)
+
+		queryEmbedding, err := sm.Embed(ctx, query)
+		if err != nil {
+			return nil, err
+		}
 		records, err := sm.Bank.SearchMemory(ctx, queryEmbedding, limit)
 		if err != nil {
 			return nil, err
@@ -95,6 +112,13 @@ func (sm *SessionMemory) RetrieveContext(ctx context.Context, sessionID, query s
 	sm.mu.RUnlock()
 
 	return append(shortTerm, longTerm...), nil
+}
+
+func (sm *SessionMemory) WithEmbedder(e Embedder) *SessionMemory {
+	if e != nil {
+		sm.Embedder = e
+	}
+	return sm
 }
 
 // StoreMemory inserts a long-term record

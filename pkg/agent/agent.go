@@ -296,7 +296,10 @@ func (a *Agent) storeMemory(sessionID, role, content string, extra map[string]st
 		meta[k] = v
 	}
 	metaBytes, _ := json.Marshal(meta)
-	embedding := memory.VertexAIEmbedding(content)
+	embedding, err := a.memory.Embedder.Embed(context.Background(), content)
+	if err != nil {
+		return
+	}
 
 	a.mu.Lock()
 	defer a.mu.Unlock()
