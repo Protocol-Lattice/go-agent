@@ -1,0 +1,38 @@
+name: Go
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.25.0'
+
+    - name: Clear Go Module Cache
+      run: go clean -modcache
+
+    - name: Install dependencies
+      run: |
+        go get github.com/lib/pq
+        go get github.com/gorilla/mux
+
+    - name: Tidy and install modules
+      run: go mod tidy
+
+    - name: Build
+      run: go build -v ./...
+
+    - name: Run Tests with Coverage
+      run: |
+        go test -v -coverprofile=coverage.out ./...
+        go tool cover -func=coverage.out
