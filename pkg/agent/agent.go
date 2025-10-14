@@ -21,24 +21,22 @@ type Agent struct {
 	systemPrompt string
 	contextLimit int
 
-	tools     map[string]Tool
-	toolSpecs map[string]ToolSpec
-	toolOrder []string
-
-	subagents     map[string]SubAgent
-	subagentOrder []SubAgent
+	toolCatalog       ToolCatalog
+	subAgentDirectory SubAgentDirectory
 
 	mu sync.Mutex
 }
 
 // Options configure a new Agent.
 type Options struct {
-	Model        models.Agent
-	Memory       *memory.SessionMemory
-	SystemPrompt string
-	ContextLimit int
-	Tools        []Tool
-	SubAgents    []SubAgent
+	Model             models.Agent
+	Memory            *memory.SessionMemory
+	SystemPrompt      string
+	ContextLimit      int
+	Tools             []Tool
+	SubAgents         []SubAgent
+	ToolCatalog       ToolCatalog
+	SubAgentDirectory SubAgentDirectory
 }
 
 // New creates an Agent with the provided options.
@@ -60,40 +58,49 @@ func New(opts Options) (*Agent, error) {
 		systemPrompt = defaultSystemPrompt
 	}
 
-	a := &Agent{
-		model:        opts.Model,
-		memory:       opts.Memory,
-		systemPrompt: systemPrompt,
-		contextLimit: ctxLimit,
-		tools:        make(map[string]Tool),
-		toolSpecs:    make(map[string]ToolSpec),
-		subagents:    make(map[string]SubAgent),
+	toolCatalog := opts.ToolCatalog
+	tolerantTools := false
+	if toolCatalog == nil {
+		toolCatalog = NewStaticToolCatalog(nil)
+		tolerantTools = true
 	}
-
 	for _, tool := range opts.Tools {
 		if tool == nil {
 			continue
 		}
-		spec := tool.Spec()
-		key := strings.ToLower(strings.TrimSpace(spec.Name))
-		if key == "" {
-			continue
+		if err := toolCatalog.Register(tool); err != nil {
+			if tolerantTools {
+				continue
+			}
+			return nil, err
 		}
-		a.tools[key] = tool
-		a.toolSpecs[key] = spec
-		a.toolOrder = append(a.toolOrder, key)
 	}
 
+	subAgentDirectory := opts.SubAgentDirectory
+	tolerantSubAgents := false
+	if subAgentDirectory == nil {
+		subAgentDirectory = NewStaticSubAgentDirectory(nil)
+		tolerantSubAgents = true
+	}
 	for _, sa := range opts.SubAgents {
 		if sa == nil {
 			continue
 		}
-		key := strings.ToLower(sa.Name())
-		if key == "" {
-			continue
+		if err := subAgentDirectory.Register(sa); err != nil {
+			if tolerantSubAgents {
+				continue
+			}
+			return nil, err
 		}
-		a.subagents[key] = sa
-		a.subagentOrder = append(a.subagentOrder, sa)
+	}
+
+	a := &Agent{
+		model:             opts.Model,
+		memory:            opts.Memory,
+		systemPrompt:      systemPrompt,
+		contextLimit:      ctxLimit,
+		toolCatalog:       toolCatalog,
+		subAgentDirectory: subAgentDirectory,
 	}
 
 	return a, nil
@@ -152,10 +159,9 @@ func (a *Agent) buildPrompt(ctx context.Context, sessionID, userInput string) (s
 	var sb strings.Builder
 	sb.WriteString(a.systemPrompt)
 
-	if len(a.toolOrder) > 0 {
+	if specs := a.ToolSpecs(); len(specs) > 0 {
 		sb.WriteString("\n\nAvailable tools:\n")
-		for _, key := range a.toolOrder {
-			spec := a.toolSpecs[key]
+		for _, spec := range specs {
 			sb.WriteString(fmt.Sprintf("- %s: %s\n", spec.Name, spec.Description))
 			if len(spec.InputSchema) > 0 {
 				schemaJSON, _ := json.MarshalIndent(spec.InputSchema, "  ", "  ")
@@ -175,9 +181,9 @@ func (a *Agent) buildPrompt(ctx context.Context, sessionID, userInput string) (s
 		sb.WriteString("Invoke a tool by replying with the format `tool:<name> <json arguments>` when necessary.\n")
 	}
 
-	if len(a.subagentOrder) > 0 {
+	if subagents := a.SubAgents(); len(subagents) > 0 {
 		sb.WriteString("\nSpecialist sub-agents:\n")
-		for _, sa := range a.subagentOrder {
+		for _, sa := range subagents {
 			sb.WriteString(fmt.Sprintf("- %s: %s\n", sa.Name(), sa.Description()))
 		}
 		sb.WriteString("Delegate by replying with `subagent:<name> <task>` when it improves the answer.\n")
@@ -214,7 +220,7 @@ func (a *Agent) handleCommand(ctx context.Context, sessionID, userInput string) 
 			return true, "", nil, errors.New("tool name is missing")
 		}
 		name, args := splitCommand(payload)
-		tool, ok := a.tools[strings.ToLower(name)]
+		tool, spec, ok := a.lookupTool(name)
 		if !ok {
 			return true, "", nil, fmt.Errorf("unknown tool: %s", name)
 		}
@@ -223,7 +229,6 @@ func (a *Agent) handleCommand(ctx context.Context, sessionID, userInput string) 
 		if err != nil {
 			return true, "", nil, err
 		}
-		spec := a.toolSpecs[strings.ToLower(name)]
 		metadata := map[string]string{"tool": spec.Name}
 		for k, v := range response.Metadata {
 			if strings.TrimSpace(k) == "" || strings.TrimSpace(v) == "" {
@@ -239,7 +244,7 @@ func (a *Agent) handleCommand(ctx context.Context, sessionID, userInput string) 
 			return true, "", nil, errors.New("subagent name is missing")
 		}
 		name, args := splitCommand(payload)
-		sa, ok := a.subagents[strings.ToLower(name)]
+		sa, ok := a.lookupSubAgent(name)
 		if !ok {
 			return true, "", nil, fmt.Errorf("unknown subagent: %s", name)
 		}
@@ -293,6 +298,44 @@ func (a *Agent) storeMemory(sessionID, role, content string, extra map[string]st
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.memory.AddShortTerm(sessionID, content, string(metaBytes), embedding)
+}
+
+func (a *Agent) lookupTool(name string) (Tool, ToolSpec, bool) {
+	if a.toolCatalog == nil {
+		return nil, ToolSpec{}, false
+	}
+	return a.toolCatalog.Lookup(name)
+}
+
+func (a *Agent) lookupSubAgent(name string) (SubAgent, bool) {
+	if a.subAgentDirectory == nil {
+		return nil, false
+	}
+	return a.subAgentDirectory.Lookup(name)
+}
+
+// ToolSpecs returns the registered tool specifications in deterministic order.
+func (a *Agent) ToolSpecs() []ToolSpec {
+	if a.toolCatalog == nil {
+		return nil
+	}
+	return a.toolCatalog.Specs()
+}
+
+// Tools returns the registered tools in deterministic order.
+func (a *Agent) Tools() []Tool {
+	if a.toolCatalog == nil {
+		return nil
+	}
+	return a.toolCatalog.Tools()
+}
+
+// SubAgents returns all registered sub-agents in deterministic order.
+func (a *Agent) SubAgents() []SubAgent {
+	if a.subAgentDirectory == nil {
+		return nil
+	}
+	return a.subAgentDirectory.All()
 }
 
 func metadataRole(metadata string) string {

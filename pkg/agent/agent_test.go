@@ -81,20 +81,19 @@ func TestNewRegistersToolsAndSubagents(t *testing.T) {
 		t.Fatalf("New returned error: %v", err)
 	}
 
-	if _, ok := agent.tools["echo"]; !ok {
-		t.Fatalf("expected tool to be registered in lowercase")
+	specs := agent.ToolSpecs()
+	if len(specs) != 1 {
+		t.Fatalf("expected 1 tool spec, got %d", len(specs))
 	}
-	if spec := agent.toolSpecs["echo"]; spec.Name != "Echo" {
-		t.Fatalf("expected tool spec to keep original casing")
-	}
-	if len(agent.toolOrder) != 1 || agent.toolOrder[0] != "echo" {
-		t.Fatalf("expected tool order to preserve insertion")
+	if specs[0].Name != "Echo" {
+		t.Fatalf("expected tool spec to retain original casing, got %q", specs[0].Name)
 	}
 
-	if _, ok := agent.subagents["researcher"]; !ok {
-		t.Fatalf("expected subagent to be registered in lowercase")
+	subagents := agent.SubAgents()
+	if len(subagents) != 1 {
+		t.Fatalf("expected 1 subagent, got %d", len(subagents))
 	}
-	if len(agent.subagentOrder) != 1 || agent.subagentOrder[0] != researcher {
+	if subagents[0] != researcher {
 		t.Fatalf("expected subagent order to preserve insertion")
 	}
 }
@@ -162,7 +161,7 @@ func TestToolsWithEmptyNamesAreSkipped(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New returned error: %v", err)
 	}
-	if len(agent.tools) != 0 {
+	if len(agent.Tools()) != 0 {
 		t.Fatalf("expected unnamed tool to be ignored")
 	}
 }
@@ -176,7 +175,49 @@ func TestSubagentsWithEmptyNamesAreIgnored(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New returned error: %v", err)
 	}
-	if len(agent.subagents) != 0 {
+	if len(agent.SubAgents()) != 0 {
 		t.Fatalf("expected unnamed subagent to be ignored")
+	}
+}
+
+func TestStaticToolCatalogRejectsDuplicate(t *testing.T) {
+	catalog := NewStaticToolCatalog(nil)
+	if err := catalog.Register(&stubTool{spec: ToolSpec{Name: "Echo"}}); err != nil {
+		t.Fatalf("unexpected register error: %v", err)
+	}
+	if err := catalog.Register(&stubTool{spec: ToolSpec{Name: "echo"}}); err == nil {
+		t.Fatalf("expected duplicate registration error")
+	}
+}
+
+func TestAgentPropagatesCustomCatalogErrors(t *testing.T) {
+	model := &stubModel{response: "ok"}
+	mem := memory.NewSessionMemory(&memory.MemoryBank{}, 0)
+
+	catalog := NewStaticToolCatalog([]Tool{&stubTool{spec: ToolSpec{Name: "Echo"}}})
+	_, err := New(Options{
+		Model:       model,
+		Memory:      mem,
+		ToolCatalog: catalog,
+		Tools:       []Tool{&stubTool{spec: ToolSpec{Name: "Echo"}}},
+	})
+	if err == nil {
+		t.Fatalf("expected duplicate registration error from custom catalog")
+	}
+}
+
+func TestAgentPropagatesCustomDirectoryErrors(t *testing.T) {
+	model := &stubModel{response: "ok"}
+	mem := memory.NewSessionMemory(&memory.MemoryBank{}, 0)
+
+	dir := NewStaticSubAgentDirectory([]SubAgent{&stubSubAgent{name: "researcher"}})
+	_, err := New(Options{
+		Model:             model,
+		Memory:            mem,
+		SubAgentDirectory: dir,
+		SubAgents:         []SubAgent{&stubSubAgent{name: "Researcher"}},
+	})
+	if err == nil {
+		t.Fatalf("expected duplicate registration error from custom directory")
 	}
 }

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"github.com/Raezil/go-agent-development-kit/pkg/agent"
@@ -84,14 +83,11 @@ func (c Config) sessionMemoryFactory() SessionMemoryFactory {
 
 // Runtime wires together models, tools, memory and sub-agents into a cohesive execution environment.
 type Runtime struct {
-	agent     *agent.Agent
-	memory    *memory.SessionMemory
-	bank      *memory.MemoryBank
-	tools     []agent.Tool
-	subagents []agent.SubAgent
+	agent  *agent.Agent
+	memory *memory.SessionMemory
+	bank   *memory.MemoryBank
 
-	sessionCounter atomic.Uint64
-	activeSessions map[string]*Session
+	sessions *sessionManager
 }
 
 // New builds a runtime based on the supplied configuration.
@@ -140,13 +136,11 @@ func New(ctx context.Context, cfg Config) (*Runtime, error) {
 	}
 
 	rt := &Runtime{
-		agent:          agentInstance,
-		memory:         sessionMemory,
-		bank:           bank,
-		tools:          append([]agent.Tool(nil), cfg.Tools...),
-		subagents:      append([]agent.SubAgent(nil), cfg.SubAgents...),
-		activeSessions: make(map[string]*Session),
+		agent:  agentInstance,
+		memory: sessionMemory,
+		bank:   bank,
 	}
+	rt.sessions = newSessionManager(rt)
 	return rt, nil
 }
 
@@ -162,12 +156,12 @@ func (rt *Runtime) Memory() *memory.SessionMemory {
 
 // Tools returns the toolset attached to the runtime.
 func (rt *Runtime) Tools() []agent.Tool {
-	return append([]agent.Tool(nil), rt.tools...)
+	return rt.agent.Tools()
 }
 
 // SubAgents returns the delegated specialist components available to the runtime.
 func (rt *Runtime) SubAgents() []agent.SubAgent {
-	return append([]agent.SubAgent(nil), rt.subagents...)
+	return rt.agent.SubAgents()
 }
 
 // Close releases database connections associated with the runtime.
@@ -180,36 +174,22 @@ func (rt *Runtime) Close() error {
 
 // NewSession provisions an interactive session. If id is empty a unique identifier is generated.
 func (rt *Runtime) NewSession(id string) *Session {
-	if strings.TrimSpace(id) == "" {
-		counter := rt.sessionCounter.Add(1)
-		id = fmt.Sprintf("session-%d", counter)
-	}
-	session := &Session{runtime: rt, id: id}
-	rt.activeSessions[id] = session
-	return session
+	return rt.sessions.newSession(id)
 }
 
 // GetSession retrieves an active session by its ID.
 func (rt *Runtime) GetSession(id string) (*Session, error) {
-	session, exists := rt.activeSessions[id]
-	if !exists {
-		return nil, fmt.Errorf("session %s not found", id)
-	}
-	return session, nil
+	return rt.sessions.getSession(strings.TrimSpace(id))
 }
 
 // RemoveSession removes a session from the active sessions map.
 func (rt *Runtime) RemoveSession(id string) {
-	delete(rt.activeSessions, id)
+	rt.sessions.removeSession(strings.TrimSpace(id))
 }
 
 // ActiveSessions returns a copy of all active session IDs.
 func (rt *Runtime) ActiveSessions() []string {
-	ids := make([]string, 0, len(rt.activeSessions))
-	for id := range rt.activeSessions {
-		ids = append(ids, id)
-	}
-	return ids
+	return rt.sessions.activeIDs()
 }
 
 // Generate forwards a user prompt to the coordinator agent and captures the response.

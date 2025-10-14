@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -67,6 +68,11 @@ func TestRuntimeNewSessionAndAsk(t *testing.T) {
 	if generated.ID() == "" {
 		t.Fatalf("expected generated session id to be non-empty")
 	}
+
+	active := rt.ActiveSessions()
+	if len(active) != 2 {
+		t.Fatalf("expected 2 active sessions, got %d", len(active))
+	}
 }
 
 func TestRuntimeToolsImmutable(t *testing.T) {
@@ -93,5 +99,41 @@ func TestRuntimeToolsImmutable(t *testing.T) {
 	toolsAgain := rt.Tools()
 	if toolsAgain[0] == nil {
 		t.Fatalf("runtime.Tools returned mutable slice")
+	}
+}
+
+func TestRuntimeActiveSessionsSortedAndRemovable(t *testing.T) {
+	cfg := Config{
+		CoordinatorModel: func(ctx context.Context) (models.Agent, error) {
+			return models.NewDummyLLM("Coordinator:"), nil
+		},
+		MemoryFactory: func(ctx context.Context, _ string) (*memory.MemoryBank, error) {
+			return &memory.MemoryBank{}, nil
+		},
+	}
+	rt, err := New(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("runtime.New returned error: %v", err)
+	}
+
+	rt.NewSession("b")
+	rt.NewSession("a")
+	rt.NewSession("c")
+
+	got := rt.ActiveSessions()
+	want := []string{"a", "b", "c"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("expected sorted sessions %v, got %v", want, got)
+	}
+
+	rt.RemoveSession("b")
+	remaining := rt.ActiveSessions()
+	want = []string{"a", "c"}
+	if !reflect.DeepEqual(remaining, want) {
+		t.Fatalf("expected sessions %v after removal, got %v", want, remaining)
+	}
+
+	if _, err := rt.GetSession("missing"); err == nil {
+		t.Fatalf("expected error for missing session")
 	}
 }

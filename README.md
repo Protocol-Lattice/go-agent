@@ -7,10 +7,11 @@ sub-agents so you can focus on domain logic instead of orchestration glue.
 ## Highlights
 
 - **Runtime orchestration** – `pkg/runtime` exposes a single entry point for creating an agent runtime with
-  configurable models, tools, memory, and sub-agents. It returns reusable sessions that encapsulate conversation
-  state and memory flushing.
+  configurable models, tools, memory, and sub-agents. The runtime now uses an ADK-style session manager that keeps
+  the active session registry thread-safe and deterministic.
 - **Coordinator + specialists** – `pkg/agent` provides the core orchestration logic while `pkg/subagents`
-  demonstrates how to bolt on personas such as a researcher that drafts background briefs.
+  demonstrates how to bolt on personas such as a researcher that drafts background briefs. Tooling and sub-agents are
+  registered through catalog/directory abstractions that mirror the Google ADK terminology.
 - **Tooling ecosystem** – Implement the `agent.Tool` interface and register it with the runtime. Reference
   implementations (echo, calculator, clock) live in `pkg/tools`.
 - **Retrieval-augmented memory** – `pkg/memory` combines a short-term window with an optional Postgres + pgvector
@@ -27,7 +28,7 @@ sub-agents so you can focus on domain logic instead of orchestration glue.
 cmd/demo              # CLI entry point that configures and drives the runtime
 pkg/
 ├── runtime          # High-level runtime + session management
-├── agent            # Coordinator agent, tool routing, sub-agent delegation
+├── agent            # Coordinator agent, tool routing, sub-agent delegation via ToolCatalog/SubAgentDirectory
 ├── memory           # Short-term cache with optional Postgres/pgvector persistence
 ├── models           # Gemini, Ollama, Anthropic, Dummy model adapters
 ├── subagents        # Example researcher persona powered by an LLM
@@ -35,9 +36,10 @@ pkg/
 ```
 
 At the heart of the kit is `runtime.Config`. Provide a database DSN (or your own memory factory), a coordinator
-model loader, and any tools/sub-agents you want to expose. The runtime takes care of schema creation, memory
-wiring, and returning a `Session` that you can use to `Ask` questions and `Flush` the conversation to long-term
-storage.
+model loader, and any tools/sub-agents you want to expose. The runtime takes care of schema creation, memory wiring,
+and returning a `Session` that you can use to `Ask` questions and `Flush` the conversation to long-term storage. Tool
+and specialist registration now flows through `agent.ToolCatalog` and `agent.SubAgentDirectory`, matching the core
+ADK abstractions and making it easy to override the registries when embedding the runtime into larger systems.
 
 ```go
 cfg := runtime.Config{
