@@ -10,6 +10,7 @@ import (
 
 	"github.com/Raezil/go-agent-development-kit/pkg/memory"
 	"github.com/Raezil/go-agent-development-kit/pkg/models"
+	"github.com/universal-tool-calling-protocol/go-utcp"
 )
 
 const defaultSystemPrompt = "You are the primary coordinator for an AI agent team. Provide concise, accurate answers and explain when you call tools or delegate work to specialist sub-agents."
@@ -23,8 +24,8 @@ type Agent struct {
 
 	toolCatalog       ToolCatalog
 	subAgentDirectory SubAgentDirectory
-
-	mu sync.Mutex
+	UTCPClient        utcp.UtcpClientInterface
+	mu                sync.Mutex
 }
 
 // Options configure a new Agent.
@@ -37,6 +38,7 @@ type Options struct {
 	SubAgents         []SubAgent
 	ToolCatalog       ToolCatalog
 	SubAgentDirectory SubAgentDirectory
+	UTCPClient        utcp.UtcpClientInterface
 }
 
 // New creates an Agent with the provided options.
@@ -101,6 +103,7 @@ func New(opts Options) (*Agent, error) {
 		contextLimit:      ctxLimit,
 		toolCatalog:       toolCatalog,
 		subAgentDirectory: subAgentDirectory,
+		UTCPClient:        opts.UTCPClient,
 	}
 
 	return a, nil

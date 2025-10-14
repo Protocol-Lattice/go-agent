@@ -10,6 +10,7 @@ import (
 	"github.com/Raezil/go-agent-development-kit/pkg/agent"
 	"github.com/Raezil/go-agent-development-kit/pkg/memory"
 	"github.com/Raezil/go-agent-development-kit/pkg/models"
+	"github.com/universal-tool-calling-protocol/go-utcp"
 )
 
 // ModelLoader constructs a language model instance for the primary agent.
@@ -33,6 +34,7 @@ type Config struct {
 	SubAgents            []agent.SubAgent
 	MemoryFactory        MemoryBankFactory
 	SessionMemoryBuilder SessionMemoryFactory
+	UTCPClient           utcp.UtcpClientInterface
 }
 
 // Validate ensures the configuration has the minimum information required to build a runtime.
@@ -127,6 +129,7 @@ func New(ctx context.Context, cfg Config) (*Runtime, error) {
 		ContextLimit: cfg.contextLimit(),
 		Tools:        append([]agent.Tool(nil), cfg.Tools...),
 		SubAgents:    append([]agent.SubAgent(nil), cfg.SubAgents...),
+		UTCPClient:   cfg.UTCPClient,
 	})
 	if err != nil {
 		if bank.DB != nil {
