@@ -1,0 +1,20 @@
+{
+  "version": "1.0",
+  "tools": [
+    {
+      "name": "echo",
+      "description": "Echo back a message",
+      "inputs": {
+        "type": "object",
+        "properties": {
+          "message": { "type": "string" }
+        },
+        "required": ["message"]
+      }
+    },
+    {
+      "name": "timestamp",
+      "description": "Current server timestamp"
+    }
+  ]
+}
