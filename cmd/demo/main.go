@@ -102,8 +102,8 @@ func main() {
 	}
 
 	fmt.Println("--- Agent Development Kit Demo ---")
-	fmt.Printf("Tools: %s\n", names(rt.Tools()))
-	fmt.Printf("Sub-agents: %s\n\n", names(rt.SubAgents()))
+	fmt.Printf("Tools: %s\n", toolNames(rt.Tools()))
+	fmt.Printf("Sub-agents: %s\n\n", subAgentNames(rt.SubAgents()))
 
 	type result struct {
 		idx      int
@@ -147,13 +147,24 @@ func main() {
 	fmt.Println("💾 All interactions flushed to long-term memory.")
 }
 
-func names[T interface{ Name() string }](items []T) string {
-	if len(items) == 0 {
+func toolNames(tools []agent.Tool) string {
+	if len(tools) == 0 {
 		return "<none>"
 	}
-	names := make([]string, len(items))
-	for i, item := range items {
-		names[i] = item.Name()
+	names := make([]string, len(tools))
+	for i, tool := range tools {
+		names[i] = tool.Spec().Name
+	}
+	return strings.Join(names, ", ")
+}
+
+func subAgentNames(subagents []agent.SubAgent) string {
+	if len(subagents) == 0 {
+		return "<none>"
+	}
+	names := make([]string, len(subagents))
+	for i, sa := range subagents {
+		names[i] = sa.Name()
 	}
 	return strings.Join(names, ", ")
 }
