@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -124,12 +125,25 @@ func startServer(addr string) {
 
 func main() {
 	var (
-		dsn         = flag.String("dsn", "postgres://admin:admin@localhost:5432/ragdb?sslmode=disable", "Postgres DSN")
-		schemaPath  = flag.String("schema", "schema.sql", "Path to schema file")
-		modelName   = flag.String("model", "gemini-2.5-pro", "Gemini model ID")
-		sessionID   = flag.String("session", "", "Optional fixed session ID (reuse memory)")
-		promptLimit = flag.Int("context", 6, "Number of conversation turns to send to model")
-		windowSize  = flag.Int("window", 8, "Short-term memory window size")
+		dsn                    = flag.String("dsn", "postgres://admin:admin@localhost:5432/ragdb?sslmode=disable", "Postgres DSN")
+		schemaPath             = flag.String("schema", "schema.sql", "Path to schema file")
+		modelName              = flag.String("model", "gemini-2.5-pro", "Gemini model ID")
+		sessionID              = flag.String("session", "", "Optional fixed session ID (reuse memory)")
+		promptLimit            = flag.Int("context", 6, "Number of conversation turns to send to model")
+		windowSize             = flag.Int("window", 8, "Short-term memory window size")
+		memorySimWeight        = flag.Float64("memory-sim-weight", 0.55, "Similarity weight for memory retrieval scoring")
+		memoryImportanceWeight = flag.Float64("memory-importance-weight", 0.25, "Importance weight for memory retrieval scoring")
+		memoryRecencyWeight    = flag.Float64("memory-recency-weight", 0.15, "Recency weight for memory retrieval scoring")
+		memorySourceWeight     = flag.Float64("memory-source-weight", 0.05, "Source weight for memory retrieval scoring")
+		memoryLambda           = flag.Float64("memory-mmr-lambda", 0.7, "Lambda parameter for maximal marginal relevance")
+		memoryHalfLife         = flag.Duration("memory-half-life", 72*time.Hour, "Half-life used for recency decay")
+		memoryClusterSim       = flag.Float64("memory-cluster-sim", 0.83, "Similarity threshold for cluster summaries")
+		memoryDrift            = flag.Float64("memory-drift-threshold", 0.90, "Cosine similarity threshold triggering re-embedding")
+		memoryDuplicate        = flag.Float64("memory-duplicate-sim", 0.97, "Similarity threshold for deduplication")
+		memoryTTL              = flag.Duration("memory-ttl", 720*time.Hour, "Time-to-live for stored memories")
+		memoryMaxSize          = flag.Int("memory-max-size", 200000, "Maximum number of memories to retain before pruning")
+		memorySourceBoost      = flag.String("memory-source-boost", "", "Comma separated source=weight overrides (e.g. pagerduty=1.0,slack=0.6)")
+		memoryDisableSummaries = flag.Bool("memory-disable-summaries", false, "Disable cluster-based summarisation")
 	)
 	flag.Parse()
 	go startServer(":8080")
@@ -154,6 +168,27 @@ func main() {
 		log.Fatalf("❌ failed to ensure schema: %v", err)
 	}
 
+	memoryOpts := memory.Options{
+		Weights: memory.ScoreWeights{
+			Similarity: *memorySimWeight,
+			Importance: *memoryImportanceWeight,
+			Recency:    *memoryRecencyWeight,
+			Source:     *memorySourceWeight,
+		},
+		LambdaMMR:           *memoryLambda,
+		HalfLife:            *memoryHalfLife,
+		ClusterSimilarity:   *memoryClusterSim,
+		DriftThreshold:      *memoryDrift,
+		DuplicateSimilarity: *memoryDuplicate,
+		TTL:                 *memoryTTL,
+		MaxSize:             *memoryMaxSize,
+		SourceBoost:         parseSourceBoostFlag(*memorySourceBoost),
+		EnableSummaries:     !*memoryDisableSummaries,
+	}
+
+	engineLogger := log.New(os.Stderr, "memory-engine: ", log.LstdFlags)
+	memoryEngine := memory.NewEngine(bank.Store, memoryOpts).WithLogger(engineLogger)
+
 	// --- 🧩 2. Create LLMs ---
 	researcherModel, err := models.NewGeminiLLM(ctx, *modelName, "Research summary:")
 	if err != nil {
@@ -174,7 +209,7 @@ func main() {
 			return bank, nil // reuse persistent connection
 		},
 		SessionMemoryBuilder: func(bank *memory.MemoryBank, window int) *memory.SessionMemory {
-			return memory.NewSessionMemory(bank, window)
+			return memory.NewSessionMemory(bank, window).WithEngine(memoryEngine)
 		},
 		Tools: []agent.Tool{
 			&tools.EchoTool{},
@@ -272,6 +307,31 @@ func main() {
 	}
 
 	fmt.Println("💾 All interactions flushed to long-term memory.")
+}
+
+func parseSourceBoostFlag(raw string) map[string]float64 {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	boosts := make(map[string]float64)
+	pairs := strings.Split(raw, ",")
+	for _, pair := range pairs {
+		parts := strings.SplitN(pair, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		key := strings.ToLower(strings.TrimSpace(parts[0]))
+		value, err := strconv.ParseFloat(strings.TrimSpace(parts[1]), 64)
+		if err != nil {
+			continue
+		}
+		boosts[key] = value
+	}
+	if len(boosts) == 0 {
+		return nil
+	}
+	return boosts
 }
 
 func toolNames(tools []agent.Tool) string {
