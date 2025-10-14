@@ -13,9 +13,14 @@ sub-agents so you can focus on domain logic instead of orchestration glue.
   registered through catalog/directory abstractions that mirror the Google ADK terminology.
 - **Tooling ecosystem** – Implement the `agent.Tool` interface and register it with the runtime. Reference
   implementations (echo, calculator, clock) live in `pkg/tools`.
+- **Advanced memory engine** – `pkg/memory` ships with an `Engine` that layers importance scoring, weighted
+  retrieval (similarity/importance/recency/source), maximal marginal relevance diversification, cluster-based
+  summarisation, incremental re-embedding, and composable pruning (TTL, max size, LRU × (1-importance),
+  deduplication) on top of any vector store.
 - **Retrieval-augmented memory** – pkg/memory now supports pluggable vector stores:
   - Postgres + pgvector (first-party)
   - Qdrant (first-party)
+  - In-memory (for tests and local experimentation)
 - **Model abstraction** – `pkg/models` defines a tiny interface around `Generate(ctx, prompt)` with adapters for
   Gemini 2.5 Pro and dummy models for offline testing.
 - **Command-line demo** – `cmd/demo` is a configurable CLI that spins up the runtime, walks through a scripted
@@ -116,6 +121,33 @@ reply, _ := rt.Generate(ctx, session.ID(), "How do I wire an agent?")
   conversation with `subagent:<name> do something`.
 - **Memory backends** – The runtime defaults to Postgres but you can provide a custom `MemoryFactory` or
   `SessionMemoryBuilder` to plug in alternative storage engines during testing.
+
+### Advanced Memory Engine
+
+The `pkg/memory` package now exposes an `Engine` that composes retrieval heuristics, clustering, and pruning on top of
+any `VectorStore`. Instantiate it with the store of your choice and pass it to the session memory builder:
+
+```go
+store := memory.NewInMemoryStore() // or postgres/qdrant implementation
+opts := memory.Options{}
+engine := memory.NewEngine(store, opts).WithEmbedder(memory.DummyEmbedder{})
+
+sessionMemory := memory.NewSessionMemory(memory.NewMemoryBankWithStore(store), 8).
+        WithEngine(engine)
+```
+
+The demo CLI exposes runtime overrides for every option (weights, half-life, TTL, dedupe threshold, etc.). For example:
+
+```bash
+go run ./cmd/demo \
+  --memory-sim-weight=0.6 \
+  --memory-recency-weight=0.2 \
+  --memory-half-life=48h \
+  --memory-source-boost="pagerduty=1.0,slack=0.6"
+```
+
+This keeps configuration runtime-only—no YAML files required—and supports zero-downtime migrations via online-safe
+`ALTER TABLE ... IF NOT EXISTS` statements in the Postgres store.
 
 ## Testing
 

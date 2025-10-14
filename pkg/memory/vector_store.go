@@ -1,11 +1,18 @@
 package memory
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 // VectorStore defines the contract for long-term memory backends.
 type VectorStore interface {
-	StoreMemory(ctx context.Context, sessionID, content, metadata string, embedding []float32) error
+	StoreMemory(ctx context.Context, sessionID, content string, metadata map[string]any, embedding []float32) error
 	SearchMemory(ctx context.Context, queryEmbedding []float32, limit int) ([]MemoryRecord, error)
+	UpdateEmbedding(ctx context.Context, id int64, embedding []float32, lastEmbedded time.Time) error
+	DeleteMemory(ctx context.Context, ids []int64) error
+	Iterate(ctx context.Context, fn func(MemoryRecord) bool) error
+	Count(ctx context.Context) (int, error)
 }
 
 // SchemaInitializer allows stores to expose optional schema/bootstrap routines.
