@@ -679,7 +679,7 @@ func (qs *QdrantStore) getPoints(ctx context.Context, ids []int64) ([]qdrantPoin
 	return resp.Result.Points, nil
 }
 
-func (qs *QdrantStore) generateID() int64 {
+func (qs *QdrantStore) generateID() uint64 {
 	qs.mu.Lock()
 	defer qs.mu.Unlock()
 	return uint64(time.Now().UnixNano()) ^ uint64(rand.Int63())
