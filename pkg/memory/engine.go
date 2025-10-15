@@ -243,6 +243,9 @@ func (e *Engine) Retrieve(ctx context.Context, query string, limit int) ([]Memor
 		}
 		rec.Score = cosineSimilarity(embedding, rec.Embedding)
 		recency := recencyScore(now.Sub(rec.CreatedAt), e.opts.HalfLife)
+		if e.metrics != nil {
+			e.metrics.ObserveRecency(recency)
+		}
 		sourceScore := e.sourceScore(rec.Source)
 		rec.WeightedScore = weights.Similarity*rec.Score + weights.Importance*rec.Importance + weights.Recency*recency + weights.Source*sourceScore
 	}
@@ -284,15 +287,34 @@ func (e *Engine) Prune(ctx context.Context) error {
 
 	// Accumulate TTL/dedup deletions in batches to keep memory/network usage bounded.
 	const delBatch = 1024
-	batchDelete := func(ids *[]int64) error {
-		if len(*ids) == 0 {
+
+	type pendingDeletion struct {
+		id  int64
+		ttl bool
+	}
+
+	batchDelete := func(pending *[]pendingDeletion) error {
+		if len(*pending) == 0 {
 			return nil
 		}
-		if err := e.store.DeleteMemory(ctx, *ids); err != nil {
+		ids := make([]int64, len(*pending))
+		ttlCount := 0
+		for i := range *pending {
+			ids[i] = (*pending)[i].id
+			if (*pending)[i].ttl {
+				ttlCount++
+			}
+		}
+		if err := e.store.DeleteMemory(ctx, ids); err != nil {
 			return err
 		}
-		e.metrics.IncPruned(len(*ids))
-		*ids = (*ids)[:0]
+		if e.metrics != nil {
+			e.metrics.IncPruned(len(ids))
+			if ttlCount > 0 {
+				e.metrics.IncTTLExpired(ttlCount)
+			}
+		}
+		*pending = (*pending)[:0]
 		return nil
 	}
 
@@ -309,13 +331,13 @@ func (e *Engine) Prune(ctx context.Context) error {
 	}
 	candidates := make([]cand, 0, 1024)
 
-	toDelete := make([]int64, 0, delBatch)
+	toDelete := make([]pendingDeletion, 0, delBatch)
 	survivors := 0
 
 	err := e.store.Iterate(ctx, func(rec MemoryRecord) bool {
 		// TTL
 		if !rec.CreatedAt.IsZero() && now.Sub(rec.CreatedAt) > e.opts.TTL {
-			toDelete = append(toDelete, rec.ID)
+			toDelete = append(toDelete, pendingDeletion{id: rec.ID, ttl: true})
 			if len(toDelete) >= delBatch {
 				if err := batchDelete(&toDelete); err != nil {
 					// Stop iteration on error; propagate after Iterate returns.
@@ -330,8 +352,10 @@ func (e *Engine) Prune(ctx context.Context) error {
 		key := canonicalKey(rec.Content)
 		if prevID, ok := seen[key]; ok {
 			_ = prevID // kept for potential debugging/metrics
-			toDelete = append(toDelete, rec.ID)
-			e.metrics.IncDeduplicated()
+			toDelete = append(toDelete, pendingDeletion{id: rec.ID})
+			if e.metrics != nil {
+				e.metrics.IncDeduplicated()
+			}
 			if len(toDelete) >= delBatch {
 				if err := batchDelete(&toDelete); err != nil {
 					// same note as above
@@ -407,7 +431,10 @@ func (e *Engine) Prune(ctx context.Context) error {
 			if err := e.store.DeleteMemory(ctx, chunk); err != nil {
 				return err
 			}
-			e.metrics.IncPruned(len(chunk))
+			if e.metrics != nil {
+				e.metrics.IncPruned(len(chunk))
+				e.metrics.IncSizeEvicted(len(chunk))
+			}
 		}
 	}
 

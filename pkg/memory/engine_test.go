@@ -42,6 +42,13 @@ func TestEngineWeightedRetrievalAndSummaries(t *testing.T) {
 	if records[0].Summary == "" {
 		t.Fatalf("expected summary to be populated")
 	}
+	snap := engine.MetricsSnapshot()
+	if snap.ClustersSummarized == 0 {
+		t.Fatalf("expected summarization metrics to record cluster summaries")
+	}
+	if snap.RecencySamples == 0 || snap.RecencyDecayAvg <= 0 {
+		t.Fatalf("expected recency observations to be tracked, got samples=%d avg=%.4f", snap.RecencySamples, snap.RecencyDecayAvg)
+	}
 }
 
 func TestEngineDeduplicationAndPrune(t *testing.T) {
@@ -79,6 +86,13 @@ func TestEngineDeduplicationAndPrune(t *testing.T) {
 	remaining, _ := store.Count(ctx)
 	if remaining != 0 {
 		t.Fatalf("expected prune to remove expired record, got %d", remaining)
+	}
+	snap := engine.MetricsSnapshot()
+	if snap.Deduplicated == 0 {
+		t.Fatalf("expected deduplication metric to increment")
+	}
+	if snap.TTLExpired == 0 {
+		t.Fatalf("expected TTL expiration metric to increment")
 	}
 }
 
