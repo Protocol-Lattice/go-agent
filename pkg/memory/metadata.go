@@ -11,6 +11,10 @@ func normalizeMetadata(meta map[string]any, fallback time.Time) (importance floa
 	source = stringFromAny(meta["source"])
 	summary = stringFromAny(meta["summary"])
 	lastEmbedded = timeFromAny(meta["last_embedded"])
+	if space := stringFromAny(meta["space"]); space != "" {
+		meta["space"] = space
+	}
+	edges := sanitizeGraphEdges(meta)
 	if lastEmbedded.IsZero() {
 		if fallback.IsZero() {
 			fallback = time.Now().UTC()
@@ -21,6 +25,9 @@ func normalizeMetadata(meta map[string]any, fallback time.Time) (importance floa
 	meta["source"] = source
 	meta["summary"] = summary
 	meta["last_embedded"] = lastEmbedded.UTC().Format(time.RFC3339Nano)
+	if len(edges) > 0 {
+		meta["graph_edges"] = edges
+	}
 	jsonBytes, _ := json.Marshal(meta)
 	jsonString = string(jsonBytes)
 	return
@@ -115,5 +122,13 @@ func hydrateRecordFromMetadata(rec *MemoryRecord, meta map[string]any) {
 		if ts := timeFromAny(meta["last_embedded"]); !ts.IsZero() {
 			rec.LastEmbedded = ts
 		}
+	}
+	if rec.Space == "" {
+		if space := stringFromAny(meta["space"]); space != "" {
+			rec.Space = space
+		}
+	}
+	if len(rec.GraphEdges) == 0 {
+		rec.GraphEdges = validGraphEdges(meta)
 	}
 }

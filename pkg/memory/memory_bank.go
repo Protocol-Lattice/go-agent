@@ -9,18 +9,20 @@ import (
 )
 
 type MemoryRecord struct {
-	ID            int64     `json:"id"`
-	SessionID     string    `json:"session_id"`
-	Content       string    `json:"content"`
-	Metadata      string    `json:"metadata"`
-	Embedding     []float32 `json:"embedding"`
-	Score         float64   `json:"score"`
-	Importance    float64   `json:"importance"`
-	Source        string    `json:"source"`
-	Summary       string    `json:"summary"`
-	CreatedAt     time.Time `json:"created_at"`
-	LastEmbedded  time.Time `json:"last_embedded"`
-	WeightedScore float64   `json:"weighted_score"`
+	ID            int64       `json:"id"`
+	SessionID     string      `json:"session_id"`
+	Space         string      `json:"space"`
+	Content       string      `json:"content"`
+	Metadata      string      `json:"metadata"`
+	Embedding     []float32   `json:"embedding"`
+	Score         float64     `json:"score"`
+	Importance    float64     `json:"importance"`
+	Source        string      `json:"source"`
+	Summary       string      `json:"summary"`
+	CreatedAt     time.Time   `json:"created_at"`
+	LastEmbedded  time.Time   `json:"last_embedded"`
+	WeightedScore float64     `json:"weighted_score"`
+	GraphEdges    []GraphEdge `json:"graph_edges"`
 }
 
 type MemoryBank struct {
@@ -35,6 +37,7 @@ type SessionMemory struct {
 	shortTermSize int
 	Embedder      Embedder
 	Engine        *Engine
+	Spaces        *SpaceRegistry
 }
 
 // NewMemoryBank creates a new Postgres-backed memory bank.
@@ -58,6 +61,7 @@ func NewSessionMemory(bank *MemoryBank, shortTermSize int) *SessionMemory {
 		shortTerm:     make(map[string][]MemoryRecord),
 		shortTermSize: shortTermSize,
 		Embedder:      AutoEmbedder(),
+		Spaces:        NewSpaceRegistry(0),
 	}
 }
 
@@ -66,7 +70,7 @@ func (sm *SessionMemory) AddShortTerm(sessionID, content, metadata string, embed
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
-	record := MemoryRecord{SessionID: sessionID, Content: content, Metadata: metadata, Embedding: embedding}
+	record := MemoryRecord{SessionID: sessionID, Space: sessionID, Content: content, Metadata: metadata, Embedding: embedding}
 	sm.shortTerm[sessionID] = append(sm.shortTerm[sessionID], record)
 
 	if len(sm.shortTerm[sessionID]) > sm.shortTermSize {
@@ -156,6 +160,9 @@ func (mb *MemoryBank) StoreMemory(ctx context.Context, sessionID, content, metad
 	meta := map[string]any{}
 	if metadata != "" {
 		_ = json.Unmarshal([]byte(metadata), &meta)
+	}
+	if _, ok := meta["space"]; !ok {
+		meta["space"] = sessionID
 	}
 	return mb.Store.StoreMemory(ctx, sessionID, content, meta, embedding)
 }

@@ -12,17 +12,19 @@ type ScoreWeights struct {
 
 // Options configures the advanced memory engine.
 type Options struct {
-	Weights             ScoreWeights
-	LambdaMMR           float64
-	HalfLife            time.Duration
-	ClusterSimilarity   float64
-	DriftThreshold      float64
-	DuplicateSimilarity float64
-	TTL                 time.Duration
-	MaxSize             int
-	SourceBoost         map[string]float64
-	Clock               func() time.Time
-	EnableSummaries     bool
+	Weights                ScoreWeights
+	LambdaMMR              float64
+	HalfLife               time.Duration
+	ClusterSimilarity      float64
+	DriftThreshold         float64
+	DuplicateSimilarity    float64
+	TTL                    time.Duration
+	MaxSize                int
+	SourceBoost            map[string]float64
+	Clock                  func() time.Time
+	EnableSummaries        bool
+	GraphNeighborhoodHops  int
+	GraphNeighborhoodLimit int
 }
 
 // DefaultOptions returns the recommended defaults for the advanced memory engine.
@@ -34,15 +36,17 @@ func DefaultOptions() Options {
 			Recency:    0.15,
 			Source:     0.05,
 		},
-		LambdaMMR:           0.7,
-		HalfLife:            72 * time.Hour,
-		ClusterSimilarity:   0.83,
-		DriftThreshold:      0.90,
-		DuplicateSimilarity: 0.97,
-		TTL:                 720 * time.Hour,
-		MaxSize:             200_000,
-		SourceBoost:         map[string]float64{"default": 1},
-		EnableSummaries:     true,
+		LambdaMMR:              0.7,
+		HalfLife:               72 * time.Hour,
+		ClusterSimilarity:      0.83,
+		DriftThreshold:         0.90,
+		DuplicateSimilarity:    0.97,
+		TTL:                    720 * time.Hour,
+		MaxSize:                200_000,
+		SourceBoost:            map[string]float64{"default": 1},
+		EnableSummaries:        true,
+		GraphNeighborhoodHops:  2,
+		GraphNeighborhoodLimit: 32,
 	}
 }
 
@@ -77,6 +81,12 @@ func (o Options) withDefaults() Options {
 	}
 	if o.Clock == nil {
 		o.Clock = time.Now
+	}
+	if o.GraphNeighborhoodHops == 0 {
+		o.GraphNeighborhoodHops = defaults.GraphNeighborhoodHops
+	}
+	if o.GraphNeighborhoodLimit == 0 {
+		o.GraphNeighborhoodLimit = defaults.GraphNeighborhoodLimit
 	}
 	return o
 }
