@@ -251,21 +251,33 @@ func main() {
 	fmt.Printf("🧠 Using session: %s\n", session.ID())
 
 	spaces := parseCSVList(*sharedSpacesFlag)
-	shared := memory.NewSharedSession(smRef, session.ID(), spaces...)
-	if len(spaces) > 0 {
-		// Optional: seed a short-term note into the first shared space
-		shared.AddShortTo(spaces[0], "🔧 Shared session started", map[string]string{"role": "system"})
+
+	// Agent Alice + Bob join the same shared spaces
+	alice := memory.NewSharedSession(smRef, "agent:alice", spaces...)
+	bob := memory.NewSharedSession(smRef, "agent:bob", spaces...)
+	// Optional: persist shared notes immediately
+	for _, sp := range spaces {
+		_ = alice.FlushSpace(ctx, sp) // or bob.FlushSpace(ctx, sp)
 	}
+
+	// (Example) retrieve merged view for Alice
+	recsA, _ := alice.Retrieve(ctx, "runbook incident", 8)
+	for i, r := range recsA {
+		fmt.Printf("%d. [%s] %s\n", i+1, r.SessionID, strings.TrimSpace(r.Content))
+	}
+
+	// Flush local + shared buffers on shutdown
 	defer session.CloseFlush(ctx, func(err error) {
 		if err != nil {
 			log.Printf("flush warning: %v", err)
 		}
-		// Also flush SharedSession
-		if err := shared.FlushLocal(ctx); err != nil {
+		// Flush Alice's local short-term buffer
+		if err := alice.FlushLocal(ctx); err != nil {
 			log.Printf("flush local shared-session warning: %v", err)
 		}
+		// Flush all shared spaces
 		for _, sp := range spaces {
-			if err := shared.FlushSpace(ctx, sp); err != nil {
+			if err := alice.FlushSpace(ctx, sp); err != nil {
 				log.Printf("flush shared space %q warning: %v", sp, err)
 			}
 		}
@@ -302,7 +314,26 @@ func main() {
 		go func(i int, prompt string) {
 			defer wg.Done()
 			start := time.Now()
+
+			// ── record USER prompt ─────────────────────────────────────────────
+			// local (per-agent)
+			alice.AddShortLocal(prompt, map[string]string{"role": "user"})
+			bob.AddShortLocal(prompt, map[string]string{"role": "user"})
+			// shared (once; avoid double writes)
+			recordPrompt(ctx, alice, spaces, "user", prompt)
+
+			// generate
 			reply, err := rt.Generate(ctx, *sessionID, prompt)
+
+			// ── record AGENT reply ─────────────────────────────────────────────
+			if err == nil {
+				// local (per-agent)
+				alice.AddShortLocal(reply, map[string]string{"role": "agent"})
+				bob.AddShortLocal(reply, map[string]string{"role": "agent"})
+				// shared (once)
+				recordPrompt(ctx, alice, spaces, "agent", reply)
+			}
+
 			resultsCh <- result{i, prompt, reply, err, time.Since(start)}
 		}(i, prompt)
 	}
@@ -388,4 +419,17 @@ func parseCSVList(raw string) []string {
 		}
 	}
 	return out
+}
+
+// recordPrompt stores a conversation turn into all shared spaces.
+// role should be "user" or "agent".
+func recordPrompt(ctx context.Context, shared *memory.SharedSession, spaces []string, role, content string) {
+	if shared == nil || strings.TrimSpace(content) == "" || len(spaces) == 0 {
+		return
+	}
+	meta := map[string]string{"role": role}
+	for _, sp := range spaces {
+		shared.AddShortTo(sp, content, meta) // short-term (RAM)
+		_ = shared.FlushSpace(ctx, sp)       // persist to long-term
+	}
 }
