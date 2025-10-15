@@ -134,7 +134,7 @@ func main() {
 
 		// Qdrant flags
 		qdrantURL        = flag.String("qdrant-url", "http://localhost:6333", "Qdrant base URL")
-		qdrantCollection = flag.String("qdrant-collection", "my_collection2", "Qdrant collection name")
+		qdrantCollection = flag.String("qdrant-collection", "adk_memories", "Qdrant collection name")
 		qdrantAPIKey     = flag.String("qdrant-api-key", "", "Qdrant API key (or set QDRANT_API_KEY env)")
 		qdrantSchemaPath = flag.String("qdrant-schema", "qdrant_collection.json", "Path to Qdrant collection schema JSON")
 
