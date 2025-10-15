@@ -374,21 +374,42 @@ func (qs *QdrantStore) Iterate(ctx context.Context, fn func(MemoryRecord) bool) 
 	if qs == nil {
 		return nil
 	}
+
 	var offset any
-	for {
+	const (
+		limit    = 128
+		maxPages = 100000 // hard stop against server/pathological loops
+	)
+
+	prevOffsetRaw := ""
+
+	for page := 0; page < maxPages; page++ {
 		req := map[string]any{
-			"limit":        128,
+			"limit":        limit,
 			"with_payload": true,
 			"with_vector":  true,
-			"offset":       offset,
 		}
+		if offset != nil {
+			req["offset"] = offset
+		}
+
+		// NOTE: qdrantEnvelope[qdrantScrollResult] and qs.do(...) already exist in your codebase.
 		var resp qdrantEnvelope[qdrantScrollResult]
-		if err := qs.do(ctx, http.MethodPost, fmt.Sprintf("/collections/%s/points/scroll", url.PathEscape(qs.collection)), req, &resp); err != nil {
+		if err := qs.do(
+			ctx,
+			"POST",
+			fmt.Sprintf("/collections/%s/points/scroll", url.PathEscape(qs.collection)),
+			req,
+			&resp,
+		); err != nil {
 			return err
 		}
+
+		// Deliver points
 		for _, point := range resp.Result.Points {
 			id, _ := parseQdrantID(point.ID)
 			meta := mapFromPayload(point.Payload)
+
 			rec := MemoryRecord{
 				ID:           id,
 				SessionID:    stringFromAny(meta["session_id"]),
@@ -402,15 +423,34 @@ func (qs *QdrantStore) Iterate(ctx context.Context, fn func(MemoryRecord) bool) 
 				LastEmbedded: timeFromAny(meta["last_embedded"]),
 			}
 			hydrateRecordFromMetadata(&rec, decodeMetadata(rec.Metadata))
+
 			if cont := fn(rec); !cont {
 				return nil
 			}
 		}
-		if resp.Result.Offset == nil {
+
+		// Handle end-of-scroll conditions safely.
+		raw := jsonString(resp.Result.Offset) // tolerate RawMessage/any
+		if len(resp.Result.Points) == 0 || raw == "" || strings.EqualFold(raw, "null") || raw == prevOffsetRaw {
 			return nil
 		}
+		prevOffsetRaw = raw
 		offset = resp.Result.Offset
 	}
+
+	return fmt.Errorf("qdrant iterate: hit page limit (%d) – possible offset loop", maxPages)
+}
+
+// jsonString returns a compact JSON representation of v ("" on marshal error or nil).
+func jsonString(v any) string {
+	if v == nil {
+		return ""
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(b))
 }
 
 // Count returns the total number of points in the collection.
@@ -639,10 +679,10 @@ func (qs *QdrantStore) getPoints(ctx context.Context, ids []int64) ([]qdrantPoin
 	return resp.Result.Points, nil
 }
 
-func (qs *QdrantStore) generateID() int64 {
+func (qs *QdrantStore) generateID() uint64 {
 	qs.mu.Lock()
 	defer qs.mu.Unlock()
-	return time.Now().UnixNano() + rand.Int63()
+	return uint64(time.Now().UnixNano()) ^ uint64(rand.Int63())
 }
 
 func parseQdrantID(raw json.RawMessage) (int64, error) {
