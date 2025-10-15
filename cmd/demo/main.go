@@ -429,7 +429,9 @@ func recordPrompt(ctx context.Context, shared *memory.SharedSession, spaces []st
 	}
 	meta := map[string]string{"role": role}
 	for _, sp := range spaces {
-		shared.AddShortTo(sp, content, meta) // short-term (RAM)
-		_ = shared.FlushSpace(ctx, sp)       // persist to long-term
+		if err := shared.AddShortTo(sp, content, meta); err != nil {
+			continue
+		}
+		_ = shared.FlushSpace(ctx, sp) // persist to long-term
 	}
 }

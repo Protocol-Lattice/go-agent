@@ -93,9 +93,13 @@ func (e *Engine) Store(ctx context.Context, sessionID, content string, metadata 
 	if metadata == nil {
 		metadata = map[string]any{}
 	}
+	if _, ok := metadata["space"]; !ok {
+		metadata["space"] = sessionID
+	}
 	if _, ok := metadata["source"]; !ok {
 		metadata["source"] = "default"
 	}
+	edges := sanitizeGraphEdges(metadata)
 	importance := importanceScore(content, metadata)
 	metadata["importance"] = importance
 	// Deduplication based on cosine similarity.
@@ -136,6 +140,12 @@ func (e *Engine) Store(ctx context.Context, sessionID, content string, metadata 
 	if results, err := e.store.SearchMemory(ctx, embedding, 1); err == nil && len(results) > 0 {
 		stored = results[0]
 	}
+	if stored.Space == "" {
+		stored.Space = sessionID
+	}
+	if len(stored.GraphEdges) == 0 {
+		stored.GraphEdges = edges
+	}
 	e.metrics.IncStored()
 	if err := e.Prune(ctx); err != nil {
 		e.logf("prune error: %v", err)
@@ -143,6 +153,11 @@ func (e *Engine) Store(ctx context.Context, sessionID, content string, metadata 
 	stored.Metadata = stringFromAny(metadata)
 	stored.Summary = stringFromAny(metadata["summary"])
 	stored.Importance = importance
+	if graphStore, ok := e.store.(GraphStore); ok {
+		if err := graphStore.UpsertGraph(ctx, stored, stored.GraphEdges); err != nil {
+			e.logf("upsert graph: %v", err)
+		}
+	}
 	return stored, nil
 }
 
@@ -158,12 +173,63 @@ func (e *Engine) Retrieve(ctx context.Context, query string, limit int) ([]Memor
 	if err != nil {
 		return nil, fmt.Errorf("embed query: %w", err)
 	}
-	candidates, err := e.store.SearchMemory(ctx, embedding, limit*4)
+	searchLimit := limit * 4
+	if searchLimit < limit {
+		searchLimit = limit
+	}
+	candidates, err := e.store.SearchMemory(ctx, embedding, searchLimit)
 	if err != nil {
 		return nil, err
 	}
 	if len(candidates) == 0 {
 		return nil, nil
+	}
+	if graphStore, ok := e.store.(GraphStore); ok && e.opts.GraphNeighborhoodLimit > 0 {
+		seedIDs := make([]int64, 0, len(candidates))
+		for _, cand := range candidates {
+			if cand.ID != 0 {
+				seedIDs = append(seedIDs, cand.ID)
+			}
+		}
+		if len(seedIDs) > 0 {
+			hops := e.opts.GraphNeighborhoodHops
+			if hops <= 0 {
+				hops = 1
+			}
+			neighbors, err := graphStore.Neighborhood(ctx, seedIDs, hops, e.opts.GraphNeighborhoodLimit)
+			if err != nil {
+				e.logf("graph neighborhood: %v", err)
+			} else if len(neighbors) > 0 {
+				existingByID := make(map[int64]struct{}, len(candidates))
+				existingKey := make(map[string]struct{})
+				for _, cand := range candidates {
+					if cand.ID != 0 {
+						existingByID[cand.ID] = struct{}{}
+					} else {
+						key := cand.SessionID + "\u241F" + strings.TrimSpace(cand.Content)
+						existingKey[key] = struct{}{}
+					}
+				}
+				for _, nb := range neighbors {
+					if nb.ID != 0 {
+						if _, ok := existingByID[nb.ID]; ok {
+							continue
+						}
+						existingByID[nb.ID] = struct{}{}
+					} else {
+						key := nb.SessionID + "\u241F" + strings.TrimSpace(nb.Content)
+						if _, ok := existingKey[key]; ok {
+							continue
+						}
+						existingKey[key] = struct{}{}
+					}
+					if len(nb.Embedding) > 0 {
+						nb.Score = cosineSimilarity(embedding, nb.Embedding)
+					}
+					candidates = append(candidates, nb)
+				}
+			}
+		}
 	}
 	weights := e.opts.normalizedWeights()
 	now := e.clock().UTC()

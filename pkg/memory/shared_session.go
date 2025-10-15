@@ -32,10 +32,11 @@ import (
 //   _, _ = ss.StoreLongTo(ctx, "team:project-x", "PRD v1 approved", nil)
 
 type SharedSession struct {
-	base   *SessionMemory
-	local  string
-	mu     sync.RWMutex
-	spaces map[string]struct{}
+	base     *SessionMemory
+	local    string
+	mu       sync.RWMutex
+	joined   map[string]struct{}
+	registry *SpaceRegistry
 }
 
 // NewSharedSession binds a local sessionID and optional initial shared spaces.
@@ -47,40 +48,57 @@ func NewSharedSession(base *SessionMemory, local string, spaces ...string) *Shar
 		}
 		set[s] = struct{}{}
 	}
-	return &SharedSession{base: base, local: local, spaces: set}
+	ss := &SharedSession{base: base, local: local, joined: set}
+	if base != nil {
+		ss.registry = base.Spaces
+	}
+	return ss
 }
 
 // Join adds a shared space (sessionID) to the view.
-func (ss *SharedSession) Join(space string) {
+func (ss *SharedSession) Join(space string) error {
 	space = strings.TrimSpace(space)
 	if space == "" {
-		return
+		return errors.New("space is empty")
+	}
+	if ss.registry != nil {
+		if err := ss.registry.Check(space, ss.local, false); err != nil {
+			return err
+		}
 	}
 	ss.mu.Lock()
 	defer ss.mu.Unlock()
-	if ss.spaces == nil {
-		ss.spaces = map[string]struct{}{}
+	if ss.joined == nil {
+		ss.joined = map[string]struct{}{}
 	}
-	ss.spaces[space] = struct{}{}
+	ss.joined[space] = struct{}{}
+	return nil
 }
 
 // Leave removes a shared space (sessionID) from the view.
 func (ss *SharedSession) Leave(space string) {
 	ss.mu.Lock()
 	defer ss.mu.Unlock()
-	delete(ss.spaces, space)
+	delete(ss.joined, space)
 }
 
 // Spaces returns the current list of shared spaces.
 func (ss *SharedSession) Spaces() []string {
 	ss.mu.RLock()
-	defer ss.mu.RUnlock()
-	out := make([]string, 0, len(ss.spaces))
-	for s := range ss.spaces {
-		out = append(out, s)
+	snapshot := make([]string, 0, len(ss.joined))
+	for s := range ss.joined {
+		snapshot = append(snapshot, s)
 	}
-	sort.Strings(out)
-	return out
+	ss.mu.RUnlock()
+
+	filtered := make([]string, 0, len(snapshot))
+	for _, s := range snapshot {
+		if ss.canRead(s) {
+			filtered = append(filtered, s)
+		}
+	}
+	sort.Strings(filtered)
+	return filtered
 }
 
 // AddShortLocal appends a short-term memory to the *local* session buffer.
@@ -98,16 +116,27 @@ func (ss *SharedSession) AddShortLocal(content string, metadata map[string]strin
 }
 
 // AddShortTo writes a short-term memory directly into a shared space buffer.
-func (ss *SharedSession) AddShortTo(space, content string, metadata map[string]string) {
-	if ss == nil || ss.base == nil || strings.TrimSpace(space) == "" || strings.TrimSpace(content) == "" {
-		return
+func (ss *SharedSession) AddShortTo(space, content string, metadata map[string]string) error {
+	if ss == nil || ss.base == nil {
+		return errors.New("nil shared session")
+	}
+	space = strings.TrimSpace(space)
+	if space == "" {
+		return errors.New("space is empty")
+	}
+	if strings.TrimSpace(content) == "" {
+		return errors.New("content is empty")
+	}
+	if !ss.canWrite(space) {
+		return ErrSpaceForbidden
 	}
 	metaBytes, _ := json.Marshal(metadata)
 	emb, err := ss.base.Embed(context.Background(), content)
 	if err != nil {
-		return
+		return err
 	}
 	ss.base.AddShortTerm(space, content, string(metaBytes), emb)
+	return nil
 }
 
 // FlushLocal promotes the local short-term buffer to long-term storage.
@@ -127,6 +156,9 @@ func (ss *SharedSession) FlushSpace(ctx context.Context, space string) error {
 	if space == "" {
 		return errors.New("space is empty")
 	}
+	if !ss.canWrite(space) {
+		return ErrSpaceForbidden
+	}
 	return ss.base.FlushToLongTerm(ctx, space)
 }
 
@@ -138,6 +170,9 @@ func (ss *SharedSession) StoreLongTo(ctx context.Context, sessionID, content str
 	}
 	if strings.TrimSpace(content) == "" {
 		return MemoryRecord{}, errors.New("content is empty")
+	}
+	if sessionID != ss.local && !ss.canWrite(sessionID) {
+		return MemoryRecord{}, ErrSpaceForbidden
 	}
 	if ss.base.Engine != nil {
 		return ss.base.Engine.Store(ctx, sessionID, content, metadata)
@@ -160,7 +195,7 @@ func (ss *SharedSession) BroadcastLong(ctx context.Context, content string, meta
 	if ss == nil || ss.base == nil {
 		return nil, errors.New("nil shared session")
 	}
-	targets := ss.allowedSessions()
+	targets := ss.allowedWriteSessions()
 	out := make([]MemoryRecord, 0, len(targets))
 	for _, sid := range targets {
 		rec, err := ss.StoreLongTo(ctx, sid, content, metadata)
@@ -179,7 +214,7 @@ func (ss *SharedSession) Retrieve(ctx context.Context, query string, limit int) 
 		return nil, nil
 	}
 	allowed := make(map[string]struct{})
-	for _, sid := range ss.allowedSessions() {
+	for _, sid := range ss.allowedReadSessions() {
 		allowed[sid] = struct{}{}
 	}
 	// 1) Collect short-term across all allowed sessions.
@@ -263,14 +298,56 @@ func (ss *SharedSession) Retrieve(ctx context.Context, query string, limit int) 
 	return merged[:limit], nil
 }
 
-// allowedSessions returns local + snapshot of spaces.
-func (ss *SharedSession) allowedSessions() []string {
+// allowedReadSessions returns local + joined spaces with read access.
+func (ss *SharedSession) allowedReadSessions() []string {
 	ss.mu.RLock()
-	defer ss.mu.RUnlock()
-	out := make([]string, 0, len(ss.spaces)+1)
-	out = append(out, ss.local)
-	for s := range ss.spaces {
-		out = append(out, s)
+	spaces := make([]string, 0, len(ss.joined))
+	for s := range ss.joined {
+		spaces = append(spaces, s)
+	}
+	ss.mu.RUnlock()
+	out := []string{ss.local}
+	for _, space := range spaces {
+		if ss.canRead(space) {
+			out = append(out, space)
+		}
 	}
 	return out
+}
+
+// allowedWriteSessions returns local + joined spaces with write access.
+func (ss *SharedSession) allowedWriteSessions() []string {
+	ss.mu.RLock()
+	spaces := make([]string, 0, len(ss.joined))
+	for s := range ss.joined {
+		spaces = append(spaces, s)
+	}
+	ss.mu.RUnlock()
+	out := []string{ss.local}
+	for _, space := range spaces {
+		if ss.canWrite(space) {
+			out = append(out, space)
+		}
+	}
+	return out
+}
+
+func (ss *SharedSession) canRead(space string) bool {
+	if ss.registry == nil {
+		return true
+	}
+	if space == ss.local {
+		return true
+	}
+	return ss.registry.CanRead(space, ss.local)
+}
+
+func (ss *SharedSession) canWrite(space string) bool {
+	if ss.registry == nil {
+		return true
+	}
+	if space == ss.local {
+		return true
+	}
+	return ss.registry.CanWrite(space, ss.local)
 }
