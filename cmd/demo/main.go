@@ -308,21 +308,25 @@ func main() {
 	}
 
 	// Flush local + shared buffers on shutdown
-	defer session.CloseFlush(ctx, func(err error) {
-		if err != nil {
-			log.Printf("flush warning: %v", err)
-		}
-		// Flush Alice's local short-term buffer
-		if err := alice.FlushLocal(ctx); err != nil {
-			log.Printf("flush local shared-session warning: %v", err)
-		}
-		// Flush all shared spaces
-		for _, sp := range spaces {
-			if err := alice.FlushSpace(ctx, sp); err != nil {
-				log.Printf("flush shared space %q warning: %v", sp, err)
+	defer func() {
+		ctxFlush, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		session.CloseFlush(ctxFlush, func(err error) {
+			if err != nil {
+				log.Printf("flush warning: %v", err)
 			}
-		}
-	})
+			// If you also flush per-agent/space, keep that here:
+			if err := alice.FlushLocal(ctxFlush); err != nil {
+				log.Printf("flush local shared-session warning: %v", err)
+			}
+			for _, sp := range spaces {
+				if err := alice.FlushSpace(ctxFlush, sp); err != nil {
+					log.Printf("flush shared space %q warning: %v", sp, err)
+				}
+			}
+		})
+	}()
 
 	// --- Prompts ---
 	prompts := flag.Args()
@@ -357,25 +361,31 @@ func main() {
 			start := time.Now()
 
 			// ── record USER prompt ─────────────────────────────────────────────
-			// local (per-agent)
 			alice.AddShortLocal(prompt, map[string]string{"role": "user"})
 			bob.AddShortLocal(prompt, map[string]string{"role": "user"})
-			// shared (once; avoid double writes)
 			recordPrompt(ctx, alice, spaces, "user", prompt)
 
 			// generate
 			reply, err := rt.Generate(ctx, *sessionID, prompt)
 
-			// ── record AGENT reply ─────────────────────────────────────────────
-			if err == nil {
-				// local (per-agent)
-				alice.AddShortLocal(reply, map[string]string{"role": "agent"})
-				bob.AddShortLocal(reply, map[string]string{"role": "agent"})
-				// shared (once)
-				recordPrompt(ctx, alice, spaces, "agent", reply)
+			// ── handle LLM failure or empty reply ──────────────────────────────
+			if err != nil {
+				log.Printf("⚠️ LLM generation failed for prompt %q: %v", prompt, err)
+				resultsCh <- result{i, prompt, "", err, time.Since(start)}
+				return
+			}
+			if strings.TrimSpace(reply) == "" {
+				log.Printf("⚠️ Empty LLM reply for prompt %q — skipping memory store", prompt)
+				resultsCh <- result{i, prompt, reply, fmt.Errorf("empty reply"), time.Since(start)}
+				return
 			}
 
-			resultsCh <- result{i, prompt, reply, err, time.Since(start)}
+			// ── record AGENT reply ─────────────────────────────────────────────
+			alice.AddShortLocal(reply, map[string]string{"role": "agent"})
+			bob.AddShortLocal(reply, map[string]string{"role": "agent"})
+			recordPrompt(ctx, alice, spaces, "agent", reply)
+
+			resultsCh <- result{i, prompt, reply, nil, time.Since(start)}
 		}(i, prompt)
 	}
 
