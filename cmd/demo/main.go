@@ -68,7 +68,7 @@ func startServer(addr string) {
 		if len(raw) == 0 {
 			log.Printf("Empty body – timestamp call")
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]any{"result": time.Now().Format(time.RFC3339)})
+			_ = json.NewEncoder(w).Encode(map[string]any{"result": time.Now().Format(time.RFC3339)})
 			return
 		}
 
@@ -96,9 +96,9 @@ func startServer(addr string) {
 			switch req.Tool {
 			case "echo":
 				msg, _ := req.Args["message"].(string)
-				json.NewEncoder(w).Encode(map[string]any{"result": msg})
+				_ = json.NewEncoder(w).Encode(map[string]any{"result": msg})
 			case "timestamp":
-				json.NewEncoder(w).Encode(map[string]any{"result": time.Now().Format(time.RFC3339)})
+				_ = json.NewEncoder(w).Encode(map[string]any{"result": time.Now().Format(time.RFC3339)})
 			default:
 				http.Error(w, "unknown tool", http.StatusNotFound)
 			}
@@ -110,7 +110,7 @@ func startServer(addr string) {
 			log.Printf("Direct echo call with args: %v", probe)
 			w.Header().Set("Content-Type", "application/json")
 			msg, _ := probe["message"].(string)
-			json.NewEncoder(w).Encode(map[string]any{"result": msg})
+			_ = json.NewEncoder(w).Encode(map[string]any{"result": msg})
 			return
 		}
 
@@ -125,12 +125,26 @@ func startServer(addr string) {
 
 func main() {
 	var (
-		dsn                    = flag.String("dsn", "postgres://admin:admin@localhost:5432/ragdb?sslmode=disable", "Postgres DSN")
-		schemaPath             = flag.String("schema", "schema.sql", "Path to schema file")
-		modelName              = flag.String("model", "gemini-2.5-pro", "Gemini model ID")
-		sessionID              = flag.String("session", "", "Optional fixed session ID (reuse memory)")
-		promptLimit            = flag.Int("context", 6, "Number of conversation turns to send to model")
-		windowSize             = flag.Int("window", 8, "Short-term memory window size")
+		// --- Vector store selection ---
+		memoryStore = flag.String("memory-store", "postgres", "vector store backend: postgres|qdrant|memory")
+
+		// Postgres (pgvector) flags
+		dsn        = flag.String("dsn", "postgres://admin:admin@localhost:5432/ragdb?sslmode=disable", "Postgres DSN")
+		schemaPath = flag.String("schema", "schema.sql", "Path to Postgres schema file")
+
+		// Qdrant flags
+		qdrantURL        = flag.String("qdrant-url", "http://localhost:6333", "Qdrant base URL")
+		qdrantCollection = flag.String("qdrant-collection", "adk_memories", "Qdrant collection name")
+		qdrantAPIKey     = flag.String("qdrant-api-key", "", "Qdrant API key (or set QDRANT_API_KEY env)")
+		qdrantSchemaPath = flag.String("qdrant-schema", "qdrant_collection.json", "Path to Qdrant collection schema JSON")
+
+		// Models & runtime
+		modelName   = flag.String("model", "gemini-2.5-pro", "Gemini model ID")
+		sessionID   = flag.String("session", "", "Optional fixed session ID (reuse memory)")
+		promptLimit = flag.Int("context", 6, "Number of conversation turns to send to model")
+		windowSize  = flag.Int("window", 8, "Short-term memory window size")
+
+		// Advanced memory engine weights & knobs
 		memorySimWeight        = flag.Float64("memory-sim-weight", 0.55, "Similarity weight for memory retrieval scoring")
 		memoryImportanceWeight = flag.Float64("memory-importance-weight", 0.25, "Importance weight for memory retrieval scoring")
 		memoryRecencyWeight    = flag.Float64("memory-recency-weight", 0.15, "Recency weight for memory retrieval scoring")
@@ -144,9 +158,12 @@ func main() {
 		memoryMaxSize          = flag.Int("memory-max-size", 200000, "Maximum number of memories to retain before pruning")
 		memorySourceBoost      = flag.String("memory-source-boost", "", "Comma separated source=weight overrides (e.g. pagerduty=1.0,slack=0.6)")
 		memoryDisableSummaries = flag.Bool("memory-disable-summaries", false, "Disable cluster-based summarisation")
-		sharedSpacesFlag       = flag.String("shared-spaces", "", "Comma-separated shared space session IDs (e.g. team:core,incident:2025-10-14)")
+
+		// Shared spaces
+		sharedSpacesFlag = flag.String("shared-spaces", "", "Comma-separated shared space session IDs (e.g. team:core,incident:2025-10-14)")
 	)
 	flag.Parse()
+
 	go startServer(":8080")
 	time.Sleep(200 * time.Millisecond)
 	ctx := context.Background()
@@ -160,16 +177,39 @@ func main() {
 		panic(err)
 	}
 
-	// --- 🧠 1. Initialize Persistent MemoryBank ---
-	bank, err := memory.NewMemoryBank(ctx, *dsn)
-	if err != nil {
-		log.Fatalf("❌ failed to connect to Postgres: %v", err)
+	// --- 🧠 Initialize Persistent MemoryBank (Qdrant / Postgres / InMemory) ---
+	var bank *memory.MemoryBank
+	switch strings.ToLower(strings.TrimSpace(*memoryStore)) {
+	case "qdrant":
+		key := strings.TrimSpace(*qdrantAPIKey)
+		if key == "" {
+			key = os.Getenv("QDRANT_API_KEY")
+		}
+		store := memory.NewQdrantStore(*qdrantURL, *qdrantCollection, key)
+		bank = memory.NewMemoryBankWithStore(store)
+		if err := bank.CreateSchema(ctx, *qdrantSchemaPath); err != nil {
+			log.Fatalf("❌ failed to ensure Qdrant schema: %v", err)
+		}
+		log.Printf("🧠 Memory store: Qdrant (%s, collection=%s)", *qdrantURL, *qdrantCollection)
+
+	case "memory", "inmemory", "mem":
+		store := memory.NewInMemoryStore()
+		bank = memory.NewMemoryBankWithStore(store)
+		log.Printf("🧠 Memory store: InMemory (no persistence)")
+
+	default: // "postgres"
+		var store *memory.PostgresStore
+		store, err = memory.NewPostgresStore(ctx, *dsn)
+		if err != nil {
+			panic(err)
+		}
+		bank = memory.NewMemoryBankWithStore(store)
+		if err := bank.CreateSchema(ctx, *schemaPath); err != nil {
+			log.Fatalf("❌ failed to ensure Postgres schema: %v", err)
+		}
+		log.Printf("🧠 Memory store: Postgres (%s)", *dsn)
 	}
 	defer bank.Close()
-
-	if err := bank.CreateSchema(ctx, *schemaPath); err != nil {
-		log.Fatalf("❌ failed to ensure schema: %v", err)
-	}
 
 	memoryOpts := memory.Options{
 		Weights: memory.ScoreWeights{
@@ -192,16 +232,16 @@ func main() {
 	engineLogger := log.New(os.Stderr, "memory-engine: ", log.LstdFlags)
 	memoryEngine := memory.NewEngine(bank.Store, memoryOpts).WithLogger(engineLogger)
 
-	// --- 🧩 2. Create LLMs ---
+	// --- 🧩 LLMs ---
 	researcherModel, err := models.NewGeminiLLM(ctx, *modelName, "Research summary:")
 	if err != nil {
 		log.Fatalf("failed to create researcher model: %v", err)
 	}
 
-	// --- ⚙️ 3. Configure Runtime with persistent memory ---
+	// --- ⚙️ Runtime with persistent memory ---
 	cfg := runtime.Config{
-		DSN:           *dsn,
-		SchemaPath:    *schemaPath,
+		DSN:           *dsn,        // may be unused when store != Postgres
+		SchemaPath:    *schemaPath, // may be unused when store != Postgres
 		SessionWindow: *windowSize,
 		ContextLimit:  *promptLimit,
 		SystemPrompt:  "You orchestrate tooling and specialists to help the user build AI agents.",
@@ -209,7 +249,7 @@ func main() {
 			return models.NewGeminiLLM(ctx, *modelName, "Coordinator response:")
 		},
 		MemoryFactory: func(_ context.Context, _ string) (*memory.MemoryBank, error) {
-			return bank, nil // reuse persistent connection
+			return bank, nil // reuse chosen store
 		},
 		SessionMemoryBuilder: func(bank *memory.MemoryBank, window int) *memory.SessionMemory {
 			smRef = memory.NewSessionMemory(bank, window).WithEngine(memoryEngine)
@@ -232,21 +272,22 @@ func main() {
 	}
 	defer rt.Close()
 
-	// --- 4. UTCP Search and Call Tool ---
-	tools, err := rt.Agent().UTCPClient.SearchTools("", 10)
+	// --- UTCP Search and Call Tool (demo) ---
+	toolsFound, err := rt.Agent().UTCPClient.SearchTools("", 10)
 	if err != nil {
 		panic(err)
 	}
-	fmt.Println("Tools: ", len(tools))
-	for _, tool := range tools {
+	fmt.Println("Tools: ", len(toolsFound))
+	for _, tool := range toolsFound {
 		fmt.Println(" - ", tool.Name, ":", tool.Description)
 	}
-	resp, err := rt.Agent().UTCPClient.CallTool(ctx, tools[0].Name, map[string]any{"message": "Hello UTCP"})
+	resp, err := rt.Agent().UTCPClient.CallTool(ctx, toolsFound[0].Name, map[string]any{"message": "Hello UTCP"})
 	if err != nil {
 		panic(err)
 	}
 	fmt.Println(resp)
-	// --- 🧩 5. Reuse session if provided ---
+
+	// --- Session & shared spaces ---
 	session := rt.NewSession(*sessionID)
 	fmt.Printf("🧠 Using session: %s\n", session.ID())
 
@@ -283,7 +324,7 @@ func main() {
 		}
 	})
 
-	// --- 💬 5. Prompts ---
+	// --- Prompts ---
 	prompts := flag.Args()
 	if len(prompts) == 0 {
 		prompts = []string{
