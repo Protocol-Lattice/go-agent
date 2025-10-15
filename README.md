@@ -5,7 +5,7 @@ Build production-ready AI agents in Go with a batteries-included toolkit. The Go
 ---
 
 ## Table of Contents
-1. [Why GADK?](#why-gadk)
+1. [Why GO-ADK?](#why-gadk)
 2. [Key Features](#key-features)
 3. [Architecture Overview](#architecture-overview)
 4. [Quick Start](#quick-start)
@@ -17,7 +17,7 @@ Build production-ready AI agents in Go with a batteries-included toolkit. The Go
 
 ---
 
-## Why GADK?
+## Why GO-ADK?
 Modern agents demand more than a single model call—they require deterministic session orchestration, reusable tool adapters, rich memory, and safe extensibility. GADK provides:
 
 - A composable runtime that stitches together models, tools, memory, and sub-agents.
