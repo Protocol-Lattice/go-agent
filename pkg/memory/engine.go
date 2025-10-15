@@ -107,7 +107,6 @@ func (e *Engine) Store(ctx context.Context, sessionID, content string, metadata 
 		sim := cosineSimilarity(embedding, cand.Embedding)
 		if sim >= e.opts.DuplicateSimilarity {
 			e.metrics.IncDeduplicated()
-			e.logf("deduplicated memory against existing id=%d (sim=%.2f)", cand.ID, sim)
 			return cand, nil
 		}
 	}
@@ -138,7 +137,6 @@ func (e *Engine) Store(ctx context.Context, sessionID, content string, metadata 
 		stored = results[0]
 	}
 	e.metrics.IncStored()
-	e.logf("stored memory for session=%s importance=%.2f", sessionID, importance)
 	if err := e.Prune(ctx); err != nil {
 		e.logf("prune error: %v", err)
 	}

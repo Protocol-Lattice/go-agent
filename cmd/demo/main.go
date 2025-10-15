@@ -144,11 +144,14 @@ func main() {
 		memoryMaxSize          = flag.Int("memory-max-size", 200000, "Maximum number of memories to retain before pruning")
 		memorySourceBoost      = flag.String("memory-source-boost", "", "Comma separated source=weight overrides (e.g. pagerduty=1.0,slack=0.6)")
 		memoryDisableSummaries = flag.Bool("memory-disable-summaries", false, "Disable cluster-based summarisation")
+		sharedSpacesFlag       = flag.String("shared-spaces", "", "Comma-separated shared space session IDs (e.g. team:core,incident:2025-10-14)")
 	)
 	flag.Parse()
 	go startServer(":8080")
 	time.Sleep(200 * time.Millisecond)
 	ctx := context.Background()
+
+	var smRef *memory.SessionMemory
 
 	utcpClient, err := utcp.NewUTCPClient(ctx, &utcp.UtcpClientConfig{
 		ProvidersFilePath: "provider.json",
@@ -209,7 +212,8 @@ func main() {
 			return bank, nil // reuse persistent connection
 		},
 		SessionMemoryBuilder: func(bank *memory.MemoryBank, window int) *memory.SessionMemory {
-			return memory.NewSessionMemory(bank, window).WithEngine(memoryEngine)
+			smRef = memory.NewSessionMemory(bank, window).WithEngine(memoryEngine)
+			return smRef
 		},
 		Tools: []agent.Tool{
 			&tools.EchoTool{},
@@ -246,9 +250,24 @@ func main() {
 	session := rt.NewSession(*sessionID)
 	fmt.Printf("🧠 Using session: %s\n", session.ID())
 
+	spaces := parseCSVList(*sharedSpacesFlag)
+	shared := memory.NewSharedSession(smRef, session.ID(), spaces...)
+	if len(spaces) > 0 {
+		// Optional: seed a short-term note into the first shared space
+		shared.AddShortTo(spaces[0], "🔧 Shared session started", map[string]string{"role": "system"})
+	}
 	defer session.CloseFlush(ctx, func(err error) {
 		if err != nil {
 			log.Printf("flush warning: %v", err)
+		}
+		// Also flush SharedSession
+		if err := shared.FlushLocal(ctx); err != nil {
+			log.Printf("flush local shared-session warning: %v", err)
+		}
+		for _, sp := range spaces {
+			if err := shared.FlushSpace(ctx, sp); err != nil {
+				log.Printf("flush shared space %q warning: %v", sp, err)
+			}
 		}
 	})
 
@@ -258,7 +277,6 @@ func main() {
 		prompts = []string{
 			"Summarize what I asked in our previous session.",
 			"I want to design an AI agent with memory. What’s the first step?",
-			"tool:calculator 21 / 3",
 			"subagent:researcher Briefly explain pgvector and its benefits for retrieval.",
 		}
 	}
@@ -354,4 +372,20 @@ func subAgentNames(subagents []agent.SubAgent) string {
 		names[i] = sa.Name()
 	}
 	return strings.Join(names, ", ")
+}
+
+func parseCSVList(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		s := strings.TrimSpace(p)
+		if s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
 }
