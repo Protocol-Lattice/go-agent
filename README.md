@@ -64,6 +64,7 @@ rt, _ := runtime.New(ctx, cfg)
 session := rt.NewSession("")
 reply, _ := rt.Generate(ctx, session.ID(), "How do I wire an agent?")
 ```
+<img width="1024" height="1536" alt="3984396f-f299-4885-88bc-9f8d6167a2f5" src="https://github.com/user-attachments/assets/2b4e4c70-8ab3-4341-acf7-d0e7d806831e" />
 
 ## Quick Start
 ### Prerequisites
