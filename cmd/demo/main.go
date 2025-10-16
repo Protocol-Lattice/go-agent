@@ -238,6 +238,13 @@ func main() {
 		log.Fatalf("failed to create researcher model: %v", err)
 	}
 
+	reasoner := agent.NewReasoner(agent.ReasonerOptions{
+		Model:           researcherModel, // nil in heuristic mode
+		MaxSteps:        10,
+		EnableToolHints: true,
+		Timeout:         time.Minute,
+	})
+
 	// --- ⚙️ Runtime with persistent memory ---
 	cfg := runtime.Config{
 		DSN:           *dsn,        // may be unused when store != Postgres
@@ -264,6 +271,7 @@ func main() {
 			subagents.NewResearcher(researcherModel),
 		},
 		UTCPClient: utcpClient,
+		Planner:    reasoner,
 	}
 
 	rt, err := runtime.New(ctx, cfg)
@@ -306,6 +314,19 @@ func main() {
 	for i, r := range recsA {
 		fmt.Printf("%d. [%s] %s\n", i+1, r.SessionID, strings.TrimSpace(r.Content))
 	}
+	objective := "what does 167*123 equal?"
+
+	ctxRecs, _ := alice.Retrieve(ctx, objective, *promptLimit)
+
+	res, err := rt.Reason(ctx, agent.PlannerInput{
+		SessionID: *sessionID,
+		Context:   ctxRecs,
+		UserInput: objective,
+	})
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println(res)
 
 	// Flush local + shared buffers on shutdown
 	defer func() {

@@ -25,7 +25,7 @@ type Agent struct {
 	toolCatalog       ToolCatalog
 	subAgentDirectory SubAgentDirectory
 	UTCPClient        utcp.UtcpClientInterface
-	planner           Planner
+	Planner           Planner
 	mu                sync.Mutex
 }
 
@@ -106,7 +106,7 @@ func New(opts Options) (*Agent, error) {
 		toolCatalog:       toolCatalog,
 		subAgentDirectory: subAgentDirectory,
 		UTCPClient:        opts.UTCPClient,
-		planner:           opts.Planner,
+		Planner:           opts.Planner,
 	}
 
 	return a, nil
@@ -229,11 +229,11 @@ func (a *Agent) buildPrompt(userInput string, records []memory.MemoryRecord, pla
 }
 
 func (a *Agent) runPlanner(ctx context.Context, sessionID, userInput string, records []memory.MemoryRecord) (string, error) {
-	if a.planner == nil {
+	if a.Planner == nil {
 		return "", nil
 	}
 
-	output, err := a.planner.Plan(ctx, PlannerInput{
+	output, err := a.Planner.Plan(ctx, PlannerInput{
 		SessionID: sessionID,
 		UserInput: userInput,
 		Context:   records,

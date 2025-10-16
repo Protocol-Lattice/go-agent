@@ -148,6 +148,10 @@ func (rt *Runtime) Agent() *agent.Agent {
 	return rt.agent
 }
 
+func (rt *Runtime) Reason(ctx context.Context, input agent.PlannerInput) (agent.PlannerOutput, error) {
+	return rt.agent.Planner.Plan(ctx, input)
+}
+
 // Memory returns the shared session memory cache.
 func (rt *Runtime) Memory() *memory.SessionMemory {
 	return rt.memory
