@@ -471,6 +471,10 @@ func (qs *QdrantStore) UpsertGraph(ctx context.Context, record MemoryRecord, edg
 	if qs == nil || record.ID == 0 {
 		return nil
 	}
+	if qs.collection == "" {
+		return errors.New("qdrant collection is empty")
+	}
+
 	point, err := qs.getPoint(ctx, record.ID)
 	if err != nil {
 		return err
@@ -478,6 +482,7 @@ func (qs *QdrantStore) UpsertGraph(ctx context.Context, record MemoryRecord, edg
 	if point.Payload == nil {
 		point.Payload = map[string]any{}
 	}
+
 	if record.Space != "" {
 		point.Payload["space"] = record.Space
 	}
@@ -486,6 +491,7 @@ func (qs *QdrantStore) UpsertGraph(ctx context.Context, record MemoryRecord, edg
 	} else {
 		delete(point.Payload, "graph_edges")
 	}
+
 	if meta, ok := point.Payload["metadata"].(map[string]any); ok {
 		if record.Space != "" {
 			meta["space"] = record.Space
@@ -497,14 +503,21 @@ func (qs *QdrantStore) UpsertGraph(ctx context.Context, record MemoryRecord, edg
 		}
 		point.Payload["metadata"] = meta
 	}
+
+	// Use set-payload to merge fields without requiring vectors.
 	req := map[string]any{
-		"points": []map[string]any{{
-			"id":      record.ID,
-			"payload": point.Payload,
-		}},
+		"points":  []int64{record.ID},
+		"payload": point.Payload,
 	}
+
 	var resp qdrantEnvelope[json.RawMessage]
-	if err := qs.do(ctx, http.MethodPut, fmt.Sprintf("/collections/%s/points", url.PathEscape(qs.collection)), req, &resp); err != nil {
+	if err := qs.do(
+		ctx,
+		http.MethodPost,
+		fmt.Sprintf("/collections/%s/points/payload?wait=true", url.PathEscape(qs.collection)),
+		req,
+		&resp,
+	); err != nil {
 		return err
 	}
 	if !strings.EqualFold(resp.Status.State, "ok") && resp.Status.Error != "" {
@@ -605,40 +618,39 @@ func (qs *QdrantStore) do(ctx context.Context, method, path string, body any, ou
 		return errors.New("nil qdrant store")
 	}
 	u := qs.baseURL + path
-	var buf io.Reader
+
+	var buf io.ReadWriter
 	if body != nil {
-		data, err := json.Marshal(body)
+		b, err := json.Marshal(body)
 		if err != nil {
 			return err
 		}
-		buf = bytes.NewReader(data)
+		buf = bytes.NewBuffer(b)
+	} else {
+		buf = bytes.NewBuffer(nil)
 	}
+
 	req, err := http.NewRequestWithContext(ctx, method, u, buf)
 	if err != nil {
 		return err
 	}
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
+	req.Header.Set("Content-Type", "application/json")
 	if qs.apiKey != "" {
 		req.Header.Set("api-key", qs.apiKey)
-		req.Header.Set("Authorization", "Bearer "+qs.apiKey)
-	}
-	if qs.client == nil {
-		qs.client = &http.Client{Timeout: 15 * time.Second}
 	}
 	resp, err := qs.client.Do(req)
+
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
-	payload, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if err != nil {
-		return err
-	}
+
+	payload, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode >= 400 {
-		return fmt.Errorf("qdrant http %d: %s", resp.StatusCode, strings.TrimSpace(string(payload)))
+		return fmt.Errorf("qdrant %s %s -> http %d: %s",
+			method, u, resp.StatusCode, strings.TrimSpace(string(payload)))
 	}
+
 	if out != nil && len(payload) > 0 {
 		if err := json.Unmarshal(payload, out); err != nil {
 			return err
@@ -646,17 +658,46 @@ func (qs *QdrantStore) do(ctx context.Context, method, path string, body any, ou
 	}
 	return nil
 }
-
 func (qs *QdrantStore) getPoint(ctx context.Context, id int64) (*qdrantPointResult, error) {
+	if qs == nil {
+		return nil, errors.New("nil qdrant store")
+	}
+	if qs.collection == "" {
+		return nil, errors.New("qdrant collection is empty")
+	}
+
 	req := map[string]any{
 		"ids":          []int64{id},
 		"with_payload": true,
 		"with_vector":  true,
 	}
+
 	var resp qdrantEnvelope[qdrantGetResult]
-	if err := qs.do(ctx, http.MethodPost, fmt.Sprintf("/collections/%s/points/get", url.PathEscape(qs.collection)), req, &resp); err != nil {
-		return nil, err
+	if err := qs.do(
+		ctx,
+		http.MethodPost,
+		fmt.Sprintf("/collections/%s/points", url.PathEscape(qs.collection)),
+		req,
+		&resp,
+	); err != nil {
+		// Optional fallback for older clients: GET single point by id
+		// (shape differs, but we can map it back into qdrantPointResult).
+		var single qdrantEnvelope[qdrantPointResult]
+		err2 := qs.do(
+			ctx,
+			http.MethodGet,
+			fmt.Sprintf("/collections/%s/points/%d?with_payload=true&with_vector=true",
+				url.PathEscape(qs.collection), id),
+			nil,
+			&single,
+		)
+		if err2 != nil {
+			return nil, err // return the original error
+		}
+		// Wrap single result into the expected type
+		return &single.Result, nil
 	}
+
 	if len(resp.Result.Points) == 0 {
 		return nil, fmt.Errorf("point %d not found", id)
 	}
@@ -679,10 +720,14 @@ func (qs *QdrantStore) getPoints(ctx context.Context, ids []int64) ([]qdrantPoin
 	return resp.Result.Points, nil
 }
 
-func (qs *QdrantStore) generateID() uint64 {
+func (qs *QdrantStore) generateID() int64 {
 	qs.mu.Lock()
 	defer qs.mu.Unlock()
-	return uint64(time.Now().UnixNano()) ^ uint64(rand.Int63())
+	v := time.Now().UnixNano() ^ rand.Int63()
+	if v < 0 {
+		v = -v
+	}
+	return v
 }
 
 func parseQdrantID(raw json.RawMessage) (int64, error) {
