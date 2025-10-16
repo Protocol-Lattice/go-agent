@@ -4,6 +4,8 @@ import (
 	"context"
 	"strings"
 	"testing"
+
+	"github.com/Raezil/go-agent-development-kit/pkg/models"
 )
 
 type fakeModel struct {
@@ -21,6 +23,10 @@ func (f *fakeModel) Generate(ctx context.Context, prompt string) (any, error) {
 		return f.response, nil
 	}
 	return "ok", nil
+}
+
+func (f *fakeModel) UploadFiles(context.Context, []models.UploadFile) ([]models.UploadedFile, error) {
+	return nil, nil
 }
 
 func TestResearcherRunIncludesPersonaAndTask(t *testing.T) {

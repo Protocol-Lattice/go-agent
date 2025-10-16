@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/Raezil/go-agent-development-kit/pkg/memory"
+	"github.com/Raezil/go-agent-development-kit/pkg/models"
 )
 
 type stubModel struct {
@@ -18,6 +19,10 @@ func (m *stubModel) Generate(ctx context.Context, prompt string) (any, error) {
 		return nil, m.err
 	}
 	return m.response + " | " + prompt, nil
+}
+
+func (m *stubModel) UploadFiles(context.Context, []models.UploadFile) ([]models.UploadedFile, error) {
+	return nil, nil
 }
 
 type stubTool struct {

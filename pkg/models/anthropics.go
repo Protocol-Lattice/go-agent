@@ -58,3 +58,51 @@ func (a *AnthropicLLM) Generate(ctx context.Context, prompt string) (any, error)
 	}
 	return b.String(), nil
 }
+
+func (a *AnthropicLLM) UploadFiles(ctx context.Context, files []UploadFile) ([]UploadedFile, error) {
+	uploads := make([]UploadedFile, 0, len(files))
+	betas := anthropicUploadBetas()
+	for _, file := range files {
+		resolved, err := file.resolve()
+		if err != nil {
+			return nil, err
+		}
+		params := anthropic.BetaFileUploadParams{File: resolved.reader}
+		if len(betas) > 0 {
+			params.Betas = betas
+		}
+		meta, uploadErr := a.Client.Beta.Files.Upload(ctx, params)
+		closeErr := resolved.Close()
+		if uploadErr == nil {
+			uploadErr = closeErr
+		}
+		if uploadErr != nil {
+			return nil, uploadErr
+		}
+		uploads = append(uploads, UploadedFile{
+			ID:        meta.ID,
+			Name:      meta.Filename,
+			SizeBytes: meta.SizeBytes,
+			MIMEType:  meta.MimeType,
+			Provider:  "anthropic",
+			Purpose:   file.Purpose,
+		})
+	}
+	return uploads, nil
+}
+
+func anthropicUploadBetas() []anthropic.AnthropicBeta {
+	if raw := strings.TrimSpace(os.Getenv("ANTHROPIC_BETA_HEADERS")); raw != "" {
+		parts := strings.Split(raw, ",")
+		betas := make([]anthropic.AnthropicBeta, 0, len(parts))
+		for _, part := range parts {
+			trimmed := strings.TrimSpace(part)
+			if trimmed == "" {
+				continue
+			}
+			betas = append(betas, anthropic.AnthropicBeta(trimmed))
+		}
+		return betas
+	}
+	return []anthropic.AnthropicBeta{anthropic.AnthropicBetaMessageBatches2024_09_24}
+}

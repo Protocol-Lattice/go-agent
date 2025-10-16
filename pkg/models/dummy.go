@@ -34,4 +34,28 @@ func (d *DummyLLM) Generate(_ context.Context, prompt string) (any, error) {
 	return fmt.Sprintf("%s %s", d.Prefix, last), nil
 }
 
+func (d *DummyLLM) UploadFiles(_ context.Context, files []UploadFile) ([]UploadedFile, error) {
+	uploads := make([]UploadedFile, 0, len(files))
+	for _, file := range files {
+		resolved, err := file.resolve()
+		if err != nil {
+			return nil, err
+		}
+		name := resolved.name
+		if name == "" {
+			name = "upload"
+		}
+		uploads = append(uploads, UploadedFile{
+			ID:        fmt.Sprintf("dummy-%s", name),
+			Name:      name,
+			SizeBytes: resolved.size,
+			MIMEType:  resolved.mimeType,
+			Provider:  "dummy",
+			Purpose:   file.Purpose,
+		})
+		resolved.Close()
+	}
+	return uploads, nil
+}
+
 var _ Agent = (*DummyLLM)(nil)
