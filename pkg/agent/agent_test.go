@@ -3,21 +3,24 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/Raezil/go-agent-development-kit/pkg/memory"
 )
 
 type stubModel struct {
-	response string
-	err      error
+	response   string
+	err        error
+	lastPrompt string
 }
 
 func (m *stubModel) Generate(ctx context.Context, prompt string) (any, error) {
 	if m.err != nil {
 		return nil, m.err
 	}
-	return m.response + " | " + prompt, nil
+	m.lastPrompt = prompt
+	return m.response, nil
 }
 
 type stubTool struct {
@@ -45,6 +48,22 @@ func (s *stubSubAgent) Name() string        { return s.name }
 func (s *stubSubAgent) Description() string { return s.description }
 func (s *stubSubAgent) Run(ctx context.Context, input string) (string, error) {
 	return input, nil
+}
+
+type stubPlanner struct {
+	output    PlannerOutput
+	err       error
+	lastInput PlannerInput
+	called    bool
+}
+
+func (p *stubPlanner) Plan(ctx context.Context, input PlannerInput) (PlannerOutput, error) {
+	p.called = true
+	p.lastInput = input
+	if p.err != nil {
+		return PlannerOutput{}, p.err
+	}
+	return p.output, nil
 }
 
 func TestNewAppliesDefaults(t *testing.T) {
@@ -219,5 +238,59 @@ func TestAgentPropagatesCustomDirectoryErrors(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatalf("expected duplicate registration error from custom directory")
+	}
+}
+
+func TestAgentRespondInvokesPlanner(t *testing.T) {
+	ctx := context.Background()
+	model := &stubModel{response: "ok"}
+	mem := memory.NewSessionMemory(&memory.MemoryBank{}, 8)
+	mem.WithEmbedder(memory.DummyEmbedder{})
+
+	planner := &stubPlanner{output: PlannerOutput{
+		Thoughts: []string{"Evaluate requested task"},
+		Steps:    []string{"Gather recent context", "Draft concise answer"},
+		Decision: "Answer using context and stay terse",
+	}}
+
+	agent, err := New(Options{Model: model, Memory: mem, Planner: planner})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+
+	if _, err := agent.Respond(ctx, "session-1", "Summarise reasoning layer"); err != nil {
+		t.Fatalf("Respond returned error: %v", err)
+	}
+
+	if !planner.called {
+		t.Fatalf("expected planner to be invoked")
+	}
+	if planner.lastInput.UserInput != "Summarise reasoning layer" {
+		t.Fatalf("planner received unexpected input: %q", planner.lastInput.UserInput)
+	}
+	if len(planner.lastInput.Context) == 0 {
+		t.Fatalf("expected planner to receive conversation context")
+	}
+	if !strings.Contains(model.lastPrompt, "Internal planner notes") {
+		t.Fatalf("expected prompt to contain planner notes, got %q", model.lastPrompt)
+	}
+	if !strings.Contains(model.lastPrompt, "Draft concise answer") {
+		t.Fatalf("expected prompt to include planner steps")
+	}
+
+	records, err := mem.RetrieveContext(ctx, "session-1", "follow up", 8)
+	if err != nil {
+		t.Fatalf("RetrieveContext returned error: %v", err)
+	}
+
+	foundPlanner := false
+	for _, rec := range records {
+		if metadataRole(rec.Metadata) == "planner" && strings.Contains(rec.Content, "Draft concise answer") {
+			foundPlanner = true
+			break
+		}
+	}
+	if !foundPlanner {
+		t.Fatalf("expected planner output to be persisted in memory")
 	}
 }

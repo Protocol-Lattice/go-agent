@@ -25,6 +25,7 @@ type Agent struct {
 	toolCatalog       ToolCatalog
 	subAgentDirectory SubAgentDirectory
 	UTCPClient        utcp.UtcpClientInterface
+	planner           Planner
 	mu                sync.Mutex
 }
 
@@ -39,6 +40,7 @@ type Options struct {
 	ToolCatalog       ToolCatalog
 	SubAgentDirectory SubAgentDirectory
 	UTCPClient        utcp.UtcpClientInterface
+	Planner           Planner
 }
 
 // New creates an Agent with the provided options.
@@ -104,6 +106,7 @@ func New(opts Options) (*Agent, error) {
 		toolCatalog:       toolCatalog,
 		subAgentDirectory: subAgentDirectory,
 		UTCPClient:        opts.UTCPClient,
+		planner:           opts.Planner,
 	}
 
 	return a, nil
@@ -133,7 +136,17 @@ func (a *Agent) Respond(ctx context.Context, sessionID, userInput string) (strin
 		return output, nil
 	}
 
-	prompt, err := a.buildPrompt(ctx, sessionID, userInput)
+	records, err := a.memory.RetrieveContext(ctx, sessionID, userInput, a.contextLimit)
+	if err != nil {
+		return "", err
+	}
+
+	plannerNotes, err := a.runPlanner(ctx, sessionID, userInput, records)
+	if err != nil {
+		return "", err
+	}
+
+	prompt, err := a.buildPrompt(userInput, records, plannerNotes)
 	if err != nil {
 		return "", err
 	}
@@ -153,12 +166,7 @@ func (a *Agent) Flush(ctx context.Context, sessionID string) error {
 	return a.memory.FlushToLongTerm(ctx, sessionID)
 }
 
-func (a *Agent) buildPrompt(ctx context.Context, sessionID, userInput string) (string, error) {
-	records, err := a.memory.RetrieveContext(ctx, sessionID, userInput, a.contextLimit)
-	if err != nil {
-		return "", err
-	}
-
+func (a *Agent) buildPrompt(userInput string, records []memory.MemoryRecord, plannerNotes string) (string, error) {
 	var sb strings.Builder
 	sb.WriteString(a.systemPrompt)
 
@@ -208,8 +216,39 @@ func (a *Agent) buildPrompt(ctx context.Context, sessionID, userInput string) (s
 
 	sb.WriteString("\nCurrent user message:\n")
 	sb.WriteString(strings.TrimSpace(userInput))
-	sb.WriteString("\n\nCompose the best possible assistant reply.\n")
+	sb.WriteString("\n")
+
+	if trimmed := strings.TrimSpace(plannerNotes); trimmed != "" {
+		sb.WriteString("\nInternal planner notes (for model use only, do NOT expose to the user):\n")
+		sb.WriteString(trimmed)
+		sb.WriteString("\n")
+	}
+
+	sb.WriteString("\nCompose the best possible assistant reply.\n")
 	return sb.String(), nil
+}
+
+func (a *Agent) runPlanner(ctx context.Context, sessionID, userInput string, records []memory.MemoryRecord) (string, error) {
+	if a.planner == nil {
+		return "", nil
+	}
+
+	output, err := a.planner.Plan(ctx, PlannerInput{
+		SessionID: sessionID,
+		UserInput: userInput,
+		Context:   records,
+	})
+	if err != nil {
+		return "", err
+	}
+
+	formatted := output.Format()
+	if strings.TrimSpace(formatted) == "" {
+		return "", nil
+	}
+
+	a.storeMemory(sessionID, "planner", formatted, map[string]string{"source": "planner"})
+	return formatted, nil
 }
 
 func (a *Agent) handleCommand(ctx context.Context, sessionID, userInput string) (bool, string, map[string]string, error) {

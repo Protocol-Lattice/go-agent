@@ -35,6 +35,7 @@ type Config struct {
 	MemoryFactory        MemoryBankFactory
 	SessionMemoryBuilder SessionMemoryFactory
 	UTCPClient           utcp.UtcpClientInterface
+	Planner              agent.Planner
 }
 
 // Validate ensures the configuration has the minimum information required to build a runtime.
@@ -126,6 +127,7 @@ func New(ctx context.Context, cfg Config) (*Runtime, error) {
 		Tools:        append([]agent.Tool(nil), cfg.Tools...),
 		SubAgents:    append([]agent.SubAgent(nil), cfg.SubAgents...),
 		UTCPClient:   cfg.UTCPClient,
+		Planner:      cfg.Planner,
 	})
 	if err != nil {
 		bank.Close()
