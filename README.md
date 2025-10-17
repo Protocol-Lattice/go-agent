@@ -29,7 +29,7 @@ Whether you are experimenting locally or embedding agents inside an existing ser
 ## Key Features
 - **Runtime orchestration** – `pkg/runtime` exposes a single entry point for constructing an agent runtime with configurable models, tools, memory engines, and sub-agent registries. A thread-safe session manager keeps execution deterministic.
 - **Coordinator + specialists** – `pkg/agent` contains the core coordinator logic, while `pkg/subagents` demonstrates how to plug in specialist personas (for example, a researcher) through a `ToolCatalog` and `SubAgentDirectory` abstraction.
-- **Tooling ecosystem** – Implement the `agent.Tool` interface and register implementations (echo, calculator, clock, etc.) under `pkg/tools`. Tools become available to the coordinator prompt automatically.
+- **Upload ingestion** – `pkg/uploads` provides pluggable chunkers (text, Markdown, PDF, repositories), provenance-aware metadata, and a production-ready embedding pipeline with content safety hooks and backpressure-aware workers.
 - **Retrieval-augmented memory** – `pkg/memory` layers importance scoring, weighted retrieval (similarity, recency, source, importance), maximal marginal relevance, summarisation, and pruning strategies over pluggable vector stores (PostgreSQL + pgvector, Qdrant, in-memory).
 - **Model abstraction** – `pkg/models` defines a slim `Generate(ctx, prompt)` interface with adapters for Gemini 2.5 Pro and dummy models for offline testing. Other providers (Anthropic, Ollama) can slot in via the same contract.
 - **Universal Tool Calling Protocol (UTCP)** – Native UTCP support enables the runtime to describe and invoke tools through a modern, provider-agnostic contract.
@@ -132,6 +132,22 @@ go run ./cmd/demo \
   --memory-source-boost="pagerduty=1.0,slack=0.6"
 ```
 Schema migrations rely on online-safe `ALTER TABLE ... IF NOT EXISTS` statements to avoid downtime.
+
+### Upload & Retrieval Examples
+Ready-to-run ingestion demos live in `examples/uploads/`:
+
+```bash
+# Ingest a PDF and stream embeddings with PII redaction
+go run ./examples/uploads/ingest_pdf --pdf ./docs/handbook.pdf
+
+# Chunk a repository while honouring .gitignore and emit embeddings
+go run ./examples/uploads/ingest_repo --repo ../my-service
+
+# Blend multiple sources and query the combined context window
+go run ./examples/uploads/query --pdf ./docs/spec.pdf --repo ../my-service --q "How do we deploy?"
+```
+
+The upload pipeline exposes optional middleware for redaction, enforces provenance metadata (source, URI, page, checksum, version), and surfaces queue depth metrics so you can monitor long-running ingestions.
 
 ## Development Workflow
 1. Write or update Go code.
