@@ -1,6 +1,9 @@
 package memory
 
-import "testing"
+import (
+	"context"
+	"testing"
+)
 
 func TestDummyEmbeddingDeterministic(t *testing.T) {
 	first := DummyEmbedding("hello")
@@ -23,7 +26,10 @@ func TestAddShortTermTrimsToLimit(t *testing.T) {
 		sm.AddShortTerm("session", content, "{}", nil)
 	}
 
-	records := sm.shortTerm["session"]
+	records, err := sm.RetrieveContext(context.Background(), "session", "", 10)
+	if err != nil {
+		t.Fatalf("retrieve context: %v", err)
+	}
 	if len(records) != 3 {
 		t.Fatalf("expected 3 records retained, got %d", len(records))
 	}
@@ -31,19 +37,6 @@ func TestAddShortTermTrimsToLimit(t *testing.T) {
 	for i, rec := range records {
 		if rec.Content != expected[i] {
 			t.Fatalf("unexpected record %d content: %q", i, rec.Content)
-		}
-	}
-}
-
-func TestTrimJSON(t *testing.T) {
-	cases := map[string]string{
-		"[1,2,3]":     "1,2,3",
-		"[[nested]]":  "nested",
-		"no brackets": "no brackets",
-	}
-	for input, want := range cases {
-		if got := trimJSON(input); got != want {
-			t.Fatalf("trimJSON(%q) = %q, want %q", input, got, want)
 		}
 	}
 }

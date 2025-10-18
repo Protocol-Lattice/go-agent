@@ -1,4 +1,4 @@
-package memory
+package engine
 
 import (
 	"container/heap"
@@ -14,13 +14,17 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/Raezil/go-agent-development-kit/pkg/memory/embed"
+	"github.com/Raezil/go-agent-development-kit/pkg/memory/model"
+	"github.com/Raezil/go-agent-development-kit/pkg/memory/store"
 )
 
 // Engine coordinates scoring, clustering, pruning and retrieval of memories.
 type Engine struct {
-	store      VectorStore
+	store      store.VectorStore
 	opts       Options
-	embedder   Embedder
+	embedder   embed.Embedder
 	summarizer Summarizer
 	metrics    *Metrics
 	logger     *log.Logger
@@ -29,12 +33,12 @@ type Engine struct {
 }
 
 // NewEngine constructs an advanced memory engine on top of a VectorStore implementation.
-func NewEngine(store VectorStore, opts Options) *Engine {
+func NewEngine(store store.VectorStore, opts Options) *Engine {
 	opts = opts.withDefaults()
 	engine := &Engine{
 		store:      store,
 		opts:       opts,
-		embedder:   AutoEmbedder(),
+		embedder:   embed.AutoEmbedder(),
 		summarizer: HeuristicSummarizer{},
 		metrics:    &Metrics{},
 		logger:     log.New(os.Stderr, "memory-engine: ", log.LstdFlags),
@@ -47,7 +51,7 @@ func NewEngine(store VectorStore, opts Options) *Engine {
 }
 
 // WithEmbedder overrides the default embedder.
-func (e *Engine) WithEmbedder(embedder Embedder) *Engine {
+func (e *Engine) WithEmbedder(embedder embed.Embedder) *Engine {
 	if embedder != nil {
 		e.embedder = embedder
 	}
@@ -84,13 +88,13 @@ func (e *Engine) MetricsSnapshot() MetricsSnapshot {
 }
 
 // Store embeds, scores and persists a new memory.
-func (e *Engine) Store(ctx context.Context, sessionID, content string, metadata map[string]any) (MemoryRecord, error) {
+func (e *Engine) Store(ctx context.Context, sessionID, content string, metadata map[string]any) (model.MemoryRecord, error) {
 	if e.store == nil {
-		return MemoryRecord{}, errors.New("memory engine has no store")
+		return model.MemoryRecord{}, errors.New("memory engine has no store")
 	}
 	embedding, err := e.embed(ctx, content)
 	if err != nil {
-		return MemoryRecord{}, fmt.Errorf("embed content: %w", err)
+		return model.MemoryRecord{}, fmt.Errorf("embed content: %w", err)
 	}
 	now := e.clock().UTC()
 	if metadata == nil {
@@ -102,28 +106,28 @@ func (e *Engine) Store(ctx context.Context, sessionID, content string, metadata 
 	if _, ok := metadata["source"]; !ok {
 		metadata["source"] = "default"
 	}
-	edges := sanitizeGraphEdges(metadata)
+	edges := model.SanitizeGraphEdges(metadata)
 	importance := importanceScore(content, metadata)
 	metadata["importance"] = importance
 	// Deduplication based on cosine similarity.
 	candidates, err := e.store.SearchMemory(ctx, embedding, 5)
 	if err != nil {
-		return MemoryRecord{}, err
+		return model.MemoryRecord{}, err
 	}
 	for _, cand := range candidates {
-		sim := cosineSimilarity(embedding, cand.Embedding)
+		sim := model.CosineSimilarity(embedding, cand.Embedding)
 		if sim >= e.opts.DuplicateSimilarity {
 			e.metrics.IncDeduplicated()
 			return cand, nil
 		}
 	}
 	// Cluster summary for the new record.
-	newRecord := MemoryRecord{
+	newRecord := model.MemoryRecord{
 		SessionID:    sessionID,
 		Content:      content,
 		Embedding:    embedding,
 		Importance:   importance,
-		Source:       stringFromAny(metadata["source"]),
+		Source:       model.StringFromAny(metadata["source"]),
 		CreatedAt:    now,
 		LastEmbedded: now,
 	}
@@ -137,7 +141,7 @@ func (e *Engine) Store(ctx context.Context, sessionID, content string, metadata 
 	}
 	metadata["last_embedded"] = now.UTC().Format(time.RFC3339Nano)
 	if err := e.store.StoreMemory(ctx, sessionID, content, metadata, embedding); err != nil {
-		return MemoryRecord{}, err
+		return model.MemoryRecord{}, err
 	}
 	stored := newRecord
 	if results, err := e.store.SearchMemory(ctx, embedding, 1); err == nil && len(results) > 0 {
@@ -153,10 +157,10 @@ func (e *Engine) Store(ctx context.Context, sessionID, content string, metadata 
 	if err := e.Prune(ctx); err != nil {
 		e.logf("prune error: %v", err)
 	}
-	stored.Metadata = stringFromAny(metadata)
-	stored.Summary = stringFromAny(metadata["summary"])
+	stored.Metadata = model.StringFromAny(metadata)
+	stored.Summary = model.StringFromAny(metadata["summary"])
 	stored.Importance = importance
-	if graphStore, ok := e.store.(GraphStore); ok {
+	if graphStore, ok := e.store.(store.GraphStore); ok {
 		if err := graphStore.UpsertGraph(ctx, stored, stored.GraphEdges); err != nil {
 			e.logf("upsert graph: %v", err)
 		}
@@ -165,7 +169,7 @@ func (e *Engine) Store(ctx context.Context, sessionID, content string, metadata 
 }
 
 // Retrieve performs weighted retrieval with MMR diversification and optional re-embedding.
-func (e *Engine) Retrieve(ctx context.Context, query string, limit int) ([]MemoryRecord, error) {
+func (e *Engine) Retrieve(ctx context.Context, query string, limit int) ([]model.MemoryRecord, error) {
 	if e.store == nil {
 		return nil, errors.New("memory engine has no store")
 	}
@@ -187,7 +191,7 @@ func (e *Engine) Retrieve(ctx context.Context, query string, limit int) ([]Memor
 	if len(candidates) == 0 {
 		return nil, nil
 	}
-	if graphStore, ok := e.store.(GraphStore); ok && e.opts.GraphNeighborhoodLimit > 0 {
+	if graphStore, ok := e.store.(store.GraphStore); ok && e.opts.GraphNeighborhoodLimit > 0 {
 		seedIDs := make([]int64, 0, len(candidates))
 		for _, cand := range candidates {
 			if cand.ID != 0 {
@@ -227,7 +231,7 @@ func (e *Engine) Retrieve(ctx context.Context, query string, limit int) ([]Memor
 						existingKey[key] = struct{}{}
 					}
 					if len(nb.Embedding) > 0 {
-						nb.Score = cosineSimilarity(embedding, nb.Embedding)
+						nb.Score = model.CosineSimilarity(embedding, nb.Embedding)
 					}
 					candidates = append(candidates, nb)
 				}
@@ -239,9 +243,9 @@ func (e *Engine) Retrieve(ctx context.Context, query string, limit int) ([]Memor
 	for i := range candidates {
 		rec := &candidates[i]
 		if rec.Importance == 0 {
-			rec.Importance = importanceScore(rec.Content, decodeMetadata(rec.Metadata))
+			rec.Importance = importanceScore(rec.Content, model.DecodeMetadata(rec.Metadata))
 		}
-		rec.Score = cosineSimilarity(embedding, rec.Embedding)
+		rec.Score = model.CosineSimilarity(embedding, rec.Embedding)
 		recency := recencyScore(now.Sub(rec.CreatedAt), e.opts.HalfLife)
 		if e.metrics != nil {
 			e.metrics.ObserveRecency(recency)
@@ -334,7 +338,7 @@ func (e *Engine) Prune(ctx context.Context) error {
 	toDelete := make([]pendingDeletion, 0, delBatch)
 	survivors := 0
 
-	err := e.store.Iterate(ctx, func(rec MemoryRecord) bool {
+	err := e.store.Iterate(ctx, func(rec model.MemoryRecord) bool {
 		// TTL
 		if !rec.CreatedAt.IsZero() && now.Sub(rec.CreatedAt) > e.opts.TTL {
 			toDelete = append(toDelete, pendingDeletion{id: rec.ID, ttl: true})
@@ -399,7 +403,7 @@ func (e *Engine) Prune(ctx context.Context) error {
 		c := &candidates[i]
 		imp := c.importance
 		if imp == 0 {
-			imp = importanceScore(c.content, decodeMetadata(c.metadata))
+			imp = importanceScore(c.content, model.DecodeMetadata(c.metadata))
 			c.importance = imp // cache (useful if future policies reuse)
 		}
 		ageHours := now.Sub(c.createdAt).Hours() + 1 // +1 to avoid zero bias
@@ -474,16 +478,16 @@ func canonicalKey(s string) string {
 
 func (e *Engine) embed(ctx context.Context, text string) ([]float32, error) {
 	if e.embedder == nil {
-		e.embedder = AutoEmbedder()
+		e.embedder = embed.AutoEmbedder()
 	}
 	vec, err := e.embedder.Embed(ctx, text)
 	if err != nil || len(vec) == 0 {
-		return DummyEmbedding(text), nil
+		return embed.DummyEmbedding(text), nil
 	}
 	return vec, nil
 }
 
-func (e *Engine) reembedOnDrift(ctx context.Context, records []MemoryRecord) error {
+func (e *Engine) reembedOnDrift(ctx context.Context, records []model.MemoryRecord) error {
 	for _, rec := range records {
 		if rec.ID == 0 {
 			continue
@@ -496,7 +500,7 @@ func (e *Engine) reembedOnDrift(ctx context.Context, records []MemoryRecord) err
 		if err != nil {
 			return err
 		}
-		sim := cosineSimilarity(vec, rec.Embedding)
+		sim := model.CosineSimilarity(vec, rec.Embedding)
 		if sim >= e.opts.DriftThreshold {
 			continue
 		}
@@ -508,7 +512,7 @@ func (e *Engine) reembedOnDrift(ctx context.Context, records []MemoryRecord) err
 	return nil
 }
 
-func (e *Engine) populateSummaries(ctx context.Context, records []MemoryRecord) error {
+func (e *Engine) populateSummaries(ctx context.Context, records []model.MemoryRecord) error {
 	if e.summarizer == nil || !e.opts.EnableSummaries {
 		return nil
 	}
@@ -530,7 +534,7 @@ func (e *Engine) populateSummaries(ctx context.Context, records []MemoryRecord) 
 	return nil
 }
 
-func (e *Engine) clusterSummary(ctx context.Context, records []MemoryRecord, target MemoryRecord) (string, error) {
+func (e *Engine) clusterSummary(ctx context.Context, records []model.MemoryRecord, target model.MemoryRecord) (string, error) {
 	clusters := clusterRecords(records, e.opts.ClusterSimilarity)
 	for _, cluster := range clusters {
 		for _, rec := range cluster {
@@ -573,7 +577,7 @@ func recencyScore(age time.Duration, halfLife time.Duration) float64 {
 }
 
 func importanceScore(content string, metadata map[string]any) float64 {
-	if val := floatFromAny(metadata["importance"]); val > 0 {
+	if val := model.FloatFromAny(metadata["importance"]); val > 0 {
 		return clamp(val, 0, 1)
 	}
 	tokens := strings.Fields(strings.ToLower(content))
@@ -592,9 +596,9 @@ func importanceScore(content string, metadata map[string]any) float64 {
 	return clamp(lengthScore+keywordBoost, 0, 1)
 }
 
-func mmrSelect(records []MemoryRecord, query []float32, limit int, lambda float64) []MemoryRecord {
+func mmrSelect(records []model.MemoryRecord, query []float32, limit int, lambda float64) []model.MemoryRecord {
 	if limit >= len(records) {
-		out := make([]MemoryRecord, len(records))
+		out := make([]model.MemoryRecord, len(records))
 		copy(out, records)
 		return out
 	}
@@ -604,20 +608,20 @@ func mmrSelect(records []MemoryRecord, query []float32, limit int, lambda float6
 	if lambda > 1 {
 		lambda = 1
 	}
-	remaining := make([]MemoryRecord, len(records))
+	remaining := make([]model.MemoryRecord, len(records))
 	copy(remaining, records)
-	selected := make([]MemoryRecord, 0, limit)
+	selected := make([]model.MemoryRecord, 0, limit)
 	for len(selected) < limit && len(remaining) > 0 {
 		bestIdx := 0
 		bestScore := math.Inf(-1)
 		for i, cand := range remaining {
 			relevance := cand.WeightedScore
 			if relevance == 0 {
-				relevance = cosineSimilarity(query, cand.Embedding)
+				relevance = model.CosineSimilarity(query, cand.Embedding)
 			}
 			var maxSim float64
 			for _, sel := range selected {
-				if sim := cosineSimilarity(cand.Embedding, sel.Embedding); sim > maxSim {
+				if sim := model.CosineSimilarity(cand.Embedding, sel.Embedding); sim > maxSim {
 					maxSim = sim
 				}
 			}
@@ -636,19 +640,19 @@ func mmrSelect(records []MemoryRecord, query []float32, limit int, lambda float6
 	return selected
 }
 
-func clusterRecords(records []MemoryRecord, threshold float64) [][]MemoryRecord {
+func clusterRecords(records []model.MemoryRecord, threshold float64) [][]model.MemoryRecord {
 	if threshold <= 0 {
 		threshold = 0.8
 	}
 	type cluster struct {
 		centroid []float64
-		records  []MemoryRecord
+		records  []model.MemoryRecord
 	}
 	var clusters []cluster
 	for _, rec := range records {
 		placed := false
 		for i := range clusters {
-			sim := cosineSimilarity(rec.Embedding, float32Slice(clusters[i].centroid))
+			sim := model.CosineSimilarity(rec.Embedding, float32Slice(clusters[i].centroid))
 			if sim >= threshold {
 				clusters[i].records = append(clusters[i].records, rec)
 				clusters[i].centroid = updateCentroid(clusters[i].centroid, rec.Embedding)
@@ -659,11 +663,11 @@ func clusterRecords(records []MemoryRecord, threshold float64) [][]MemoryRecord 
 		if !placed {
 			clusters = append(clusters, cluster{
 				centroid: float32To64(rec.Embedding),
-				records:  []MemoryRecord{rec},
+				records:  []model.MemoryRecord{rec},
 			})
 		}
 	}
-	result := make([][]MemoryRecord, len(clusters))
+	result := make([][]model.MemoryRecord, len(clusters))
 	for i, cl := range clusters {
 		result[i] = cl.records
 	}
@@ -700,26 +704,6 @@ func float32Slice(vec []float64) []float32 {
 		out[i] = float32(v)
 	}
 	return out
-}
-
-func cosineSimilarity(a, b []float32) float64 {
-	if len(a) == 0 || len(b) == 0 {
-		return 0
-	}
-	var dot, normA, normB float64
-	length := len(a)
-	if len(b) < length {
-		length = len(b)
-	}
-	for i := 0; i < length; i++ {
-		dot += float64(a[i]) * float64(b[i])
-		normA += float64(a[i]) * float64(a[i])
-		normB += float64(b[i]) * float64(b[i])
-	}
-	if normA == 0 || normB == 0 {
-		return 0
-	}
-	return dot / (math.Sqrt(normA) * math.Sqrt(normB))
 }
 
 func clamp(val, minVal, maxVal float64) float64 {

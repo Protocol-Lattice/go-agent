@@ -1,16 +1,19 @@
-package memory
+package engine
 
 import (
 	"context"
 	"fmt"
 	"testing"
 	"time"
+
+	embedpkg "github.com/Raezil/go-agent-development-kit/pkg/memory/embed"
+	storepkg "github.com/Raezil/go-agent-development-kit/pkg/memory/store"
 )
 
 func BenchmarkEngineRetrieve(b *testing.B) {
-	store := NewInMemoryStore()
+	store := storepkg.NewInMemoryStore()
 	opts := Options{HalfLife: time.Hour, TTL: 720 * time.Hour}
-	engine := NewEngine(store, opts).WithEmbedder(DummyEmbedder{})
+	engine := NewEngine(store, opts).WithEmbedder(embedpkg.DummyEmbedder{})
 	ctx := context.Background()
 
 	for i := 0; i < 500; i++ {

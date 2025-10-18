@@ -1,4 +1,4 @@
-package memory
+package session
 
 import (
 	"context"
@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strings"
 	"sync"
+
+	"github.com/Raezil/go-agent-development-kit/pkg/memory/model"
 )
 
 // SharedSession layers on top of SessionMemory to let multiple agents
@@ -164,15 +166,15 @@ func (ss *SharedSession) FlushSpace(ctx context.Context, space string) error {
 
 // StoreLongTo writes a long-term memory directly to a specific session/space.
 // If Engine is configured it will be used; otherwise we fall back to Bank + Embed.
-func (ss *SharedSession) StoreLongTo(ctx context.Context, sessionID, content string, metadata map[string]any) (MemoryRecord, error) {
+func (ss *SharedSession) StoreLongTo(ctx context.Context, sessionID, content string, metadata map[string]any) (model.MemoryRecord, error) {
 	if ss == nil || ss.base == nil {
-		return MemoryRecord{}, errors.New("nil shared session")
+		return model.MemoryRecord{}, errors.New("nil shared session")
 	}
 	if strings.TrimSpace(content) == "" {
-		return MemoryRecord{}, errors.New("content is empty")
+		return model.MemoryRecord{}, errors.New("content is empty")
 	}
 	if sessionID != ss.local && !ss.canWrite(sessionID) {
-		return MemoryRecord{}, ErrSpaceForbidden
+		return model.MemoryRecord{}, ErrSpaceForbidden
 	}
 	if ss.base.Engine != nil {
 		return ss.base.Engine.Store(ctx, sessionID, content, metadata)
@@ -180,23 +182,23 @@ func (ss *SharedSession) StoreLongTo(ctx context.Context, sessionID, content str
 	// Bank-only path: compute embedding and store.
 	emb, err := ss.base.Embed(ctx, content)
 	if err != nil {
-		return MemoryRecord{}, err
+		return model.MemoryRecord{}, err
 	}
 	metaBytes, _ := json.Marshal(metadata)
 	if err := ss.base.Bank.StoreMemory(ctx, sessionID, content, string(metaBytes), emb); err != nil {
-		return MemoryRecord{}, err
+		return model.MemoryRecord{}, err
 	}
 	// Best-effort record (ID may be zero if not re-fetched from store).
-	return MemoryRecord{SessionID: sessionID, Content: content, Metadata: string(metaBytes), Embedding: emb}, nil
+	return model.MemoryRecord{SessionID: sessionID, Content: content, Metadata: string(metaBytes), Embedding: emb}, nil
 }
 
 // BroadcastLong writes a long-term memory to the local session and all spaces.
-func (ss *SharedSession) BroadcastLong(ctx context.Context, content string, metadata map[string]any) ([]MemoryRecord, error) {
+func (ss *SharedSession) BroadcastLong(ctx context.Context, content string, metadata map[string]any) ([]model.MemoryRecord, error) {
 	if ss == nil || ss.base == nil {
 		return nil, errors.New("nil shared session")
 	}
 	targets := ss.allowedWriteSessions()
-	out := make([]MemoryRecord, 0, len(targets))
+	out := make([]model.MemoryRecord, 0, len(targets))
 	for _, sid := range targets {
 		rec, err := ss.StoreLongTo(ctx, sid, content, metadata)
 		if err != nil {
@@ -209,7 +211,7 @@ func (ss *SharedSession) BroadcastLong(ctx context.Context, content string, meta
 
 // Retrieve merges short-term (local + spaces) and filtered long-term results.
 // Long-term retrieval oversamples then filters to the allowed sessionIDs.
-func (ss *SharedSession) Retrieve(ctx context.Context, query string, limit int) ([]MemoryRecord, error) {
+func (ss *SharedSession) Retrieve(ctx context.Context, query string, limit int) ([]model.MemoryRecord, error) {
 	if ss == nil || ss.base == nil || limit <= 0 {
 		return nil, nil
 	}
@@ -219,7 +221,7 @@ func (ss *SharedSession) Retrieve(ctx context.Context, query string, limit int) 
 	}
 	// 1) Collect short-term across all allowed sessions.
 	ss.base.mu.RLock()
-	var short []MemoryRecord
+	var short []model.MemoryRecord
 	for sid := range allowed {
 		if buf := ss.base.shortTerm[sid]; len(buf) > 0 {
 			short = append(short, buf...)
@@ -232,7 +234,7 @@ func (ss *SharedSession) Retrieve(ctx context.Context, query string, limit int) 
 	if oversample < limit {
 		oversample = limit
 	}
-	var long []MemoryRecord
+	var long []model.MemoryRecord
 	if ss.base.Engine != nil {
 		recs, err := ss.base.Engine.Retrieve(ctx, query, oversample)
 		if err != nil {
@@ -262,7 +264,7 @@ func (ss *SharedSession) Retrieve(ctx context.Context, query string, limit int) 
 	// 3) Deduplicate by ID (when present) and by (session,content) as fallback.
 	seen := make(map[int64]struct{})
 	seenKey := make(map[string]struct{})
-	push := func(dst *[]MemoryRecord, rec MemoryRecord) {
+	push := func(dst *[]model.MemoryRecord, rec model.MemoryRecord) {
 		if rec.ID != 0 {
 			if _, ok := seen[rec.ID]; ok {
 				return
@@ -277,7 +279,7 @@ func (ss *SharedSession) Retrieve(ctx context.Context, query string, limit int) 
 		}
 		*dst = append(*dst, rec)
 	}
-	var merged []MemoryRecord
+	var merged []model.MemoryRecord
 	for _, r := range short {
 		push(&merged, r)
 	}

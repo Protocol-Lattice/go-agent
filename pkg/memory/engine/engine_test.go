@@ -1,13 +1,16 @@
-package memory
+package engine
 
 import (
 	"context"
 	"testing"
 	"time"
+
+	embedpkg "github.com/Raezil/go-agent-development-kit/pkg/memory/embed"
+	storepkg "github.com/Raezil/go-agent-development-kit/pkg/memory/store"
 )
 
 func TestEngineWeightedRetrievalAndSummaries(t *testing.T) {
-	store := NewInMemoryStore()
+	memStore := storepkg.NewInMemoryStore()
 	now := time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)
 	opts := Options{
 		Weights:  ScoreWeights{Similarity: 0.55, Importance: 0.25, Recency: 0.15, Source: 0.05},
@@ -19,7 +22,7 @@ func TestEngineWeightedRetrievalAndSummaries(t *testing.T) {
 		},
 		Clock: func() time.Time { return now },
 	}
-	engine := NewEngine(store, opts).WithEmbedder(DummyEmbedder{}).WithSummarizer(HeuristicSummarizer{})
+	engine := NewEngine(memStore, opts).WithEmbedder(embedpkg.DummyEmbedder{}).WithSummarizer(HeuristicSummarizer{})
 	ctx := context.Background()
 
 	if _, err := engine.Store(ctx, "team", "Critical production outage impacting users", map[string]any{"source": "pagerduty"}); err != nil {
@@ -52,38 +55,32 @@ func TestEngineWeightedRetrievalAndSummaries(t *testing.T) {
 }
 
 func TestEngineDeduplicationAndPrune(t *testing.T) {
-	store := NewInMemoryStore()
-	now := time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)
+	memStore := storepkg.NewInMemoryStore()
 	opts := Options{
-		TTL:   time.Hour,
-		Clock: func() time.Time { return now },
+		TTL:   500 * time.Millisecond,
+		Clock: time.Now,
 	}
-	engine := NewEngine(store, opts).WithEmbedder(DummyEmbedder{})
+	engine := NewEngine(memStore, opts).WithEmbedder(embedpkg.DummyEmbedder{})
 	ctx := context.Background()
 
-	rec, err := engine.Store(ctx, "alpha", "System upgrade completed", nil)
+	_, err := engine.Store(ctx, "alpha", "System upgrade completed", nil)
 	if err != nil {
 		t.Fatalf("store initial memory: %v", err)
 	}
-	beforeCount, _ := store.Count(ctx)
+	beforeCount, _ := memStore.Count(ctx)
 	if _, err := engine.Store(ctx, "alpha", "System upgrade completed", nil); err != nil {
 		t.Fatalf("store duplicate: %v", err)
 	}
-	afterCount, _ := store.Count(ctx)
+	afterCount, _ := memStore.Count(ctx)
 	if beforeCount != afterCount {
 		t.Fatalf("duplicate should not increase count: before=%d after=%d", beforeCount, afterCount)
 	}
 
-	store.mu.Lock()
-	entry := store.records[rec.ID]
-	entry.CreatedAt = now.Add(-2 * opts.TTL)
-	store.records[rec.ID] = entry
-	store.mu.Unlock()
-
+	engine.clock = func() time.Time { return time.Now().Add(2 * opts.TTL) }
 	if err := engine.Prune(ctx); err != nil {
 		t.Fatalf("prune: %v", err)
 	}
-	remaining, _ := store.Count(ctx)
+	remaining, _ := memStore.Count(ctx)
 	if remaining != 0 {
 		t.Fatalf("expected prune to remove expired record, got %d", remaining)
 	}
@@ -97,9 +94,9 @@ func TestEngineDeduplicationAndPrune(t *testing.T) {
 }
 
 func TestEngineReembedOnDrift(t *testing.T) {
-	store := NewInMemoryStore()
+	memStore := storepkg.NewInMemoryStore()
 	opts := Options{HalfLife: time.Second}
-	engine := NewEngine(store, opts).WithEmbedder(DummyEmbedder{})
+	engine := NewEngine(memStore, opts).WithEmbedder(embedpkg.DummyEmbedder{})
 	ctx := context.Background()
 
 	rec, err := engine.Store(ctx, "beta", "Investigate latency regression", nil)
@@ -107,14 +104,10 @@ func TestEngineReembedOnDrift(t *testing.T) {
 		t.Fatalf("store memory: %v", err)
 	}
 
-	store.mu.Lock()
-	entry := store.records[rec.ID]
-	for i := range entry.Embedding {
-		entry.Embedding[i] = 0
+	zeros := make([]float32, len(rec.Embedding))
+	if err := memStore.UpdateEmbedding(ctx, rec.ID, zeros, time.Now().Add(-2*opts.HalfLife)); err != nil {
+		t.Fatalf("update embedding: %v", err)
 	}
-	entry.LastEmbedded = time.Now().Add(-2 * opts.HalfLife)
-	store.records[rec.ID] = entry
-	store.mu.Unlock()
 
 	if _, err := engine.Retrieve(ctx, "latency", 1); err != nil {
 		t.Fatalf("retrieve: %v", err)

@@ -1,66 +1,55 @@
-package memory
+package session
 
 import (
 	"context"
 	"encoding/json"
 	"io"
 	"sync"
-	"time"
+
+	"github.com/Raezil/go-agent-development-kit/pkg/memory/embed"
+	memengine "github.com/Raezil/go-agent-development-kit/pkg/memory/engine"
+	"github.com/Raezil/go-agent-development-kit/pkg/memory/model"
+	"github.com/Raezil/go-agent-development-kit/pkg/memory/store"
 )
 
-type MemoryRecord struct {
-	ID            int64       `json:"id"`
-	SessionID     string      `json:"session_id"`
-	Space         string      `json:"space"`
-	Content       string      `json:"content"`
-	Metadata      string      `json:"metadata"`
-	Embedding     []float32   `json:"embedding"`
-	Score         float64     `json:"score"`
-	Importance    float64     `json:"importance"`
-	Source        string      `json:"source"`
-	Summary       string      `json:"summary"`
-	CreatedAt     time.Time   `json:"created_at"`
-	LastEmbedded  time.Time   `json:"last_embedded"`
-	WeightedScore float64     `json:"weighted_score"`
-	GraphEdges    []GraphEdge `json:"graph_edges"`
-}
-
+// MemoryBank is a thin wrapper around a VectorStore implementation.
 type MemoryBank struct {
-	Store VectorStore
+	Store store.VectorStore
 }
 
 // SessionMemory wraps MemoryBank with short- and long-term layers
+// including a configurable short-term buffer and embedding provider.
 type SessionMemory struct {
 	Bank          *MemoryBank
-	shortTerm     map[string][]MemoryRecord
+	shortTerm     map[string][]model.MemoryRecord
 	mu            sync.RWMutex
 	shortTermSize int
-	Embedder      Embedder
-	Engine        *Engine
+	Embedder      embed.Embedder
+	Engine        *memengine.Engine
 	Spaces        *SpaceRegistry
 }
 
 // NewMemoryBank creates a new Postgres-backed memory bank.
 func NewMemoryBank(ctx context.Context, connStr string) (*MemoryBank, error) {
-	store, err := NewPostgresStore(ctx, connStr)
+	s, err := store.NewPostgresStore(ctx, connStr)
 	if err != nil {
 		return nil, err
 	}
-	return &MemoryBank{Store: store}, nil
+	return &MemoryBank{Store: s}, nil
 }
 
 // NewMemoryBankWithStore creates a memory bank backed by a custom vector store implementation.
-func NewMemoryBankWithStore(store VectorStore) *MemoryBank {
-	return &MemoryBank{Store: store}
+func NewMemoryBankWithStore(s store.VectorStore) *MemoryBank {
+	return &MemoryBank{Store: s}
 }
 
 // NewSessionMemory wraps MemoryBank with short-term cache
 func NewSessionMemory(bank *MemoryBank, shortTermSize int) *SessionMemory {
 	return &SessionMemory{
 		Bank:          bank,
-		shortTerm:     make(map[string][]MemoryRecord),
+		shortTerm:     make(map[string][]model.MemoryRecord),
 		shortTermSize: shortTermSize,
-		Embedder:      AutoEmbedder(),
+		Embedder:      embed.AutoEmbedder(),
 		Spaces:        NewSpaceRegistry(0),
 	}
 }
@@ -70,7 +59,7 @@ func (sm *SessionMemory) AddShortTerm(sessionID, content, metadata string, embed
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
-	record := MemoryRecord{SessionID: sessionID, Space: sessionID, Content: content, Metadata: metadata, Embedding: embedding}
+	record := model.MemoryRecord{SessionID: sessionID, Space: sessionID, Content: content, Metadata: metadata, Embedding: embedding}
 	sm.shortTerm[sessionID] = append(sm.shortTerm[sessionID], record)
 
 	if len(sm.shortTerm[sessionID]) > sm.shortTermSize {
@@ -86,7 +75,7 @@ func (sm *SessionMemory) FlushToLongTerm(ctx context.Context, sessionID string) 
 	records := sm.shortTerm[sessionID]
 	for _, r := range records {
 		if sm.Engine != nil {
-			meta := decodeMetadata(r.Metadata)
+			meta := model.DecodeMetadata(r.Metadata)
 			if _, err := sm.Engine.Store(ctx, sessionID, r.Content, meta); err != nil {
 				return err
 			}
@@ -100,20 +89,21 @@ func (sm *SessionMemory) FlushToLongTerm(ctx context.Context, sessionID string) 
 	return nil
 }
 
+// Embed ensures an embedder is available and returns the embedding for the text.
 func (sm *SessionMemory) Embed(ctx context.Context, text string) ([]float32, error) {
 	if sm.Embedder == nil {
-		sm.Embedder = AutoEmbedder()
+		sm.Embedder = embed.AutoEmbedder()
 	}
 	vec, err := sm.Embedder.Embed(ctx, text)
 	if err != nil || len(vec) == 0 {
-		return DummyEmbedding(text), nil
+		return embed.DummyEmbedding(text), nil
 	}
 	return vec, nil
 }
 
 // RetrieveContext returns combined short- and long-term memory
-func (sm *SessionMemory) RetrieveContext(ctx context.Context, sessionID, query string, limit int) ([]MemoryRecord, error) {
-	var longTerm []MemoryRecord
+func (sm *SessionMemory) RetrieveContext(ctx context.Context, sessionID, query string, limit int) ([]model.MemoryRecord, error) {
+	var longTerm []model.MemoryRecord
 	if sm.Engine != nil {
 		records, err := sm.Engine.Retrieve(ctx, query, limit)
 		if err != nil {
@@ -139,7 +129,8 @@ func (sm *SessionMemory) RetrieveContext(ctx context.Context, sessionID, query s
 	return append(shortTerm, longTerm...), nil
 }
 
-func (sm *SessionMemory) WithEmbedder(e Embedder) *SessionMemory {
+// WithEmbedder overrides the embedder used by the session memory.
+func (sm *SessionMemory) WithEmbedder(e embed.Embedder) *SessionMemory {
 	if e != nil {
 		sm.Embedder = e
 	}
@@ -147,8 +138,8 @@ func (sm *SessionMemory) WithEmbedder(e Embedder) *SessionMemory {
 }
 
 // WithEngine attaches an advanced memory engine for long-term storage and retrieval.
-func (sm *SessionMemory) WithEngine(engine *Engine) *SessionMemory {
-	sm.Engine = engine
+func (sm *SessionMemory) WithEngine(e *memengine.Engine) *SessionMemory {
+	sm.Engine = e
 	return sm
 }
 
@@ -168,7 +159,7 @@ func (mb *MemoryBank) StoreMemory(ctx context.Context, sessionID, content, metad
 }
 
 // SearchMemory returns top-k similar memories
-func (mb *MemoryBank) SearchMemory(ctx context.Context, queryEmbedding []float32, limit int) ([]MemoryRecord, error) {
+func (mb *MemoryBank) SearchMemory(ctx context.Context, queryEmbedding []float32, limit int) ([]model.MemoryRecord, error) {
 	if mb == nil || mb.Store == nil {
 		return nil, nil
 	}
@@ -180,7 +171,7 @@ func (mb *MemoryBank) CreateSchema(ctx context.Context, schemaPath string) error
 	if mb == nil || mb.Store == nil {
 		return nil
 	}
-	initializer, ok := mb.Store.(SchemaInitializer)
+	initializer, ok := mb.Store.(store.SchemaInitializer)
 	if !ok {
 		return nil
 	}
