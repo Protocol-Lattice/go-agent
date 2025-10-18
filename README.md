@@ -1,6 +1,6 @@
 # Go Agent Development Kit
 
-Build production-ready AI agents in Go with a batteries-included toolkit. The Go Agent Development Kit (GADK) wraps language models, tool execution, retrieval-augmented memory, and multi-agent coordination behind a pragmatic API so you can focus on domain-specific logic instead of orchestration plumbing.
+Build production-ready AI agents in Go with a batteries-included toolkit. The Go Agent Development Kit (GO-ADK) wraps language models, tool execution, retrieval-augmented memory, and multi-agent coordination behind a pragmatic API so you can focus on domain-specific logic instead of orchestration plumbing.
 
 ---
 
