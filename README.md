@@ -1,5 +1,9 @@
 # Go Agent Development Kit
 
+[![Go Version](https://img.shields.io/badge/Go-1.25-00ADD8?logo=go&logoColor=white)](https://go.dev/dl/) [![CI Status](https://github.com/Raezil/go-agent-development-kit/actions/workflows/go.yml/badge.svg)](https://github.com/Raezil/go-agent-development-kit/actions/workflows/go.yml) [![Go Reference](https://pkg.go.dev/badge/github.com/Raezil/go-agent-development-kit.svg)](https://pkg.go.dev/github.com/Raezil/go-agent-development-kit) [![Go Report Card](https://goreportcard.com/badge/github.com/Raezil/go-agent-development-kit)](https://goreportcard.com/report/github.com/Raezil/go-agent-development-kit)
+
+
+
 Build production-ready AI agents in Go with a batteries-included toolkit. The Go Agent Development Kit (GO-ADK) wraps language models, tool execution, retrieval-augmented memory, and multi-agent coordination behind a pragmatic API so you can focus on domain-specific logic instead of orchestration plumbing.
 
 ---
