@@ -1,4 +1,4 @@
-package memory
+package store
 
 import (
 	"bytes"
@@ -16,6 +16,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/Raezil/go-agent-development-kit/pkg/memory/model"
 )
 
 // --- Qdrant types ---
@@ -238,17 +240,17 @@ func (qs *QdrantStore) StoreMemory(ctx context.Context, sessionID, content strin
 	if _, ok := metadata["space"]; !ok {
 		metadata["space"] = sessionID
 	}
-	edges := sanitizeGraphEdges(metadata)
-	importance, source, summary, lastEmbedded, normalized := normalizeMetadata(metadata, now)
-	metaMap := decodeMetadata(normalized)
-	space := stringFromAny(metaMap["space"])
+	edges := model.SanitizeGraphEdges(metadata)
+	importance, source, summary, lastEmbedded, normalized := model.NormalizeMetadata(metadata, now)
+	metaMap := model.DecodeMetadata(normalized)
+	space := model.StringFromAny(metaMap["space"])
 	if space == "" {
 		space = sessionID
 	}
 	payload := map[string]any{
 		"session_id":    sessionID,
 		"content":       content,
-		"metadata":      decodeMetadata(normalized),
+		"metadata":      model.DecodeMetadata(normalized),
 		"importance":    importance,
 		"source":        source,
 		"summary":       summary,
@@ -257,7 +259,7 @@ func (qs *QdrantStore) StoreMemory(ctx context.Context, sessionID, content strin
 		"space":         space,
 	}
 	if len(edges) == 0 {
-		if metaEdges := validGraphEdges(metaMap); len(metaEdges) > 0 {
+		if metaEdges := model.ValidGraphEdges(metaMap); len(metaEdges) > 0 {
 			payload["graph_edges"] = metaEdges
 		}
 	} else {
@@ -282,7 +284,7 @@ func (qs *QdrantStore) StoreMemory(ctx context.Context, sessionID, content strin
 }
 
 // SearchMemory performs a similarity search.
-func (qs *QdrantStore) SearchMemory(ctx context.Context, queryEmbedding []float32, limit int) ([]MemoryRecord, error) {
+func (qs *QdrantStore) SearchMemory(ctx context.Context, queryEmbedding []float32, limit int) ([]model.MemoryRecord, error) {
 	if qs == nil {
 		return nil, errors.New("nil qdrant store")
 	}
@@ -299,36 +301,36 @@ func (qs *QdrantStore) SearchMemory(ctx context.Context, queryEmbedding []float3
 	if err := qs.do(ctx, http.MethodPost, fmt.Sprintf("/collections/%s/points/search", url.PathEscape(qs.collection)), reqBody, &resp); err != nil {
 		return nil, err
 	}
-	results := make([]MemoryRecord, 0, len(resp.Result))
+	results := make([]model.MemoryRecord, 0, len(resp.Result))
 	for _, point := range resp.Result {
 		id, _ := parseQdrantID(point.ID)
 		meta := mapFromPayload(point.Payload)
 		metaMap, _ := meta["metadata"].(map[string]any)
 		if metaMap == nil {
-			metaMap = decodeMetadata(encodeMetadata(meta["metadata"]))
+			metaMap = model.DecodeMetadata(encodeMetadata(meta["metadata"]))
 		}
-		record := MemoryRecord{
+		record := model.MemoryRecord{
 			ID:           id,
-			SessionID:    stringFromAny(meta["session_id"]),
-			Content:      stringFromAny(meta["content"]),
+			SessionID:    model.StringFromAny(meta["session_id"]),
+			Content:      model.StringFromAny(meta["content"]),
 			Metadata:     encodeMetadata(meta["metadata"]),
 			Embedding:    point.Vector,
 			Score:        point.Score,
-			Importance:   floatFromAny(meta["importance"]),
-			Source:       stringFromAny(meta["source"]),
-			Summary:      stringFromAny(meta["summary"]),
-			CreatedAt:    timeFromAny(meta["created_at"]),
-			LastEmbedded: timeFromAny(meta["last_embedded"]),
+			Importance:   model.FloatFromAny(meta["importance"]),
+			Source:       model.StringFromAny(meta["source"]),
+			Summary:      model.StringFromAny(meta["summary"]),
+			CreatedAt:    model.TimeFromAny(meta["created_at"]),
+			LastEmbedded: model.TimeFromAny(meta["last_embedded"]),
 		}
-		hydrateRecordFromMetadata(&record, metaMap)
+		model.HydrateRecordFromMetadata(&record, metaMap)
 		if record.Space == "" {
-			record.Space = stringFromAny(meta["space"])
+			record.Space = model.StringFromAny(meta["space"])
 			if record.Space == "" {
 				record.Space = record.SessionID
 			}
 		}
 		if len(record.GraphEdges) == 0 {
-			record.GraphEdges = validGraphEdges(metaMap)
+			record.GraphEdges = model.ValidGraphEdges(metaMap)
 		}
 		results = append(results, record)
 	}
@@ -370,7 +372,7 @@ func (qs *QdrantStore) DeleteMemory(ctx context.Context, ids []int64) error {
 }
 
 // Iterate streams through all points in created_at order.
-func (qs *QdrantStore) Iterate(ctx context.Context, fn func(MemoryRecord) bool) error {
+func (qs *QdrantStore) Iterate(ctx context.Context, fn func(model.MemoryRecord) bool) error {
 	if qs == nil {
 		return nil
 	}
@@ -410,19 +412,19 @@ func (qs *QdrantStore) Iterate(ctx context.Context, fn func(MemoryRecord) bool) 
 			id, _ := parseQdrantID(point.ID)
 			meta := mapFromPayload(point.Payload)
 
-			rec := MemoryRecord{
+			rec := model.MemoryRecord{
 				ID:           id,
-				SessionID:    stringFromAny(meta["session_id"]),
-				Content:      stringFromAny(meta["content"]),
+				SessionID:    model.StringFromAny(meta["session_id"]),
+				Content:      model.StringFromAny(meta["content"]),
 				Metadata:     encodeMetadata(meta["metadata"]),
 				Embedding:    point.Vector,
-				Importance:   floatFromAny(meta["importance"]),
-				Source:       stringFromAny(meta["source"]),
-				Summary:      stringFromAny(meta["summary"]),
-				CreatedAt:    timeFromAny(meta["created_at"]),
-				LastEmbedded: timeFromAny(meta["last_embedded"]),
+				Importance:   model.FloatFromAny(meta["importance"]),
+				Source:       model.StringFromAny(meta["source"]),
+				Summary:      model.StringFromAny(meta["summary"]),
+				CreatedAt:    model.TimeFromAny(meta["created_at"]),
+				LastEmbedded: model.TimeFromAny(meta["last_embedded"]),
 			}
-			hydrateRecordFromMetadata(&rec, decodeMetadata(rec.Metadata))
+			model.HydrateRecordFromMetadata(&rec, model.DecodeMetadata(rec.Metadata))
 
 			if cont := fn(rec); !cont {
 				return nil
@@ -467,7 +469,7 @@ func (qs *QdrantStore) Count(ctx context.Context) (int, error) {
 }
 
 // UpsertGraph updates the stored payload to reflect graph metadata.
-func (qs *QdrantStore) UpsertGraph(ctx context.Context, record MemoryRecord, edges []GraphEdge) error {
+func (qs *QdrantStore) UpsertGraph(ctx context.Context, record model.MemoryRecord, edges []model.GraphEdge) error {
 	if qs == nil || record.ID == 0 {
 		return nil
 	}
@@ -527,7 +529,7 @@ func (qs *QdrantStore) UpsertGraph(ctx context.Context, record MemoryRecord, edg
 }
 
 // Neighborhood walks the edge payloads to return nearby memories.
-func (qs *QdrantStore) Neighborhood(ctx context.Context, seedIDs []int64, hops, limit int) ([]MemoryRecord, error) {
+func (qs *QdrantStore) Neighborhood(ctx context.Context, seedIDs []int64, hops, limit int) ([]model.MemoryRecord, error) {
 	if qs == nil || len(seedIDs) == 0 || hops <= 0 || limit <= 0 {
 		return nil, nil
 	}
@@ -578,35 +580,35 @@ func (qs *QdrantStore) Neighborhood(ctx context.Context, seedIDs []int64, hops, 
 	if err != nil {
 		return nil, err
 	}
-	results := make([]MemoryRecord, 0, len(points))
+	results := make([]model.MemoryRecord, 0, len(points))
 	for _, point := range points {
 		id, _ := parseQdrantID(point.ID)
 		meta := mapFromPayload(point.Payload)
 		metaMap, _ := meta["metadata"].(map[string]any)
 		if metaMap == nil {
-			metaMap = decodeMetadata(encodeMetadata(meta["metadata"]))
+			metaMap = model.DecodeMetadata(encodeMetadata(meta["metadata"]))
 		}
-		record := MemoryRecord{
+		record := model.MemoryRecord{
 			ID:           id,
-			SessionID:    stringFromAny(meta["session_id"]),
-			Content:      stringFromAny(meta["content"]),
+			SessionID:    model.StringFromAny(meta["session_id"]),
+			Content:      model.StringFromAny(meta["content"]),
 			Metadata:     encodeMetadata(meta["metadata"]),
 			Embedding:    point.Vector,
-			Importance:   floatFromAny(meta["importance"]),
-			Source:       stringFromAny(meta["source"]),
-			Summary:      stringFromAny(meta["summary"]),
-			CreatedAt:    timeFromAny(meta["created_at"]),
-			LastEmbedded: timeFromAny(meta["last_embedded"]),
+			Importance:   model.FloatFromAny(meta["importance"]),
+			Source:       model.StringFromAny(meta["source"]),
+			Summary:      model.StringFromAny(meta["summary"]),
+			CreatedAt:    model.TimeFromAny(meta["created_at"]),
+			LastEmbedded: model.TimeFromAny(meta["last_embedded"]),
 		}
-		hydrateRecordFromMetadata(&record, metaMap)
+		model.HydrateRecordFromMetadata(&record, metaMap)
 		if record.Space == "" {
-			record.Space = stringFromAny(meta["space"])
+			record.Space = model.StringFromAny(meta["space"])
 			if record.Space == "" {
 				record.Space = record.SessionID
 			}
 		}
 		if len(record.GraphEdges) == 0 {
-			record.GraphEdges = validGraphEdges(metaMap)
+			record.GraphEdges = model.ValidGraphEdges(metaMap)
 		}
 		results = append(results, record)
 	}
@@ -754,9 +756,9 @@ func mapFromPayload(payload map[string]any) map[string]any {
 	if md, ok := payload["metadata"]; ok {
 		switch t := md.(type) {
 		case string:
-			payload["metadata"] = decodeMetadata(t)
+			payload["metadata"] = model.DecodeMetadata(t)
 		case json.RawMessage:
-			payload["metadata"] = decodeMetadata(string(t))
+			payload["metadata"] = model.DecodeMetadata(string(t))
 		case map[string]any:
 			// already a map
 		default:
@@ -768,15 +770,15 @@ func mapFromPayload(payload map[string]any) map[string]any {
 	return payload
 }
 
-func extractEdgesFromPayload(payload map[string]any) []GraphEdge {
+func extractEdgesFromPayload(payload map[string]any) []model.GraphEdge {
 	if payload == nil {
 		return nil
 	}
 	if raw, ok := payload["graph_edges"]; ok {
-		return validGraphEdges(map[string]any{"graph_edges": raw})
+		return model.ValidGraphEdges(map[string]any{"graph_edges": raw})
 	}
 	if meta, ok := payload["metadata"].(map[string]any); ok {
-		return validGraphEdges(meta)
+		return model.ValidGraphEdges(meta)
 	}
 	return nil
 }

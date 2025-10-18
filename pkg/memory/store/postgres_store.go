@@ -1,4 +1,4 @@
-package memory
+package store
 
 import (
 	"context"
@@ -11,6 +11,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/Raezil/go-agent-development-kit/pkg/memory/model"
 )
 
 // PostgresStore implements VectorStore using Postgres + pgvector.
@@ -38,7 +40,7 @@ func (ps *PostgresStore) StoreMemory(ctx context.Context, sessionID, content str
 	if _, ok := metadata["space"]; !ok {
 		metadata["space"] = sessionID
 	}
-	importance, source, summary, lastEmbedded, metadataJSON := normalizeMetadata(metadata, time.Now().UTC())
+	importance, source, summary, lastEmbedded, metadataJSON := model.NormalizeMetadata(metadata, time.Now().UTC())
 	query := `
                 INSERT INTO memory_bank (session_id, content, metadata, embedding, importance, source, summary, last_embedded)
                 VALUES ($1, $2, $3::jsonb, $4::vector, $5, $6, $7, $8)
@@ -49,11 +51,11 @@ func (ps *PostgresStore) StoreMemory(ctx context.Context, sessionID, content str
 	if err := ps.DB.QueryRow(ctx, query, sessionID, content, metadataJSON, vectorFromJSON(jsonEmbed), importance, source, summary, lastEmbedded).Scan(&id); err != nil {
 		return err
 	}
-	meta := decodeMetadata(metadataJSON)
-	rec := MemoryRecord{
+	meta := model.DecodeMetadata(metadataJSON)
+	rec := model.MemoryRecord{
 		ID:           id,
 		SessionID:    sessionID,
-		Space:        stringFromAny(meta["space"]),
+		Space:        model.StringFromAny(meta["space"]),
 		Content:      content,
 		Metadata:     metadataJSON,
 		Embedding:    embedding,
@@ -61,7 +63,7 @@ func (ps *PostgresStore) StoreMemory(ctx context.Context, sessionID, content str
 		Source:       source,
 		Summary:      summary,
 		LastEmbedded: lastEmbedded,
-		GraphEdges:   validGraphEdges(meta),
+		GraphEdges:   model.ValidGraphEdges(meta),
 	}
 	if rec.Space == "" {
 		rec.Space = sessionID
@@ -73,7 +75,7 @@ func (ps *PostgresStore) StoreMemory(ctx context.Context, sessionID, content str
 }
 
 // SearchMemory returns top-k similar memories from Postgres.
-func (ps *PostgresStore) SearchMemory(ctx context.Context, queryEmbedding []float32, limit int) ([]MemoryRecord, error) {
+func (ps *PostgresStore) SearchMemory(ctx context.Context, queryEmbedding []float32, limit int) ([]model.MemoryRecord, error) {
 	if ps == nil || ps.DB == nil {
 		return nil, nil
 	}
@@ -89,15 +91,15 @@ func (ps *PostgresStore) SearchMemory(ctx context.Context, queryEmbedding []floa
 	}
 	defer rows.Close()
 
-	var records []MemoryRecord
+	var records []model.MemoryRecord
 	for rows.Next() {
-		var rec MemoryRecord
+		var rec model.MemoryRecord
 		var embeddingText string
 		if err := rows.Scan(&rec.ID, &rec.SessionID, &rec.Content, &rec.Metadata, &rec.Importance, &rec.Source, &rec.Summary, &rec.CreatedAt, &rec.LastEmbedded, &embeddingText, &rec.Score); err != nil {
 			return nil, err
 		}
 		rec.Embedding = parseVector(embeddingText)
-		hydrateRecordFromMetadata(&rec, decodeMetadata(rec.Metadata))
+		model.HydrateRecordFromMetadata(&rec, model.DecodeMetadata(rec.Metadata))
 		rec.Score = 1 - rec.Score
 		if rec.Space == "" {
 			rec.Space = rec.SessionID
@@ -128,7 +130,7 @@ func (ps *PostgresStore) DeleteMemory(ctx context.Context, ids []int64) error {
 	return err
 }
 
-func (ps *PostgresStore) Iterate(ctx context.Context, fn func(MemoryRecord) bool) error {
+func (ps *PostgresStore) Iterate(ctx context.Context, fn func(model.MemoryRecord) bool) error {
 	if ps == nil || ps.DB == nil {
 		return nil
 	}
@@ -142,13 +144,13 @@ func (ps *PostgresStore) Iterate(ctx context.Context, fn func(MemoryRecord) bool
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var rec MemoryRecord
+		var rec model.MemoryRecord
 		var embeddingText string
 		if err := rows.Scan(&rec.ID, &rec.SessionID, &rec.Content, &rec.Metadata, &rec.Importance, &rec.Source, &rec.Summary, &rec.CreatedAt, &rec.LastEmbedded, &embeddingText); err != nil {
 			return err
 		}
 		rec.Embedding = parseVector(embeddingText)
-		hydrateRecordFromMetadata(&rec, decodeMetadata(rec.Metadata))
+		model.HydrateRecordFromMetadata(&rec, model.DecodeMetadata(rec.Metadata))
 		if rec.Space == "" {
 			rec.Space = rec.SessionID
 		}
@@ -170,7 +172,7 @@ func (ps *PostgresStore) Count(ctx context.Context) (int, error) {
 }
 
 // UpsertGraph ensures the knowledge graph stays aligned with stored memories.
-func (ps *PostgresStore) UpsertGraph(ctx context.Context, record MemoryRecord, edges []GraphEdge) error {
+func (ps *PostgresStore) UpsertGraph(ctx context.Context, record model.MemoryRecord, edges []model.GraphEdge) error {
 	if ps == nil || ps.DB == nil || record.ID == 0 {
 		return nil
 	}
@@ -215,7 +217,7 @@ func (ps *PostgresStore) UpsertGraph(ctx context.Context, record MemoryRecord, e
 }
 
 // Neighborhood returns memories connected within the configured hop distance.
-func (ps *PostgresStore) Neighborhood(ctx context.Context, seedIDs []int64, hops, limit int) ([]MemoryRecord, error) {
+func (ps *PostgresStore) Neighborhood(ctx context.Context, seedIDs []int64, hops, limit int) ([]model.MemoryRecord, error) {
 	if ps == nil || ps.DB == nil || len(seedIDs) == 0 || hops <= 0 || limit <= 0 {
 		return nil, nil
 	}
@@ -245,20 +247,20 @@ LIMIT $3;
 		return nil, err
 	}
 	defer rows.Close()
-	results := make([]MemoryRecord, 0)
+	results := make([]model.MemoryRecord, 0)
 	for rows.Next() {
-		var rec MemoryRecord
+		var rec model.MemoryRecord
 		var embeddingText string
 		var depth int
 		if err := rows.Scan(&rec.ID, &rec.SessionID, &rec.Content, &rec.Metadata, &rec.Importance, &rec.Source, &rec.Summary, &rec.CreatedAt, &rec.LastEmbedded, &embeddingText, &rec.Space, &depth); err != nil {
 			return nil, err
 		}
 		rec.Embedding = parseVector(embeddingText)
-		meta := decodeMetadata(rec.Metadata)
+		meta := model.DecodeMetadata(rec.Metadata)
 		if rec.Space == "" {
-			rec.Space = stringFromAny(meta["space"])
+			rec.Space = model.StringFromAny(meta["space"])
 		}
-		hydrateRecordFromMetadata(&rec, meta)
+		model.HydrateRecordFromMetadata(&rec, meta)
 		if rec.Space == "" {
 			rec.Space = rec.SessionID
 		}

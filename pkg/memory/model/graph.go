@@ -1,4 +1,4 @@
-package memory
+package model
 
 import (
 	"encoding/json"
@@ -42,7 +42,7 @@ func (g GraphEdge) Validate() error {
 }
 
 // sanitizeGraphEdges normalizes the metadata map and extracts the edge list.
-func sanitizeGraphEdges(meta map[string]any) []GraphEdge {
+func SanitizeGraphEdges(meta map[string]any) []GraphEdge {
 	if meta == nil {
 		return nil
 	}
@@ -50,7 +50,7 @@ func sanitizeGraphEdges(meta map[string]any) []GraphEdge {
 	if !ok {
 		return nil
 	}
-	edges := decodeGraphEdges(raw)
+	edges := DecodeGraphEdges(raw)
 	sanitized := make([]GraphEdge, 0, len(edges))
 	for _, edge := range edges {
 		if err := edge.Validate(); err != nil {
@@ -67,7 +67,7 @@ func sanitizeGraphEdges(meta map[string]any) []GraphEdge {
 }
 
 // decodeGraphEdges attempts to coerce arbitrary metadata into []GraphEdge.
-func decodeGraphEdges(raw any) []GraphEdge {
+func DecodeGraphEdges(raw any) []GraphEdge {
 	switch v := raw.(type) {
 	case []GraphEdge:
 		return v
@@ -142,7 +142,7 @@ func numericToInt(v any) int64 {
 	return 0
 }
 
-func validGraphEdges(meta map[string]any) []GraphEdge {
+func ValidGraphEdges(meta map[string]any) []GraphEdge {
 	if meta == nil {
 		return nil
 	}
@@ -150,7 +150,7 @@ func validGraphEdges(meta map[string]any) []GraphEdge {
 	if !ok {
 		return nil
 	}
-	edges := decodeGraphEdges(raw)
+	edges := DecodeGraphEdges(raw)
 	if len(edges) == 0 {
 		return nil
 	}

@@ -1,19 +1,21 @@
-package memory
+package engine
 
 import (
 	"context"
 	"strings"
+
+	"github.com/Raezil/go-agent-development-kit/pkg/memory/model"
 )
 
 // Summarizer abstracts cluster summarization backends (LLMs or heuristics).
 type Summarizer interface {
-	Summarize(ctx context.Context, cluster []MemoryRecord) (string, error)
+	Summarize(ctx context.Context, cluster []model.MemoryRecord) (string, error)
 }
 
 // HeuristicSummarizer produces deterministic summaries suitable for tests.
 type HeuristicSummarizer struct{}
 
-func (HeuristicSummarizer) Summarize(_ context.Context, cluster []MemoryRecord) (string, error) {
+func (HeuristicSummarizer) Summarize(_ context.Context, cluster []model.MemoryRecord) (string, error) {
 	if len(cluster) == 0 {
 		return "", nil
 	}

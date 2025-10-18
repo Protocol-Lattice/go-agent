@@ -1,4 +1,4 @@
-package memory
+package store
 
 import (
 	"context"
@@ -6,29 +6,31 @@ import (
 	"sort"
 	"sync"
 	"time"
+
+	"github.com/Raezil/go-agent-development-kit/pkg/memory/model"
 )
 
 // InMemoryStore implements VectorStore for tests and lightweight deployments.
 type InMemoryStore struct {
 	mu      sync.RWMutex
 	nextID  int64
-	records map[int64]MemoryRecord
+	records map[int64]model.MemoryRecord
 }
 
 func NewInMemoryStore() *InMemoryStore {
-	return &InMemoryStore{records: make(map[int64]MemoryRecord)}
+	return &InMemoryStore{records: make(map[int64]model.MemoryRecord)}
 }
 
 func (s *InMemoryStore) StoreMemory(_ context.Context, sessionID, content string, metadata map[string]any, embedding []float32) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.records == nil {
-		s.records = make(map[int64]MemoryRecord)
+		s.records = make(map[int64]model.MemoryRecord)
 	}
 	now := time.Now().UTC()
-	importance, source, summary, lastEmbedded, metadataJSON := normalizeMetadata(metadata, now)
+	importance, source, summary, lastEmbedded, metadataJSON := model.NormalizeMetadata(metadata, now)
 	s.nextID++
-	record := MemoryRecord{
+	record := model.MemoryRecord{
 		ID:           s.nextID,
 		SessionID:    sessionID,
 		Content:      content,
@@ -44,19 +46,19 @@ func (s *InMemoryStore) StoreMemory(_ context.Context, sessionID, content string
 	return nil
 }
 
-func (s *InMemoryStore) SearchMemory(_ context.Context, queryEmbedding []float32, limit int) ([]MemoryRecord, error) {
+func (s *InMemoryStore) SearchMemory(_ context.Context, queryEmbedding []float32, limit int) ([]model.MemoryRecord, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if limit <= 0 {
 		return nil, nil
 	}
 	type scored struct {
-		rec   MemoryRecord
+		rec   model.MemoryRecord
 		score float64
 	}
 	scoredRecords := make([]scored, 0, len(s.records))
 	for _, rec := range s.records {
-		score := cosineSimilarity(queryEmbedding, rec.Embedding)
+		score := model.CosineSimilarity(queryEmbedding, rec.Embedding)
 		rec.Score = score
 		scoredRecords = append(scoredRecords, scored{rec: rec, score: score})
 	}
@@ -66,7 +68,7 @@ func (s *InMemoryStore) SearchMemory(_ context.Context, queryEmbedding []float32
 	if len(scoredRecords) > limit {
 		scoredRecords = scoredRecords[:limit]
 	}
-	result := make([]MemoryRecord, len(scoredRecords))
+	result := make([]model.MemoryRecord, len(scoredRecords))
 	for i, sc := range scoredRecords {
 		result[i] = sc.rec
 	}
@@ -95,7 +97,7 @@ func (s *InMemoryStore) DeleteMemory(_ context.Context, ids []int64) error {
 	return nil
 }
 
-func (s *InMemoryStore) Iterate(_ context.Context, fn func(MemoryRecord) bool) error {
+func (s *InMemoryStore) Iterate(_ context.Context, fn func(model.MemoryRecord) bool) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	ids := make([]int64, 0, len(s.records))

@@ -1,20 +1,20 @@
-package memory
+package model
 
 import (
 	"encoding/json"
 	"time"
 )
 
-func normalizeMetadata(meta map[string]any, fallback time.Time) (importance float64, source, summary string, lastEmbedded time.Time, jsonString string) {
-	meta = cloneMetadata(meta)
-	importance = floatFromAny(meta["importance"])
-	source = stringFromAny(meta["source"])
-	summary = stringFromAny(meta["summary"])
-	lastEmbedded = timeFromAny(meta["last_embedded"])
-	if space := stringFromAny(meta["space"]); space != "" {
+func NormalizeMetadata(meta map[string]any, fallback time.Time) (importance float64, source, summary string, lastEmbedded time.Time, jsonString string) {
+	meta = CloneMetadata(meta)
+	importance = FloatFromAny(meta["importance"])
+	source = StringFromAny(meta["source"])
+	summary = StringFromAny(meta["summary"])
+	lastEmbedded = TimeFromAny(meta["last_embedded"])
+	if space := StringFromAny(meta["space"]); space != "" {
 		meta["space"] = space
 	}
-	edges := sanitizeGraphEdges(meta)
+	edges := SanitizeGraphEdges(meta)
 	if lastEmbedded.IsZero() {
 		if fallback.IsZero() {
 			fallback = time.Now().UTC()
@@ -33,7 +33,7 @@ func normalizeMetadata(meta map[string]any, fallback time.Time) (importance floa
 	return
 }
 
-func cloneMetadata(meta map[string]any) map[string]any {
+func CloneMetadata(meta map[string]any) map[string]any {
 	if meta == nil {
 		return map[string]any{}
 	}
@@ -44,7 +44,7 @@ func cloneMetadata(meta map[string]any) map[string]any {
 	return cp
 }
 
-func floatFromAny(v any) float64 {
+func FloatFromAny(v any) float64 {
 	switch t := v.(type) {
 	case float64:
 		return t
@@ -66,7 +66,7 @@ func floatFromAny(v any) float64 {
 	return 0
 }
 
-func stringFromAny(v any) string {
+func StringFromAny(v any) string {
 	if v == nil {
 		return ""
 	}
@@ -81,7 +81,7 @@ func stringFromAny(v any) string {
 	return string(b)
 }
 
-func timeFromAny(v any) time.Time {
+func TimeFromAny(v any) time.Time {
 	switch t := v.(type) {
 	case time.Time:
 		return t
@@ -94,7 +94,7 @@ func timeFromAny(v any) time.Time {
 	return time.Time{}
 }
 
-func decodeMetadata(metadata string) map[string]any {
+func DecodeMetadata(metadata string) map[string]any {
 	if metadata == "" {
 		return map[string]any{}
 	}
@@ -105,30 +105,30 @@ func decodeMetadata(metadata string) map[string]any {
 	return meta
 }
 
-func hydrateRecordFromMetadata(rec *MemoryRecord, meta map[string]any) {
+func HydrateRecordFromMetadata(rec *MemoryRecord, meta map[string]any) {
 	if rec == nil {
 		return
 	}
 	if rec.Importance == 0 {
-		rec.Importance = floatFromAny(meta["importance"])
+		rec.Importance = FloatFromAny(meta["importance"])
 	}
 	if rec.Source == "" {
-		rec.Source = stringFromAny(meta["source"])
+		rec.Source = StringFromAny(meta["source"])
 	}
 	if rec.Summary == "" {
-		rec.Summary = stringFromAny(meta["summary"])
+		rec.Summary = StringFromAny(meta["summary"])
 	}
 	if rec.LastEmbedded.IsZero() {
-		if ts := timeFromAny(meta["last_embedded"]); !ts.IsZero() {
+		if ts := TimeFromAny(meta["last_embedded"]); !ts.IsZero() {
 			rec.LastEmbedded = ts
 		}
 	}
 	if rec.Space == "" {
-		if space := stringFromAny(meta["space"]); space != "" {
+		if space := StringFromAny(meta["space"]); space != "" {
 			rec.Space = space
 		}
 	}
 	if len(rec.GraphEdges) == 0 {
-		rec.GraphEdges = validGraphEdges(meta)
+		rec.GraphEdges = ValidGraphEdges(meta)
 	}
 }
