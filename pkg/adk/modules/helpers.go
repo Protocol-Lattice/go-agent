@@ -2,6 +2,8 @@ package modules
 
 import (
 	"context"
+	"log"
+	"os"
 
 	kit "github.com/Raezil/go-agent-development-kit/pkg/adk"
 	"github.com/Raezil/go-agent-development-kit/pkg/agent"
@@ -28,7 +30,7 @@ func StaticMemoryProvider(mem *memory.SessionMemory) kit.MemoryProvider {
 // InMemoryMemoryModule constructs a memory module backed by the in-memory
 // store. A new memory bank is created for each request which keeps agents
 // isolated by default.
-func InMemoryMemoryModule(window int, embeeder memory.Embedder) *MemoryModule {
+func InMemoryMemoryModule(window int, embeeder memory.Embedder, opts *memory.Options) *MemoryModule {
 	provider := func(context.Context) (*memory.SessionMemory, error) {
 		bank := memory.NewMemoryBankWithStore(memory.NewInMemoryStore())
 		size := window
@@ -37,12 +39,17 @@ func InMemoryMemoryModule(window int, embeeder memory.Embedder) *MemoryModule {
 		}
 		mem := memory.NewSessionMemory(bank, size)
 		mem.WithEmbedder(embeeder)
+		mem.WithEmbedder(embeeder)
+		engine := memory.NewEngine(bank.Store, *opts)
+		mem.WithEngine(engine)
+		engineLogger := log.New(os.Stderr, "memory-engine: ", log.LstdFlags)
+		mem.Engine.WithLogger(engineLogger)
 		return mem, nil
 	}
 	return NewMemoryModule("memory", provider)
 }
 
-func InQdrantMemory(window int, baseURL string, collection string, embeeder memory.Embedder) *MemoryModule {
+func InQdrantMemory(window int, baseURL string, collection string, embeeder memory.Embedder, opts *memory.Options) *MemoryModule {
 	provider := func(context.Context) (*memory.SessionMemory, error) {
 		bank := memory.NewMemoryBankWithStore(memory.NewQdrantStore(baseURL, collection, ""))
 		size := window
@@ -51,12 +58,16 @@ func InQdrantMemory(window int, baseURL string, collection string, embeeder memo
 		}
 		mem := memory.NewSessionMemory(bank, size)
 		mem.WithEmbedder(embeeder)
+		engine := memory.NewEngine(bank.Store, *opts)
+		mem.WithEngine(engine)
+		engineLogger := log.New(os.Stderr, "memory-engine: ", log.LstdFlags)
+		mem.Engine.WithLogger(engineLogger)
 		return mem, nil
 	}
 	return NewMemoryModule("qdrant", provider)
 }
 
-func InPostgresMemory(ctx context.Context, window int, connStr string, embeeder memory.Embedder) *MemoryModule {
+func InPostgresMemory(ctx context.Context, window int, connStr string, embeeder memory.Embedder, opts *memory.Options) *MemoryModule {
 	provider := func(context.Context) (*memory.SessionMemory, error) {
 		ps, err := memory.NewPostgresStore(ctx, connStr)
 		if err != nil {
@@ -69,6 +80,10 @@ func InPostgresMemory(ctx context.Context, window int, connStr string, embeeder 
 		}
 		mem := memory.NewSessionMemory(bank, size)
 		mem.WithEmbedder(embeeder)
+		engine := memory.NewEngine(bank.Store, *opts)
+		mem.WithEngine(engine)
+		engineLogger := log.New(os.Stderr, "memory-engine: ", log.LstdFlags)
+		mem.Engine.WithLogger(engineLogger)
 		return mem, nil
 	}
 	return NewMemoryModule("postgres", provider)

@@ -9,12 +9,11 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/Raezil/go-agent-development-kit/pkg/agent"
+	"github.com/Raezil/go-agent-development-kit/pkg/helpers"
 	"github.com/Raezil/go-agent-development-kit/pkg/memory"
 	"github.com/Raezil/go-agent-development-kit/pkg/models"
 	"github.com/Raezil/go-agent-development-kit/pkg/runtime"
@@ -225,8 +224,8 @@ func main() {
 		DuplicateSimilarity: *memoryDuplicate,
 		TTL:                 *memoryTTL,
 		MaxSize:             *memoryMaxSize,
-		SourceBoost:         parseSourceBoostFlag(*memorySourceBoost),
-		EnableSummaries:     !*memoryDisableSummaries,
+		SourceBoost:         helpers.ParseSourceBoostFlag(*memorySourceBoost),
+		EnableSummaries:     *memoryDisableSummaries,
 	}
 
 	engineLogger := log.New(os.Stderr, "memory-engine: ", log.LstdFlags)
@@ -283,7 +282,7 @@ func main() {
 	session := rt.NewSession(*sessionID)
 	fmt.Printf("🧠 Using session: %s\n", session.ID())
 
-	spaces := parseCSVList(*sharedSpacesFlag)
+	spaces := helpers.ParseCSVList(*sharedSpacesFlag)
 
 	// Agent Alice + Bob join the same shared spaces
 	alice := memory.NewSharedSession(smRef, "agent:alice", spaces...)
@@ -331,8 +330,8 @@ func main() {
 	}
 
 	fmt.Println("--- Agent Development Kit Demo ---")
-	fmt.Printf("Tools: %s\n", toolNames(rt.Tools()))
-	fmt.Printf("Sub-agents: %s\n\n", subAgentNames(rt.SubAgents()))
+	fmt.Printf("Tools: %s\n", helpers.ToolNames(rt.Tools()))
+	fmt.Printf("Sub-agents: %s\n\n", helpers.SubAgentNames(rt.SubAgents()))
 
 	type result struct {
 		idx      int
@@ -355,7 +354,7 @@ func main() {
 			// ── record USER prompt ─────────────────────────────────────────────
 			alice.AddShortLocal(prompt, map[string]string{"role": "user"})
 			bob.AddShortLocal(prompt, map[string]string{"role": "user"})
-			recordPrompt(ctx, alice, spaces, "user", prompt)
+			helpers.RecordPrompt(ctx, alice, spaces, "user", prompt)
 
 			// generate
 			reply, err := rt.Generate(ctx, *sessionID, prompt)
@@ -375,7 +374,7 @@ func main() {
 			// ── record AGENT reply ─────────────────────────────────────────────
 			alice.AddShortLocal(reply, map[string]string{"role": "agent"})
 			bob.AddShortLocal(reply, map[string]string{"role": "agent"})
-			recordPrompt(ctx, alice, spaces, "agent", reply)
+			helpers.RecordPrompt(ctx, alice, spaces, "agent", reply)
 
 			resultsCh <- result{i, prompt, reply, nil, time.Since(start)}
 		}(i, prompt)
@@ -399,82 +398,4 @@ func main() {
 	}
 
 	fmt.Println("💾 All interactions flushed to long-term memory.")
-}
-
-func parseSourceBoostFlag(raw string) map[string]float64 {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return nil
-	}
-	boosts := make(map[string]float64)
-	pairs := strings.Split(raw, ",")
-	for _, pair := range pairs {
-		parts := strings.SplitN(pair, "=", 2)
-		if len(parts) != 2 {
-			continue
-		}
-		key := strings.ToLower(strings.TrimSpace(parts[0]))
-		value, err := strconv.ParseFloat(strings.TrimSpace(parts[1]), 64)
-		if err != nil {
-			continue
-		}
-		boosts[key] = value
-	}
-	if len(boosts) == 0 {
-		return nil
-	}
-	return boosts
-}
-
-func toolNames(tools []agent.Tool) string {
-	if len(tools) == 0 {
-		return "<none>"
-	}
-	names := make([]string, len(tools))
-	for i, tool := range tools {
-		names[i] = tool.Spec().Name
-	}
-	return strings.Join(names, ", ")
-}
-
-func subAgentNames(subagents []agent.SubAgent) string {
-	if len(subagents) == 0 {
-		return "<none>"
-	}
-	names := make([]string, len(subagents))
-	for i, sa := range subagents {
-		names[i] = sa.Name()
-	}
-	return strings.Join(names, ", ")
-}
-
-func parseCSVList(raw string) []string {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return nil
-	}
-	parts := strings.Split(raw, ",")
-	out := make([]string, 0, len(parts))
-	for _, p := range parts {
-		s := strings.TrimSpace(p)
-		if s != "" {
-			out = append(out, s)
-		}
-	}
-	return out
-}
-
-// recordPrompt stores a conversation turn into all shared spaces.
-// role should be "user" or "agent".
-func recordPrompt(ctx context.Context, shared *memory.SharedSession, spaces []string, role, content string) {
-	if shared == nil || strings.TrimSpace(content) == "" || len(spaces) == 0 {
-		return
-	}
-	meta := map[string]string{"role": role}
-	for _, sp := range spaces {
-		if err := shared.AddShortTo(sp, content, meta); err != nil {
-			continue
-		}
-		_ = shared.FlushSpace(ctx, sp) // persist to long-term
-	}
 }
