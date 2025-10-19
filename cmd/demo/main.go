@@ -239,35 +239,27 @@ func main() {
 	}
 
 	// --- ⚙️ Runtime with persistent memory ---
-	cfg := runtime.Config{
-		DSN:           *dsn,        // may be unused when store != Postgres
-		SchemaPath:    *schemaPath, // may be unused when store != Postgres
-		SessionWindow: *windowSize,
-		ContextLimit:  *promptLimit,
-		SystemPrompt:  "You orchestrate tooling and specialists to help the user build AI agents.",
-		CoordinatorModel: func(ctx context.Context) (models.Agent, error) {
+	rt, err := runtime.New(
+		ctx,
+		runtime.WithCoordinatorModel(func(ctx context.Context) (models.Agent, error) {
 			return models.NewGeminiLLM(ctx, *modelName, "Coordinator response:")
-		},
-		MemoryFactory: func(_ context.Context, _ string) (*memory.MemoryBank, error) {
+		}),
+		runtime.WithSystemPrompt("You orchestrate tooling and specialists to help the user build AI agents."),
+		runtime.WithSessionWindow(*windowSize),
+		runtime.WithContextLimit(*promptLimit),
+		runtime.WithTools(&tools.EchoTool{}, &tools.CalculatorTool{}, &tools.TimeTool{}),
+		runtime.WithSubAgents(subagents.NewResearcher(researcherModel)),
+		runtime.WithMemoryFactory(func(context.Context, string) (*memory.MemoryBank, error) {
 			return bank, nil // reuse chosen store
-		},
-		SessionMemoryBuilder: func(bank *memory.MemoryBank, window int) *memory.SessionMemory {
+		}),
+		runtime.WithSessionMemoryBuilder(func(bank *memory.MemoryBank, window int) *memory.SessionMemory {
 			smRef = memory.NewSessionMemory(bank, window).WithEngine(memoryEngine)
 			return smRef
-		},
-		Tools: []agent.Tool{
-			&tools.EchoTool{},
-			&tools.CalculatorTool{},
-			&tools.TimeTool{},
-		},
-		SubAgents: []agent.SubAgent{
-			subagents.NewResearcher(researcherModel),
-		},
-		UTCPClient: utcpClient,
-	}
-
-	rt, err := runtime.New(ctx, cfg)
+		}),
+		runtime.WithUTCPClient(utcpClient),
+	)
 	if err != nil {
+		_ = bank.Close()
 		log.Fatalf("failed to create runtime: %v", err)
 	}
 	defer rt.Close()

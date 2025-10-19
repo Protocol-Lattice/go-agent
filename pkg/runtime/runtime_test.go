@@ -2,51 +2,47 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
 
-	"github.com/Raezil/go-agent-development-kit/pkg/agent"
 	"github.com/Raezil/go-agent-development-kit/pkg/memory"
 	"github.com/Raezil/go-agent-development-kit/pkg/models"
 	"github.com/Raezil/go-agent-development-kit/pkg/tools"
 )
 
-func TestConfigValidate(t *testing.T) {
-	cfg := Config{}
-	if err := cfg.Validate(); err == nil {
+func TestRuntimeNewValidation(t *testing.T) {
+	ctx := context.Background()
+	if _, err := New(ctx); err == nil {
 		t.Fatalf("expected error when coordinator model is missing")
 	}
 
-	cfg.CoordinatorModel = func(ctx context.Context) (models.Agent, error) {
-		return models.NewDummyLLM("demo"), nil
-	}
-	if err := cfg.Validate(); err == nil {
-		t.Fatalf("expected error when DSN and memory factory are missing")
+	failingFactory := func(context.Context, string) (*memory.MemoryBank, error) {
+		return nil, errors.New("boom")
 	}
 
-	cfg.DSN = "postgres://user:pass@localhost/db"
-	if err := cfg.Validate(); err != nil {
-		t.Fatalf("unexpected validate error: %v", err)
+	if _, err := New(ctx, WithCoordinatorModel(func(context.Context) (models.Agent, error) {
+		return models.NewDummyLLM("demo"), nil
+	}), WithMemoryFactory(failingFactory)); err == nil {
+		t.Fatalf("expected error when memory factory fails")
+	}
+
+	if _, err := New(ctx, WithCoordinatorModel(func(context.Context) (models.Agent, error) {
+		return models.NewDummyLLM("demo"), nil
+	})); err != nil {
+		t.Fatalf("unexpected error creating runtime with defaults: %v", err)
 	}
 }
 
 func TestRuntimeNewSessionAndAsk(t *testing.T) {
 	ctx := context.Background()
-	cfg := Config{
-		CoordinatorModel: func(ctx context.Context) (models.Agent, error) {
+	rt, err := New(ctx,
+		WithCoordinatorModel(func(context.Context) (models.Agent, error) {
 			return models.NewDummyLLM("Coordinator:"), nil
-		},
-		MemoryFactory: func(ctx context.Context, _ string) (*memory.MemoryBank, error) {
-			return &memory.MemoryBank{}, nil
-		},
-		SessionMemoryBuilder: func(bank *memory.MemoryBank, window int) *memory.SessionMemory {
-			return memory.NewSessionMemory(bank, window)
-		},
-		Tools: []agent.Tool{&tools.EchoTool{}},
-	}
-
-	rt, err := New(ctx, cfg)
+		}),
+		WithTools(&tools.EchoTool{}),
+	)
 	if err != nil {
 		t.Fatalf("runtime.New returned error: %v", err)
 	}
@@ -76,16 +72,12 @@ func TestRuntimeNewSessionAndAsk(t *testing.T) {
 }
 
 func TestRuntimeToolsImmutable(t *testing.T) {
-	cfg := Config{
-		CoordinatorModel: func(ctx context.Context) (models.Agent, error) {
+	rt, err := New(context.Background(),
+		WithCoordinatorModel(func(context.Context) (models.Agent, error) {
 			return models.NewDummyLLM("Coordinator:"), nil
-		},
-		MemoryFactory: func(ctx context.Context, _ string) (*memory.MemoryBank, error) {
-			return &memory.MemoryBank{}, nil
-		},
-		Tools: []agent.Tool{&tools.EchoTool{}},
-	}
-	rt, err := New(context.Background(), cfg)
+		}),
+		WithTools(&tools.EchoTool{}),
+	)
 	if err != nil {
 		t.Fatalf("runtime.New returned error: %v", err)
 	}
@@ -103,15 +95,11 @@ func TestRuntimeToolsImmutable(t *testing.T) {
 }
 
 func TestRuntimeActiveSessionsSortedAndRemovable(t *testing.T) {
-	cfg := Config{
-		CoordinatorModel: func(ctx context.Context) (models.Agent, error) {
+	rt, err := New(context.Background(),
+		WithCoordinatorModel(func(context.Context) (models.Agent, error) {
 			return models.NewDummyLLM("Coordinator:"), nil
-		},
-		MemoryFactory: func(ctx context.Context, _ string) (*memory.MemoryBank, error) {
-			return &memory.MemoryBank{}, nil
-		},
-	}
-	rt, err := New(context.Background(), cfg)
+		}),
+	)
 	if err != nil {
 		t.Fatalf("runtime.New returned error: %v", err)
 	}

@@ -50,24 +50,26 @@ pkg/
 ├── subagents        # Example researcher persona powered by an LLM
 └── tools            # Built-in tools (echo, calculator, time)
 ```
-At the heart of the kit is `runtime.Config`. Supply model loaders, tool/sub-agent registries, and a memory factory and the runtime handles schema creation, session lifecycle, and safe concurrent access.
+At the heart of the kit is `runtime.New`. Compose the runtime with expressive functional options and the builder wires up schema creation, session lifecycle, and safe concurrent access for you.
 
 ```go
-cfg := runtime.Config{
-    DSN:            "postgres://admin:admin@localhost:5432/ragdb?sslmode=disable",
-    SchemaPath:     "schema.sql",
-    SessionWindow:  8,
-    ContextLimit:   6,
-    CoordinatorModel: func(ctx context.Context) (models.Agent, error) {
+rt, _ := runtime.New(
+    ctx,
+    runtime.WithDSN("postgres://admin:admin@localhost:5432/ragdb?sslmode=disable"),
+    runtime.WithSchemaPath("schema.sql"),
+    runtime.WithSessionWindow(8),
+    runtime.WithContextLimit(6),
+    runtime.WithCoordinatorModel(func(ctx context.Context) (models.Agent, error) {
         return models.NewGeminiLLM(ctx, "gemini-2.5-pro", "Coordinator response:")
-    },
-    Tools:     []agent.Tool{&tools.CalculatorTool{}},
-    SubAgents: []agent.SubAgent{subagents.NewResearcher(researcherModel)},
-}
-rt, _ := runtime.New(ctx, cfg)
+    }),
+    runtime.WithTools(&tools.CalculatorTool{}),
+    runtime.WithSubAgents(subagents.NewResearcher(researcherModel)),
+)
 session := rt.NewSession("")
 reply, _ := rt.Generate(ctx, session.ID(), "How do I wire an agent?")
 ```
+
+Skip `runtime.WithDSN` to default to the bundled in-memory store—perfect for local experiments or unit tests without Postgres.
 
 
 ## Quick Start
@@ -109,10 +111,10 @@ go run ./cmd/demo --dsn "$DATABASE_URL"
 Flags let you customise the coordinator model (`--model`), session identifier (`--session`), context limit (`--context`), and short-term memory window (`--window`). Provide additional prompts as positional arguments to override the default script.
 
 ## Configuration & Extensibility
-- **Swap language models** – Implement `models.Agent` or use bundled adapters (Gemini, Anthropic, Ollama). Provide a loader via `runtime.Config.CoordinatorModel`.
-- **Add or remove tools** – Implement `agent.Tool` and append instances to `runtime.Config.Tools`. Tools follow the `tool:<name>` invocation pattern.
-- **Register sub-agents** – Add `agent.SubAgent` implementations to `runtime.Config.SubAgents` and delegate in conversation with `subagent:<name> do something`.
-- **Memory backends** – Use the default Postgres store or supply a custom `MemoryFactory` / `SessionMemoryBuilder` for in-memory or third-party vector stores.
+- **Swap language models** – Implement `models.Agent` or use bundled adapters (Gemini, Anthropic, Ollama). Provide a loader via `runtime.WithCoordinatorModel`.
+- **Add or remove tools** – Implement `agent.Tool` and pass them with `runtime.WithTools`. Tools follow the `tool:<name>` invocation pattern.
+- **Register sub-agents** – Add `agent.SubAgent` implementations with `runtime.WithSubAgents` and delegate in conversation with `subagent:<name> do something`.
+- **Memory backends** – Use the built-in in-memory default or supply a custom `runtime.WithMemoryFactory` / `runtime.WithSessionMemoryBuilder` for Postgres, Qdrant, or bespoke vector stores.
 
 ## Advanced Memory Engine
 The `pkg/memory` package exposes an `Engine` that composes retrieval heuristics, clustering, and pruning on top of any `VectorStore`.
