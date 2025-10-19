@@ -1,4 +1,4 @@
-package kit
+package adk
 
 // Option configures the AgentDevelopmentKit during construction.
 type Option func(*AgentDevelopmentKit) error

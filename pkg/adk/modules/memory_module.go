@@ -4,18 +4,18 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/Raezil/go-agent-development-kit/pkg/kit"
+	"github.com/Raezil/go-agent-development-kit/pkg/adk"
 )
 
 // MemoryModule registers a session memory provider with the kit.
 type MemoryModule struct {
 	name     string
-	provider kit.MemoryProvider
+	provider adk.MemoryProvider
 }
 
 // NewMemoryModule creates a memory module with the supplied provider. If name
 // is empty the module is registered as "memory".
-func NewMemoryModule(name string, provider kit.MemoryProvider) *MemoryModule {
+func NewMemoryModule(name string, provider adk.MemoryProvider) *MemoryModule {
 	if name == "" {
 		name = "memory"
 	}
@@ -24,7 +24,7 @@ func NewMemoryModule(name string, provider kit.MemoryProvider) *MemoryModule {
 
 func (m *MemoryModule) Name() string { return m.name }
 
-func (m *MemoryModule) Provision(_ context.Context, kitInstance *kit.AgentDevelopmentKit) error {
+func (m *MemoryModule) Provision(_ context.Context, kitInstance *adk.AgentDevelopmentKit) error {
 	if m.provider == nil {
 		return fmt.Errorf("memory provider is nil")
 	}

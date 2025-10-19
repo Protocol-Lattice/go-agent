@@ -4,18 +4,18 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/Raezil/go-agent-development-kit/pkg/kit"
+	"github.com/Raezil/go-agent-development-kit/pkg/adk"
 )
 
 // ModelModule wires a model provider into the kit.
 type ModelModule struct {
 	name     string
-	provider kit.ModelProvider
+	provider adk.ModelProvider
 }
 
 // NewModelModule creates a module that registers the supplied model provider.
 // If name is empty the module will expose "model".
-func NewModelModule(name string, provider kit.ModelProvider) *ModelModule {
+func NewModelModule(name string, provider adk.ModelProvider) *ModelModule {
 	if name == "" {
 		name = "model"
 	}
@@ -24,7 +24,7 @@ func NewModelModule(name string, provider kit.ModelProvider) *ModelModule {
 
 func (m *ModelModule) Name() string { return m.name }
 
-func (m *ModelModule) Provision(_ context.Context, kitInstance *kit.AgentDevelopmentKit) error {
+func (m *ModelModule) Provision(_ context.Context, kitInstance *adk.AgentDevelopmentKit) error {
 	if m.provider == nil {
 		return fmt.Errorf("model provider is nil")
 	}

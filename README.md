@@ -31,7 +31,7 @@ Whether you are experimenting locally or embedding agents inside an existing ser
 
 ## Key Features
 - **Runtime orchestration** – `pkg/runtime` exposes a single entry point for constructing an agent runtime with configurable models, tools, memory engines, and sub-agent registries. A thread-safe session manager keeps execution deterministic.
-- **Modular Agent Development Kit** – `pkg/kit` layers a pluggable module system on top of the existing runtime, memory, model, and tool abstractions so you can compose deployments with a few declarative options.
+- **Modular Agent Development Kit** – `pkg/adk` layers a pluggable module system on top of the existing runtime, memory, model, and tool abstractions so you can compose deployments with a few declarative options.
 - **Coordinator + specialists** – `pkg/agent` contains the core coordinator logic, while `pkg/subagents` demonstrates how to plug in specialist personas (for example, a researcher) through a `ToolCatalog` and `SubAgentDirectory` abstraction.
 - **Tooling ecosystem** – Implement the `agent.Tool` interface and register implementations (echo, calculator, clock, etc.) under `pkg/tools`. Tools become available to the coordinator prompt automatically.
 - **Retrieval-augmented memory** – `pkg/memory` layers importance scoring, weighted retrieval (similarity, recency, source, importance), maximal marginal relevance, summarisation, and pruning strategies over pluggable vector stores (PostgreSQL + pgvector, Qdrant, in-memory).
@@ -128,7 +128,7 @@ Edit `cmd/quickstart/main.go` to swap models, register additional tools, or plug
 - **Memory backends** – Use the built-in in-memory default or supply a custom `runtime.WithMemoryFactory` / `runtime.WithSessionMemoryBuilder` for Postgres, Qdrant, or bespoke vector stores.
 
 ### Building with Modules
-The `pkg/kit` package introduces a lightweight module system so you can provision capabilities declaratively:
+The `pkg/adk` package introduces a lightweight module system so you can provision capabilities declaratively:
 
 ```go
 kitInstance, _ := kit.New(ctx,

@@ -1,13 +1,13 @@
-package kit_test
+package adk_test
 
 import (
 	"context"
 	"strings"
 	"testing"
 
+	"github.com/Raezil/go-agent-development-kit/pkg/adk"
+	kitmodules "github.com/Raezil/go-agent-development-kit/pkg/adk/modules"
 	"github.com/Raezil/go-agent-development-kit/pkg/agent"
-	"github.com/Raezil/go-agent-development-kit/pkg/kit"
-	kitmodules "github.com/Raezil/go-agent-development-kit/pkg/kit/modules"
 	"github.com/Raezil/go-agent-development-kit/pkg/models"
 	"github.com/Raezil/go-agent-development-kit/pkg/subagents"
 	"github.com/Raezil/go-agent-development-kit/pkg/tools"
@@ -20,9 +20,9 @@ func TestKitBuildAgent(t *testing.T) {
 
 	researcherModel := models.NewDummyLLM("Researcher reply:")
 
-	kitInstance, err := kit.New(ctx,
-		kit.WithDefaultContextLimit(6),
-		kit.WithModules(
+	kitInstance, err := adk.New(ctx,
+		adk.WithDefaultContextLimit(6),
+		adk.WithModules(
 			kitmodules.NewModelModule("coordinator", kitmodules.StaticModelProvider(models.NewDummyLLM("Coordinator:"))),
 			kitmodules.InMemoryMemoryModule(4),
 			kitmodules.NewToolModule("echo", kitmodules.StaticToolProvider([]agent.Tool{&tools.EchoTool{}}, nil)),

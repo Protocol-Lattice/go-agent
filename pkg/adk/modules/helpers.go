@@ -3,8 +3,8 @@ package modules
 import (
 	"context"
 
+	kit "github.com/Raezil/go-agent-development-kit/pkg/adk"
 	"github.com/Raezil/go-agent-development-kit/pkg/agent"
-	"github.com/Raezil/go-agent-development-kit/pkg/kit"
 	"github.com/Raezil/go-agent-development-kit/pkg/memory"
 	"github.com/Raezil/go-agent-development-kit/pkg/models"
 	"github.com/Raezil/go-agent-development-kit/pkg/runtime"
@@ -31,6 +31,20 @@ func StaticMemoryProvider(mem *memory.SessionMemory) kit.MemoryProvider {
 func InMemoryMemoryModule(window int) *MemoryModule {
 	provider := func(context.Context) (*memory.SessionMemory, error) {
 		bank := memory.NewMemoryBankWithStore(memory.NewInMemoryStore())
+		size := window
+		if size <= 0 {
+			size = 8
+		}
+		mem := memory.NewSessionMemory(bank, size)
+		mem.WithEmbedder(memory.DummyEmbedder{})
+		return mem, nil
+	}
+	return NewMemoryModule("memory", provider)
+}
+
+func InQdrantMemory(window int, baseURL string, collection string) *MemoryModule {
+	provider := func(context.Context) (*memory.SessionMemory, error) {
+		bank := memory.NewMemoryBankWithStore(memory.NewQdrantStore(baseURL, collection, ""))
 		size := window
 		if size <= 0 {
 			size = 8
