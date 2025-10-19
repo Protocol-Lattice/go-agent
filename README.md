@@ -26,8 +26,7 @@ Modern agents demand more than a single model call—they require deterministic 
 
 - A composable runtime that stitches together models, tools, memory, and sub-agents.
 - Opinionated defaults that stay out of your way when you need to customise.
-- Production-friendly patterns drawn from the Google Agent Development Kit terminology.
-
+- Production-friendly patterns
 Whether you are experimenting locally or embedding agents inside an existing service, GADK provides a consistent foundation.
 
 ## Key Features
