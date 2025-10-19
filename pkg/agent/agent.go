@@ -154,62 +154,131 @@ func (a *Agent) Flush(ctx context.Context, sessionID string) error {
 }
 
 func (a *Agent) buildPrompt(ctx context.Context, sessionID, userInput string) (string, error) {
-	records, err := a.memory.RetrieveContext(ctx, sessionID, userInput, a.contextLimit)
-	if err != nil {
-		return "", err
+	queryType := classifyQuery(userInput)
+
+	switch queryType {
+	case QueryMath:
+		// 🧮 skip memory entirely
+		return fmt.Sprintf("%s\n\nCurrent user message:\n%s\n\nCompose the best possible assistant reply.\n",
+			a.systemPrompt,
+			strings.TrimSpace(userInput)), nil
+
+	case QueryShortFactoid:
+		// 💬 use reduced memory weight — e.g. smaller limit or lower score thresholds
+		records, err := a.memory.RetrieveContext(ctx, sessionID, userInput, min(a.contextLimit/2, 3))
+		if err != nil {
+			return "", fmt.Errorf("retrieve context: %w", err)
+		}
+		return a.buildFullPrompt(userInput, records), nil
+
+	case QueryComplex:
+		// 🧠 full memory retrieval
+		records, err := a.memory.RetrieveContext(ctx, sessionID, userInput, a.contextLimit)
+		if err != nil {
+			return "", fmt.Errorf("retrieve context: %w", err)
+		}
+		return a.buildFullPrompt(userInput, records), nil
+	}
+
+	return "", nil
+}
+
+func (a *Agent) buildFullPrompt(userInput string, records []memory.MemoryRecord) string {
+	var sb strings.Builder
+	sb.Grow(4096)
+
+	sb.WriteString(a.systemPrompt)
+
+	if tools := a.renderTools(); tools != "" {
+		sb.WriteString("\n\n")
+		sb.WriteString(tools)
+	}
+	if sub := a.renderSubAgents(); sub != "" {
+		sb.WriteString("\n\n")
+		sb.WriteString(sub)
+	}
+
+	sb.WriteString("\n\nConversation memory:\n")
+	sb.WriteString(a.renderMemory(records))
+
+	sb.WriteString("\n\nCurrent user message:\n")
+	sb.WriteString(strings.TrimSpace(userInput))
+	sb.WriteString("\n\nCompose the best possible assistant reply.\n")
+
+	return sb.String()
+}
+
+// renderTools formats the available tool specs into a prompt-friendly block.
+func (a *Agent) renderTools() string {
+	specs := a.ToolSpecs()
+	if len(specs) == 0 {
+		return ""
 	}
 
 	var sb strings.Builder
-	sb.WriteString(a.systemPrompt)
-
-	if specs := a.ToolSpecs(); len(specs) > 0 {
-		sb.WriteString("\n\nAvailable tools:\n")
-		for _, spec := range specs {
-			sb.WriteString(fmt.Sprintf("- %s: %s\n", spec.Name, spec.Description))
-			if len(spec.InputSchema) > 0 {
-				schemaJSON, _ := json.MarshalIndent(spec.InputSchema, "  ", "  ")
+	sb.WriteString("Available tools:\n")
+	for _, spec := range specs {
+		sb.WriteString(fmt.Sprintf("- %s: %s\n", spec.Name, spec.Description))
+		if len(spec.InputSchema) > 0 {
+			if schemaJSON, err := json.MarshalIndent(spec.InputSchema, "  ", "  "); err == nil {
 				sb.WriteString("  Input schema: ")
 				sb.Write(schemaJSON)
 				sb.WriteString("\n")
 			}
-			if len(spec.Examples) > 0 {
-				sb.WriteString("  Examples:\n")
-				for _, ex := range spec.Examples {
-					exJSON, _ := json.MarshalIndent(ex, "    ", "  ")
+		}
+		if len(spec.Examples) > 0 {
+			sb.WriteString("  Examples:\n")
+			for _, ex := range spec.Examples {
+				if exJSON, err := json.MarshalIndent(ex, "    ", "  "); err == nil {
 					sb.Write(exJSON)
 					sb.WriteString("\n")
 				}
 			}
 		}
-		sb.WriteString("Invoke a tool by replying with the format `tool:<name> <json arguments>` when necessary.\n")
+	}
+	sb.WriteString("Invoke a tool with: `tool:<name> <json arguments>`\n")
+	return sb.String()
+}
+
+// renderSubAgents formats specialist sub-agents into a prompt-friendly block.
+func (a *Agent) renderSubAgents() string {
+	subagents := a.SubAgents()
+	if len(subagents) == 0 {
+		return ""
 	}
 
-	if subagents := a.SubAgents(); len(subagents) > 0 {
-		sb.WriteString("\nSpecialist sub-agents:\n")
-		for _, sa := range subagents {
-			sb.WriteString(fmt.Sprintf("- %s: %s\n", sa.Name(), sa.Description()))
-		}
-		sb.WriteString("Delegate by replying with `subagent:<name> <task>` when it improves the answer.\n")
+	var sb strings.Builder
+	sb.WriteString("Specialist sub-agents:\n")
+	for _, sa := range subagents {
+		sb.WriteString(fmt.Sprintf("- %s: %s\n", sa.Name(), sa.Description()))
 	}
+	sb.WriteString("Delegate with: `subagent:<name> <task>`\n")
+	return sb.String()
+}
 
-	sb.WriteString("\nConversation memory:\n")
+// renderMemory formats retrieved memory records into a clean, token-efficient list.
+func (a *Agent) renderMemory(records []memory.MemoryRecord) string {
 	if len(records) == 0 {
-		sb.WriteString("(no stored memory)\n")
-	} else {
-		for i, rec := range records {
-			role := metadataRole(rec.Metadata)
-			content := strings.TrimSpace(rec.Content)
-			if content == "" {
-				continue
-			}
-			sb.WriteString(fmt.Sprintf("%d. [%s] %s\n", i+1, role, content))
-		}
+		return "(no stored memory)\n"
 	}
 
-	sb.WriteString("\nCurrent user message:\n")
-	sb.WriteString(strings.TrimSpace(userInput))
-	sb.WriteString("\n\nCompose the best possible assistant reply.\n")
-	return sb.String(), nil
+	var sb strings.Builder
+	for i, rec := range records {
+		content := strings.TrimSpace(rec.Content)
+		if content == "" {
+			continue
+		}
+		role := metadataRole(rec.Metadata)
+		sb.WriteString(fmt.Sprintf("%d. [%s] %s\n", i+1, role, escapePromptContent(content)))
+	}
+	return sb.String()
+}
+
+// escapePromptContent safely escapes content that might break formatting.
+func escapePromptContent(s string) string {
+	// Minimal escaping to avoid unbalanced backticks or weird JSON
+	s = strings.ReplaceAll(s, "`", "'")
+	return s
 }
 
 func (a *Agent) handleCommand(ctx context.Context, sessionID, userInput string) (bool, string, map[string]string, error) {

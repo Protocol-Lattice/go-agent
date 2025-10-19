@@ -94,7 +94,7 @@ func main() {
 			return
 		}
 
-		response, err := agent.Respond(ctx, "quickstart-session", line)
+		response, err := agent.Respond(ctx, "", line)
 		if err != nil {
 			fmt.Printf("error: %v\n", err)
 			continue
