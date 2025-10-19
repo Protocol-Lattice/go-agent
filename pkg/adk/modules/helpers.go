@@ -53,7 +53,25 @@ func InQdrantMemory(window int, baseURL string, collection string) *MemoryModule
 		mem.WithEmbedder(memory.DummyEmbedder{})
 		return mem, nil
 	}
-	return NewMemoryModule("memory", provider)
+	return NewMemoryModule("qdrant", provider)
+}
+
+func InPostgresMemory(ctx context.Context, window int, connStr string) *MemoryModule {
+	provider := func(context.Context) (*memory.SessionMemory, error) {
+		ps, err := memory.NewPostgresStore(ctx, connStr)
+		if err != nil {
+			return nil, err
+		}
+		bank := memory.NewMemoryBankWithStore(ps)
+		size := window
+		if size <= 0 {
+			size = 8
+		}
+		mem := memory.NewSessionMemory(bank, size)
+		mem.WithEmbedder(memory.DummyEmbedder{})
+		return mem, nil
+	}
+	return NewMemoryModule("postgres", provider)
 }
 
 // StaticToolProvider wraps a fixed tool slice and optional catalog into a
