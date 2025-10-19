@@ -44,7 +44,7 @@ Whether you are experimenting locally or embedding agents inside an existing ser
 cmd/demo              # CLI entry point that configures and drives the runtime
 cmd/quickstart        # Zero-config sample wired through the high-level kit
 pkg/
-├── kit               # Modular Agent Development Kit and module interfaces
+├── adk               # Modular Agent Development Kit and module interfaces
 ├── runtime          # High-level runtime + session management
 ├── agent            # Coordinator agent, tool routing, sub-agent delegation
 ├── memory           # Memory engine, vector-store adapters, pruning strategies
