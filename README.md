@@ -31,6 +31,7 @@ Whether you are experimenting locally or embedding agents inside an existing ser
 
 ## Key Features
 - **Runtime orchestration** – `pkg/runtime` exposes a single entry point for constructing an agent runtime with configurable models, tools, memory engines, and sub-agent registries. A thread-safe session manager keeps execution deterministic.
+- **Modular Agent Development Kit** – `pkg/adk` layers a pluggable module system on top of the existing runtime, memory, model, and tool abstractions so you can compose deployments with a few declarative options.
 - **Coordinator + specialists** – `pkg/agent` contains the core coordinator logic, while `pkg/subagents` demonstrates how to plug in specialist personas (for example, a researcher) through a `ToolCatalog` and `SubAgentDirectory` abstraction.
 - **Tooling ecosystem** – Implement the `agent.Tool` interface and register implementations (echo, calculator, clock, etc.) under `pkg/tools`. Tools become available to the coordinator prompt automatically.
 - **Retrieval-augmented memory** – `pkg/memory` layers importance scoring, weighted retrieval (similarity, recency, source, importance), maximal marginal relevance, summarisation, and pruning strategies over pluggable vector stores (PostgreSQL + pgvector, Qdrant, in-memory).
@@ -41,7 +42,9 @@ Whether you are experimenting locally or embedding agents inside an existing ser
 ## Architecture Overview
 ```
 cmd/demo              # CLI entry point that configures and drives the runtime
+cmd/quickstart        # Zero-config sample wired through the high-level kit
 pkg/
+├── kit               # Modular Agent Development Kit and module interfaces
 ├── runtime          # High-level runtime + session management
 ├── agent            # Coordinator agent, tool routing, sub-agent delegation
 ├── memory           # Memory engine, vector-store adapters, pruning strategies
@@ -109,11 +112,36 @@ go run ./cmd/demo --dsn "$DATABASE_URL"
 ```
 Flags let you customise the coordinator model (`--model`), session identifier (`--session`), context limit (`--context`), and short-term memory window (`--window`). Provide additional prompts as positional arguments to override the default script.
 
+### Try the Zero-Config Kit Quickstart
+Spin up an in-memory agent (dummy model + echo tool) using the new modular kit:
+
+```bash
+go run ./cmd/quickstart
+```
+
+Edit `cmd/quickstart/main.go` to swap models, register additional tools, or plug in real memory stores without changing the application scaffolding.
+
 ## Configuration & Extensibility
 - **Swap language models** – Implement `models.Agent` or use bundled adapters (Gemini, Anthropic, Ollama). Provide a loader via `runtime.WithCoordinatorModel`.
 - **Add or remove tools** – Implement `agent.Tool` and pass them with `runtime.WithTools`. Tools follow the `tool:<name>` invocation pattern.
 - **Register sub-agents** – Add `agent.SubAgent` implementations with `runtime.WithSubAgents` and delegate in conversation with `subagent:<name> do something`.
 - **Memory backends** – Use the built-in in-memory default or supply a custom `runtime.WithMemoryFactory` / `runtime.WithSessionMemoryBuilder` for Postgres, Qdrant, or bespoke vector stores.
+
+### Building with Modules
+The `pkg/adk` package introduces a lightweight module system so you can provision capabilities declaratively:
+
+```go
+kitInstance, _ := kit.New(ctx,
+    kit.WithModules(
+        modules.NewModelModule("coordinator", modules.StaticModelProvider(models.NewDummyLLM("Coordinator:"))),
+        modules.InMemoryMemoryModule(8),
+        modules.NewToolModule("default-tools", modules.StaticToolProvider([]agent.Tool{&tools.EchoTool{}}, nil)),
+    ),
+)
+agent, _ := kitInstance.BuildAgent(ctx)
+```
+
+Modules can register custom providers for models, memory, tools, sub-agents, or even the runtime itself. Combine them with `kit.WithAgentOptions` to push shared defaults (system prompts, UTCP clients, etc.) across every agent you build.
 
 ## Advanced Memory Engine
 The `pkg/memory` package exposes an `Engine` that composes retrieval heuristics, clustering, and pruning on top of any `VectorStore`.
