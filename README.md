@@ -113,7 +113,7 @@ go run ./cmd/demo --dsn "$DATABASE_URL"
 Flags let you customise the coordinator model (`--model`), session identifier (`--session`), context limit (`--context`), and short-term memory window (`--window`). Provide additional prompts as positional arguments to override the default script.
 
 ### Try the Zero-Config Kit Quickstart
-Spin up an in-memory agent (dummy model + echo tool) using the new modular kit:
+Spin up an in-memory agent (Gemini model + echo tool) using the new modular kit:
 
 ```bash
 go run ./cmd/quickstart
@@ -131,14 +131,14 @@ Edit `cmd/quickstart/main.go` to swap models, register additional tools, or plug
 The `pkg/adk` package introduces a lightweight module system so you can provision capabilities declaratively:
 
 ```go
-kitInstance, _ := kit.New(ctx,
+adk_agent, _ := adk.New(ctx,
     kit.WithModules(
         modules.NewModelModule("coordinator", modules.StaticModelProvider(models.NewDummyLLM("Coordinator:"))),
         modules.InMemoryMemoryModule(8),
         modules.NewToolModule("default-tools", modules.StaticToolProvider([]agent.Tool{&tools.EchoTool{}}, nil)),
     ),
 )
-agent, _ := kitInstance.BuildAgent(ctx)
+agent, _ := adk_agent.BuildAgent(ctx)
 ```
 
 Modules can register custom providers for models, memory, tools, sub-agents, or even the runtime itself. Combine them with `kit.WithAgentOptions` to push shared defaults (system prompts, UTCP clients, etc.) across every agent you build.
