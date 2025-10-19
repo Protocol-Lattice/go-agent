@@ -28,7 +28,7 @@ func StaticMemoryProvider(mem *memory.SessionMemory) kit.MemoryProvider {
 // InMemoryMemoryModule constructs a memory module backed by the in-memory
 // store. A new memory bank is created for each request which keeps agents
 // isolated by default.
-func InMemoryMemoryModule(window int) *MemoryModule {
+func InMemoryMemoryModule(window int, embeeder memory.Embedder) *MemoryModule {
 	provider := func(context.Context) (*memory.SessionMemory, error) {
 		bank := memory.NewMemoryBankWithStore(memory.NewInMemoryStore())
 		size := window
@@ -36,13 +36,13 @@ func InMemoryMemoryModule(window int) *MemoryModule {
 			size = 8
 		}
 		mem := memory.NewSessionMemory(bank, size)
-		mem.WithEmbedder(memory.DummyEmbedder{})
+		mem.WithEmbedder(embeeder)
 		return mem, nil
 	}
 	return NewMemoryModule("memory", provider)
 }
 
-func InQdrantMemory(window int, baseURL string, collection string) *MemoryModule {
+func InQdrantMemory(window int, baseURL string, collection string, embeeder memory.Embedder) *MemoryModule {
 	provider := func(context.Context) (*memory.SessionMemory, error) {
 		bank := memory.NewMemoryBankWithStore(memory.NewQdrantStore(baseURL, collection, ""))
 		size := window
@@ -50,13 +50,13 @@ func InQdrantMemory(window int, baseURL string, collection string) *MemoryModule
 			size = 8
 		}
 		mem := memory.NewSessionMemory(bank, size)
-		mem.WithEmbedder(memory.DummyEmbedder{})
+		mem.WithEmbedder(embeeder)
 		return mem, nil
 	}
 	return NewMemoryModule("qdrant", provider)
 }
 
-func InPostgresMemory(ctx context.Context, window int, connStr string) *MemoryModule {
+func InPostgresMemory(ctx context.Context, window int, connStr string, embeeder memory.Embedder) *MemoryModule {
 	provider := func(context.Context) (*memory.SessionMemory, error) {
 		ps, err := memory.NewPostgresStore(ctx, connStr)
 		if err != nil {
@@ -68,7 +68,7 @@ func InPostgresMemory(ctx context.Context, window int, connStr string) *MemoryMo
 			size = 8
 		}
 		mem := memory.NewSessionMemory(bank, size)
-		mem.WithEmbedder(memory.DummyEmbedder{})
+		mem.WithEmbedder(embeeder)
 		return mem, nil
 	}
 	return NewMemoryModule("postgres", provider)

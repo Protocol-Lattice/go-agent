@@ -8,6 +8,7 @@ import (
 	"github.com/Raezil/go-agent-development-kit/pkg/adk"
 	kitmodules "github.com/Raezil/go-agent-development-kit/pkg/adk/modules"
 	"github.com/Raezil/go-agent-development-kit/pkg/agent"
+	"github.com/Raezil/go-agent-development-kit/pkg/memory"
 	"github.com/Raezil/go-agent-development-kit/pkg/models"
 	"github.com/Raezil/go-agent-development-kit/pkg/subagents"
 	"github.com/Raezil/go-agent-development-kit/pkg/tools"
@@ -24,7 +25,7 @@ func TestKitBuildAgent(t *testing.T) {
 		adk.WithDefaultContextLimit(6),
 		adk.WithModules(
 			kitmodules.NewModelModule("coordinator", kitmodules.StaticModelProvider(models.NewDummyLLM("Coordinator:"))),
-			kitmodules.InMemoryMemoryModule(4),
+			kitmodules.InMemoryMemoryModule(4, memory.DummyEmbedder{}),
 			kitmodules.NewToolModule("echo", kitmodules.StaticToolProvider([]agent.Tool{&tools.EchoTool{}}, nil)),
 			kitmodules.NewSubAgentModule("researcher", kitmodules.StaticSubAgentProvider([]agent.SubAgent{subagents.NewResearcher(researcherModel)}, nil)),
 		),

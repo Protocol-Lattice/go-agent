@@ -12,6 +12,7 @@ import (
 	"github.com/Raezil/go-agent-development-kit/pkg/adk"
 	adkmodules "github.com/Raezil/go-agent-development-kit/pkg/adk/modules"
 	"github.com/Raezil/go-agent-development-kit/pkg/agent"
+	"github.com/Raezil/go-agent-development-kit/pkg/memory"
 	"github.com/Raezil/go-agent-development-kit/pkg/models"
 	"github.com/Raezil/go-agent-development-kit/pkg/tools"
 )
@@ -32,7 +33,7 @@ func main() {
 				}
 				return researcherModel, nil
 			}),
-			adkmodules.InQdrantMemory(100000, *qdrantURL, *qdrantCollection),
+			adkmodules.InQdrantMemory(100000, *qdrantURL, *qdrantCollection, memory.AutoEmbedder()),
 			adkmodules.NewToolModule("essentials", adkmodules.StaticToolProvider([]agent.Tool{&tools.EchoTool{}}, nil)),
 		),
 	)
