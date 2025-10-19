@@ -22,65 +22,174 @@ type MemoryBankFactory func(ctx context.Context, connStr string) (*memory.Memory
 // SessionMemoryFactory wraps the memory bank with a short-term cache implementation.
 type SessionMemoryFactory func(bank *memory.MemoryBank, window int) *memory.SessionMemory
 
-// Config controls how a Runtime instance is constructed.
-type Config struct {
-	DSN                  string
-	SchemaPath           string
-	SessionWindow        int
-	ContextLimit         int
-	SystemPrompt         string
-	CoordinatorModel     ModelLoader
-	Tools                []agent.Tool
-	SubAgents            []agent.SubAgent
-	MemoryFactory        MemoryBankFactory
-	SessionMemoryBuilder SessionMemoryFactory
-	UTCPClient           utcp.UtcpClientInterface
+// Option configures runtime construction.
+type Option func(*config)
+
+type config struct {
+	dsn                  string
+	schemaPath           string
+	sessionWindow        int
+	contextLimit         int
+	systemPrompt         string
+	coordinatorModel     ModelLoader
+	tools                []agent.Tool
+	subAgents            []agent.SubAgent
+	memoryFactory        MemoryBankFactory
+	sessionMemoryFactory SessionMemoryFactory
+	utcpClient           utcp.UtcpClientInterface
 }
 
-// Validate ensures the configuration has the minimum information required to build a runtime.
-func (c Config) Validate() error {
-	if c.CoordinatorModel == nil {
+func defaultConfig() *config {
+	return &config{
+		sessionWindow:        8,
+		contextLimit:         8,
+		systemPrompt:         "You are the primary coordinator for an AI agent team.",
+		memoryFactory:        defaultMemoryFactory,
+		sessionMemoryFactory: memory.NewSessionMemory,
+	}
+}
+
+func (c *config) validate() error {
+	if c.coordinatorModel == nil {
 		return errors.New("runtime requires a coordinator model loader")
 	}
-	if c.MemoryFactory == nil && strings.TrimSpace(c.DSN) == "" {
-		return errors.New("runtime requires a Postgres DSN when MemoryFactory is not provided")
+	if c.memoryFactory == nil {
+		return errors.New("runtime requires a memory factory")
 	}
 	return nil
 }
 
-func (c Config) sessionWindow() int {
-	if c.SessionWindow <= 0 {
+func (c *config) sessionWindowValue() int {
+	if c.sessionWindow <= 0 {
 		return 8
 	}
-	return c.SessionWindow
+	return c.sessionWindow
 }
 
-func (c Config) contextLimit() int {
-	if c.ContextLimit <= 0 {
+func (c *config) contextLimitValue() int {
+	if c.contextLimit <= 0 {
 		return 8
 	}
-	return c.ContextLimit
+	return c.contextLimit
 }
 
-func (c Config) systemPrompt() string {
-	if strings.TrimSpace(c.SystemPrompt) == "" {
+func (c *config) systemPromptValue() string {
+	if strings.TrimSpace(c.systemPrompt) == "" {
 		return "You are the primary coordinator for an AI agent team."
 	}
-	return c.SystemPrompt
+	return c.systemPrompt
 }
 
-func (c Config) memoryFactory() MemoryBankFactory {
-	if c.MemoryFactory != nil {
-		return c.MemoryFactory
+func (c *config) memoryFactoryFunc() MemoryBankFactory {
+	if c.memoryFactory != nil {
+		return c.memoryFactory
 	}
-	return memory.NewMemoryBank
+	return defaultMemoryFactory
 }
 
-func (c Config) sessionMemoryFactory() SessionMemoryFactory {
-	if c.SessionMemoryBuilder != nil {
-		return c.SessionMemoryBuilder
+func (c *config) sessionMemoryFactoryFunc() SessionMemoryFactory {
+	if c.sessionMemoryFactory != nil {
+		return c.sessionMemoryFactory
 	}
 	return memory.NewSessionMemory
+}
+
+func defaultMemoryFactory(ctx context.Context, connStr string) (*memory.MemoryBank, error) {
+	if strings.TrimSpace(connStr) == "" {
+		return memory.NewMemoryBankWithStore(memory.NewInMemoryStore()), nil
+	}
+	return memory.NewMemoryBank(ctx, connStr)
+}
+
+// WithDSN configures the connection string for the default memory factory.
+func WithDSN(dsn string) Option {
+	return func(c *config) {
+		c.dsn = strings.TrimSpace(dsn)
+	}
+}
+
+// WithSchemaPath configures an optional schema path applied after the memory bank is created.
+func WithSchemaPath(path string) Option {
+	return func(c *config) {
+		c.schemaPath = strings.TrimSpace(path)
+	}
+}
+
+// WithSessionWindow overrides the short-term memory window size.
+func WithSessionWindow(window int) Option {
+	return func(c *config) {
+		c.sessionWindow = window
+	}
+}
+
+// WithContextLimit overrides how many records are retrieved from memory when generating prompts.
+func WithContextLimit(limit int) Option {
+	return func(c *config) {
+		c.contextLimit = limit
+	}
+}
+
+// WithSystemPrompt replaces the default coordinator system prompt.
+func WithSystemPrompt(prompt string) Option {
+	return func(c *config) {
+		c.systemPrompt = prompt
+	}
+}
+
+// WithCoordinatorModel sets the loader responsible for constructing the coordinator model.
+func WithCoordinatorModel(loader ModelLoader) Option {
+	return func(c *config) {
+		c.coordinatorModel = loader
+	}
+}
+
+// WithTools registers one or more tools with the runtime.
+func WithTools(tools ...agent.Tool) Option {
+	return func(c *config) {
+		for _, tool := range tools {
+			if tool == nil {
+				continue
+			}
+			c.tools = append(c.tools, tool)
+		}
+	}
+}
+
+// WithSubAgents registers specialist sub-agents with the runtime.
+func WithSubAgents(subAgents ...agent.SubAgent) Option {
+	return func(c *config) {
+		for _, sa := range subAgents {
+			if sa == nil {
+				continue
+			}
+			c.subAgents = append(c.subAgents, sa)
+		}
+	}
+}
+
+// WithMemoryFactory supplies a custom memory bank factory.
+func WithMemoryFactory(factory MemoryBankFactory) Option {
+	return func(c *config) {
+		if factory != nil {
+			c.memoryFactory = factory
+		}
+	}
+}
+
+// WithSessionMemoryBuilder supplies a custom session memory builder.
+func WithSessionMemoryBuilder(builder SessionMemoryFactory) Option {
+	return func(c *config) {
+		if builder != nil {
+			c.sessionMemoryFactory = builder
+		}
+	}
+}
+
+// WithUTCPClient attaches a UTCP client instance to the runtime.
+func WithUTCPClient(client utcp.UtcpClientInterface) Option {
+	return func(c *config) {
+		c.utcpClient = client
+	}
 }
 
 // Runtime wires together models, tools, memory and sub-agents into a cohesive execution environment.
@@ -92,27 +201,34 @@ type Runtime struct {
 	sessions *sessionManager
 }
 
-// New builds a runtime based on the supplied configuration.
-func New(ctx context.Context, cfg Config) (*Runtime, error) {
-	if err := cfg.Validate(); err != nil {
+// New builds a runtime based on the supplied configuration options.
+func New(ctx context.Context, opts ...Option) (*Runtime, error) {
+	cfg := defaultConfig()
+	for _, opt := range opts {
+		if opt != nil {
+			opt(cfg)
+		}
+	}
+
+	if err := cfg.validate(); err != nil {
 		return nil, err
 	}
 
-	bank, err := cfg.memoryFactory()(ctx, cfg.DSN)
+	bank, err := cfg.memoryFactoryFunc()(ctx, cfg.dsn)
 	if err != nil {
 		return nil, fmt.Errorf("create memory bank: %w", err)
 	}
 
-	if cfg.SchemaPath != "" {
-		if err := bank.CreateSchema(ctx, cfg.SchemaPath); err != nil {
+	if cfg.schemaPath != "" {
+		if err := bank.CreateSchema(ctx, cfg.schemaPath); err != nil {
 			bank.Close()
 			return nil, fmt.Errorf("apply schema: %w", err)
 		}
 	}
 
-	sessionMemory := cfg.sessionMemoryFactory()(bank, cfg.sessionWindow())
+	sessionMemory := cfg.sessionMemoryFactoryFunc()(bank, cfg.sessionWindowValue())
 
-	coordinator, err := cfg.CoordinatorModel(ctx)
+	coordinator, err := cfg.coordinatorModel(ctx)
 	if err != nil {
 		bank.Close()
 		return nil, fmt.Errorf("load coordinator model: %w", err)
@@ -121,11 +237,11 @@ func New(ctx context.Context, cfg Config) (*Runtime, error) {
 	agentInstance, err := agent.New(agent.Options{
 		Model:        coordinator,
 		Memory:       sessionMemory,
-		SystemPrompt: cfg.systemPrompt(),
-		ContextLimit: cfg.contextLimit(),
-		Tools:        append([]agent.Tool(nil), cfg.Tools...),
-		SubAgents:    append([]agent.SubAgent(nil), cfg.SubAgents...),
-		UTCPClient:   cfg.UTCPClient,
+		SystemPrompt: cfg.systemPromptValue(),
+		ContextLimit: cfg.contextLimitValue(),
+		Tools:        append([]agent.Tool(nil), cfg.tools...),
+		SubAgents:    append([]agent.SubAgent(nil), cfg.subAgents...),
+		UTCPClient:   cfg.utcpClient,
 	})
 	if err != nil {
 		bank.Close()
