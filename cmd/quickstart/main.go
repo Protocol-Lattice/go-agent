@@ -22,7 +22,6 @@ func main() {
 	qdrantCollection := flag.String("qdrant-collection", "adk_memories", "Qdrant collection name")
 	flag.Parse()
 	ctx := context.Background()
-
 	adk, err := adk.New(ctx,
 		adk.WithDefaultSystemPrompt("You orchestrate a helpful assistant team."),
 		adk.WithModules(

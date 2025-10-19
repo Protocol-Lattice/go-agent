@@ -8,6 +8,9 @@ import (
 
 	"github.com/Raezil/go-agent-development-kit/pkg/agent"
 	"github.com/Raezil/go-agent-development-kit/pkg/runtime"
+	"github.com/universal-tool-calling-protocol/go-utcp"
+	"github.com/universal-tool-calling-protocol/go-utcp/src/tools"
+	"github.com/universal-tool-calling-protocol/go-utcp/src/transports"
 )
 
 const defaultCoordinatorPrompt = "You are the primary coordinator for an AI agent team. Provide concise, accurate answers and explain when you call tools or delegate work to specialist sub-agents."
@@ -31,6 +34,7 @@ type AgentDevelopmentKit struct {
 	defaultContextLimit int
 
 	agentOptions []AgentOption
+	UTCP         utcp.UtcpClientInterface
 }
 
 // New constructs a kit, applies the provided options and bootstraps registered
@@ -400,4 +404,16 @@ func (k *AgentDevelopmentKit) Runtime(ctx context.Context) (*runtime.Runtime, er
 		return nil, fmt.Errorf("runtime provider: %w", err)
 	}
 	return runtime, nil
+}
+
+func (adk *AgentDevelopmentKit) CallTool(ctx context.Context, toolName string, args map[string]any) (any, error) {
+	return adk.UTCP.CallTool(ctx, toolName, args)
+}
+
+func (adk *AgentDevelopmentKit) CallToolStream(ctx context.Context, toolName string, args map[string]any) (transports.StreamResult, error) {
+	return adk.UTCP.CallToolStream(ctx, toolName, args)
+}
+
+func (adk *AgentDevelopmentKit) SearchTools(query string, limit int) ([]tools.Tool, error) {
+	return adk.UTCP.SearchTools(query, limit)
 }

@@ -1,5 +1,7 @@
 package adk
 
+import "github.com/universal-tool-calling-protocol/go-utcp"
+
 // Option configures the AgentDevelopmentKit during construction.
 type Option func(*AgentDevelopmentKit) error
 
@@ -46,6 +48,13 @@ func WithAgentOptions(opts ...AgentOption) Option {
 		for _, opt := range opts {
 			kit.UseAgentOption(opt)
 		}
+		return nil
+	}
+}
+
+func WithUTCP(client utcp.UtcpClientInterface) Option {
+	return func(kit *AgentDevelopmentKit) error {
+		kit.UTCP = client
 		return nil
 	}
 }
