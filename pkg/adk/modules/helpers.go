@@ -22,68 +22,96 @@ func StaticModelProvider(model models.Agent) kit.ModelProvider {
 // StaticMemoryProvider returns a provider that always yields the supplied
 // session memory instance.
 func StaticMemoryProvider(mem *memory.SessionMemory) kit.MemoryProvider {
-	return func(context.Context) (*memory.SessionMemory, error) {
-		return mem, nil
+	shared := func(local string, spaces ...string) *memory.SharedSession {
+		if mem == nil {
+			return nil
+		}
+		return memory.NewSharedSession(mem, local, spaces...)
+	}
+	return func(context.Context) (kit.MemoryBundle, error) {
+		return kit.MemoryBundle{Session: mem, Shared: shared}, nil
 	}
 }
 
 // InMemoryMemoryModule constructs a memory module backed by the in-memory
-// store. A new memory bank is created for each request which keeps agents
-// isolated by default.
+// store. The underlying bank is initialised once and reused so agents built
+// from the same kit share memories and collaborative spaces.
 func InMemoryMemoryModule(window int, embeeder memory.Embedder, opts *memory.Options) *MemoryModule {
-	provider := func(context.Context) (*memory.SessionMemory, error) {
-		bank := memory.NewMemoryBankWithStore(memory.NewInMemoryStore())
-		size := window
-		if size <= 0 {
-			size = 8
+	size := window
+	if size <= 0 {
+		size = 8
+	}
+	bank := memory.NewMemoryBankWithStore(memory.NewInMemoryStore())
+	mem := memory.NewSessionMemory(bank, size)
+	mem.WithEmbedder(embeeder)
+	engine := memory.NewEngine(bank.Store, *opts)
+	mem.WithEngine(engine)
+	engineLogger := log.New(os.Stderr, "memory-engine: ", log.LstdFlags)
+	mem.Engine.WithLogger(engineLogger)
+
+	provider := func(context.Context) (kit.MemoryBundle, error) {
+		shared := func(local string, spaces ...string) *memory.SharedSession {
+			return memory.NewSharedSession(mem, local, spaces...)
 		}
-		mem := memory.NewSessionMemory(bank, size)
-		mem.WithEmbedder(embeeder)
-		engine := memory.NewEngine(bank.Store, *opts)
-		mem.WithEngine(engine)
-		engineLogger := log.New(os.Stderr, "memory-engine: ", log.LstdFlags)
-		mem.Engine.WithLogger(engineLogger)
-		return mem, nil
+		return kit.MemoryBundle{Session: mem, Shared: shared}, nil
 	}
 	return NewMemoryModule("memory", provider)
 }
 
 func InQdrantMemory(window int, baseURL string, collection string, embeeder memory.Embedder, opts *memory.Options) *MemoryModule {
-	provider := func(context.Context) (*memory.SessionMemory, error) {
-		bank := memory.NewMemoryBankWithStore(memory.NewQdrantStore(baseURL, collection, ""))
-		size := window
-		if size <= 0 {
-			size = 8
+	size := window
+	if size <= 0 {
+		size = 8
+	}
+	bank := memory.NewMemoryBankWithStore(memory.NewQdrantStore(baseURL, collection, ""))
+	mem := memory.NewSessionMemory(bank, size)
+	mem.WithEmbedder(embeeder)
+	engine := memory.NewEngine(bank.Store, *opts)
+	mem.WithEngine(engine)
+	engineLogger := log.New(os.Stderr, "memory-engine: ", log.LstdFlags)
+	mem.Engine.WithLogger(engineLogger)
+
+	provider := func(context.Context) (kit.MemoryBundle, error) {
+		shared := func(local string, spaces ...string) *memory.SharedSession {
+			return memory.NewSharedSession(mem, local, spaces...)
 		}
-		mem := memory.NewSessionMemory(bank, size)
-		mem.WithEmbedder(embeeder)
-		engine := memory.NewEngine(bank.Store, *opts)
-		mem.WithEngine(engine)
-		engineLogger := log.New(os.Stderr, "memory-engine: ", log.LstdFlags)
-		mem.Engine.WithLogger(engineLogger)
-		return mem, nil
+		return kit.MemoryBundle{Session: mem, Shared: shared}, nil
 	}
 	return NewMemoryModule("qdrant", provider)
 }
 
 func InPostgresMemory(ctx context.Context, window int, connStr string, embeeder memory.Embedder, opts *memory.Options) *MemoryModule {
-	provider := func(context.Context) (*memory.SessionMemory, error) {
-		ps, err := memory.NewPostgresStore(ctx, connStr)
-		if err != nil {
-			return nil, err
+	var (
+		cached    *memory.SessionMemory
+		cachedErr error
+	)
+	provider := func(context.Context) (kit.MemoryBundle, error) {
+		if cached == nil && cachedErr == nil {
+			ps, err := memory.NewPostgresStore(ctx, connStr)
+			if err != nil {
+				cachedErr = err
+				return kit.MemoryBundle{}, err
+			}
+			bank := memory.NewMemoryBankWithStore(ps)
+			size := window
+			if size <= 0 {
+				size = 8
+			}
+			mem := memory.NewSessionMemory(bank, size)
+			mem.WithEmbedder(embeeder)
+			engine := memory.NewEngine(bank.Store, *opts)
+			mem.WithEngine(engine)
+			engineLogger := log.New(os.Stderr, "memory-engine: ", log.LstdFlags)
+			mem.Engine.WithLogger(engineLogger)
+			cached = mem
 		}
-		bank := memory.NewMemoryBankWithStore(ps)
-		size := window
-		if size <= 0 {
-			size = 8
+		if cached == nil {
+			return kit.MemoryBundle{}, cachedErr
 		}
-		mem := memory.NewSessionMemory(bank, size)
-		mem.WithEmbedder(embeeder)
-		engine := memory.NewEngine(bank.Store, *opts)
-		mem.WithEngine(engine)
-		engineLogger := log.New(os.Stderr, "memory-engine: ", log.LstdFlags)
-		mem.Engine.WithLogger(engineLogger)
-		return mem, nil
+		shared := func(local string, spaces ...string) *memory.SharedSession {
+			return memory.NewSharedSession(cached, local, spaces...)
+		}
+		return kit.MemoryBundle{Session: cached, Shared: shared}, nil
 	}
 	return NewMemoryModule("postgres", provider)
 }

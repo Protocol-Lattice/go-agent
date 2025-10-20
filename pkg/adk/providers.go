@@ -12,8 +12,22 @@ import (
 // ModelProvider constructs a language model used by the coordinator agent.
 type ModelProvider func(ctx context.Context) (models.Agent, error)
 
-// MemoryProvider provisions the conversational memory layer used by agents.
-type MemoryProvider func(ctx context.Context) (*memory.SessionMemory, error)
+// SharedSessionFactory builds collaborative session views on top of the base
+// session memory. It mirrors memory.NewSharedSession but lets providers expose
+// preconfigured factories (for example to reuse ACL registries or custom
+// defaults).
+type SharedSessionFactory func(local string, spaces ...string) *memory.SharedSession
+
+// MemoryBundle groups the session memory used by the coordinator together with
+// an optional shared-session factory so callers can join collaborative spaces.
+type MemoryBundle struct {
+	Session *memory.SessionMemory
+	Shared  SharedSessionFactory
+}
+
+// MemoryProvider provisions the conversational memory layer used by agents and
+// optionally exposes helper factories to construct shared sessions.
+type MemoryProvider func(ctx context.Context) (MemoryBundle, error)
 
 // ToolBundle describes the tool catalog and the concrete tool instances
 // contributed by a module. Catalog may be nil meaning the default catalog
