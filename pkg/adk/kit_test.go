@@ -146,3 +146,71 @@ func TestKitWithSubAgentsOption(t *testing.T) {
 		t.Fatalf("unexpected subagent name %q", name)
 	}
 }
+
+func TestKitSharedSession(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	memoryOpts := DefaultMemoryOptions()
+	kitInstance, err := adk.New(ctx,
+		adk.WithModules(
+			kitmodules.NewModelModule("coordinator", kitmodules.StaticModelProvider(models.NewDummyLLM("Coordinator:"))),
+			kitmodules.InMemoryMemoryModule(4, memory.DummyEmbedder{}, &memoryOpts),
+		),
+	)
+	if err != nil {
+		t.Fatalf("kit.New: %v", err)
+	}
+
+	provider := kitInstance.MemoryProvider()
+	if provider == nil {
+		t.Fatalf("expected memory provider")
+	}
+	bundle, err := provider(ctx)
+	if err != nil {
+		t.Fatalf("memory provider: %v", err)
+	}
+	if bundle.Session == nil {
+		t.Fatalf("memory bundle missing session")
+	}
+
+	if err := bundle.Session.Spaces.Grant("team:shared", "agent:alpha", memory.SpaceRoleAdmin, 0); err != nil {
+		t.Fatalf("grant alpha: %v", err)
+	}
+	if err := bundle.Session.Spaces.Grant("team:shared", "agent:beta", memory.SpaceRoleAdmin, 0); err != nil {
+		t.Fatalf("grant beta: %v", err)
+	}
+
+	alpha, err := kitInstance.SharedSession(ctx, "agent:alpha", "team:shared")
+	if err != nil {
+		t.Fatalf("SharedSession alpha: %v", err)
+	}
+	beta, err := kitInstance.SharedSession(ctx, "agent:beta", "team:shared")
+	if err != nil {
+		t.Fatalf("SharedSession beta: %v", err)
+	}
+
+	if err := alpha.AddShortTo("team:shared", "Shared context about refactoring", map[string]string{"source": "test"}); err != nil {
+		t.Fatalf("alpha AddShortTo: %v", err)
+	}
+
+	records, err := beta.Retrieve(ctx, "refactoring", 5)
+	if err != nil {
+		t.Fatalf("beta Retrieve: %v", err)
+	}
+	if len(records) == 0 {
+		t.Fatalf("expected shared records, got none")
+	}
+
+	found := false
+	for _, rec := range records {
+		if strings.Contains(rec.Content, "Shared context") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("shared memory not retrieved: %+v", records)
+	}
+}

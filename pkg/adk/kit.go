@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/Raezil/go-agent-development-kit/pkg/agent"
+	"github.com/Raezil/go-agent-development-kit/pkg/memory"
 	"github.com/Raezil/go-agent-development-kit/pkg/runtime"
 	"github.com/universal-tool-calling-protocol/go-utcp"
 	"github.com/universal-tool-calling-protocol/go-utcp/src/tools"
@@ -26,6 +27,8 @@ type AgentDevelopmentKit struct {
 
 	modelProvider    ModelProvider
 	memoryProvider   MemoryProvider
+	memoryInstance   *memory.SessionMemory
+	sharedFactory    SharedSessionFactory
 	toolProviders    []ToolProvider
 	subAgentProvider []SubAgentProvider
 	runtimeProvider  RuntimeProvider
@@ -285,10 +288,22 @@ func (k *AgentDevelopmentKit) BuildAgent(ctx context.Context, opts ...AgentOptio
 		return nil, fmt.Errorf("model provider: %w", err)
 	}
 
-	memory, err := memoryProvider(ctx)
+	bundle, err := memoryProvider(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("memory provider: %w", err)
 	}
+	if bundle.Session == nil {
+		return nil, fmt.Errorf("memory provider: session memory is nil")
+	}
+
+	k.mu.Lock()
+	if k.memoryInstance == nil {
+		k.memoryInstance = bundle.Session
+	}
+	if bundle.Shared != nil {
+		k.sharedFactory = bundle.Shared
+	}
+	k.mu.Unlock()
 
 	toolBundles := make([]ToolBundle, 0, len(toolProviders))
 	for _, provider := range toolProviders {
@@ -310,7 +325,7 @@ func (k *AgentDevelopmentKit) BuildAgent(ctx context.Context, opts ...AgentOptio
 
 	agentOpts := agent.Options{
 		Model:        model,
-		Memory:       memory,
+		Memory:       bundle.Session,
 		SystemPrompt: defaultPrompt,
 		ContextLimit: defaultLimit,
 		UTCPClient:   utcp,
@@ -388,6 +403,61 @@ func (k *AgentDevelopmentKit) BuildAgent(ctx context.Context, opts ...AgentOptio
 		return nil, err
 	}
 	return built, nil
+}
+
+// SharedSession returns a collaborative session view backed by the configured
+// session memory. Agents created from the same kit can use this to read or
+// write memories in shared spaces (for example, team channels). The factory is
+// lazily initialised on first use so callers may request shared sessions before
+// or after constructing the coordinator agent.
+func (k *AgentDevelopmentKit) SharedSession(ctx context.Context, local string, spaces ...string) (*memory.SharedSession, error) {
+	if err := k.Bootstrap(ctx); err != nil {
+		return nil, err
+	}
+
+	k.mu.RLock()
+	factory := k.sharedFactory
+	memoryProvider := k.memoryProvider
+	instance := k.memoryInstance
+	k.mu.RUnlock()
+
+	if factory != nil {
+		return factory(local, spaces...), nil
+	}
+
+	if instance != nil {
+		return memory.NewSharedSession(instance, local, spaces...), nil
+	}
+
+	if memoryProvider == nil {
+		return nil, fmt.Errorf("kit requires a memory provider")
+	}
+
+	bundle, err := memoryProvider(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("memory provider: %w", err)
+	}
+	if bundle.Session == nil {
+		return nil, fmt.Errorf("memory provider: session memory is nil")
+	}
+
+	factory = bundle.Shared
+	if factory == nil {
+		factory = func(local string, spaces ...string) *memory.SharedSession {
+			return memory.NewSharedSession(bundle.Session, local, spaces...)
+		}
+	}
+
+	k.mu.Lock()
+	if k.memoryInstance == nil {
+		k.memoryInstance = bundle.Session
+	}
+	if k.sharedFactory == nil {
+		k.sharedFactory = factory
+	}
+	k.mu.Unlock()
+
+	return factory(local, spaces...), nil
 }
 
 // Runtime constructs a runtime using the configured runtime provider. If no

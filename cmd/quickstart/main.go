@@ -7,13 +7,13 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/Raezil/go-agent-development-kit/pkg/adk"
 	adkmodules "github.com/Raezil/go-agent-development-kit/pkg/adk/modules"
 	"github.com/Raezil/go-agent-development-kit/pkg/agent"
+	"github.com/Raezil/go-agent-development-kit/pkg/helpers"
 	"github.com/Raezil/go-agent-development-kit/pkg/memory"
 	"github.com/Raezil/go-agent-development-kit/pkg/models"
 	"github.com/Raezil/go-agent-development-kit/pkg/subagents"
@@ -38,6 +38,8 @@ func main() {
 	memorySourceBoost := flag.String("memory-source-boost", "", "Comma separated source=weight overrides (e.g. pagerduty=1.0,slack=0.6)")
 	memoryDisableSummaries := flag.Bool("memory-disable-summaries", false, "Disable cluster-based summarisation")
 	modelName := flag.String("model", "gemini-2.5-pro", "Gemini model ID")
+	sessionID := flag.String("session-id", "cli:quickstart", "Session identifier used to store memories for this CLI")
+	sharedSpacesFlag := flag.String("shared-spaces", "", "Comma separated shared memory spaces to collaborate in")
 
 	flag.Parse()
 	ctx := context.Background()
@@ -62,7 +64,7 @@ func main() {
 		DuplicateSimilarity: *memoryDuplicate,
 		TTL:                 *memoryTTL,
 		MaxSize:             *memoryMaxSize,
-		SourceBoost:         parseSourceBoostFlag(*memorySourceBoost),
+		SourceBoost:         helpers.ParseSourceBoostFlag(*memorySourceBoost),
 		EnableSummaries:     !*memoryDisableSummaries,
 	}
 	adk, err := adk.New(ctx,
@@ -82,6 +84,16 @@ func main() {
 	)
 	if err != nil {
 		log.Fatalf("failed to initialise kit: %v", err)
+	}
+
+	sharedSpaces := helpers.ParseCSVList(*sharedSpacesFlag)
+	shared, err := adk.SharedSession(ctx, *sessionID, sharedSpaces...)
+	if err != nil {
+		log.Fatalf("failed to attach shared session: %v", err)
+	}
+
+	if len(sharedSpaces) > 0 {
+		fmt.Printf("Sharing memories in spaces: %s\n", strings.Join(sharedSpaces, ", "))
 	}
 
 	agent, err := adk.BuildAgent(ctx)
@@ -104,36 +116,14 @@ func main() {
 			return
 		}
 
-		response, err := agent.Respond(ctx, "", line)
+		helpers.RecordPrompt(ctx, shared, sharedSpaces, "user", line)
+
+		response, err := agent.Respond(ctx, *sessionID, line)
 		if err != nil {
 			fmt.Printf("error: %v\n", err)
 			continue
 		}
 		fmt.Printf("%s\n", response)
+		helpers.RecordPrompt(ctx, shared, sharedSpaces, "agent", response)
 	}
-}
-
-func parseSourceBoostFlag(raw string) map[string]float64 {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return nil
-	}
-	boosts := make(map[string]float64)
-	pairs := strings.Split(raw, ",")
-	for _, pair := range pairs {
-		parts := strings.SplitN(pair, "=", 2)
-		if len(parts) != 2 {
-			continue
-		}
-		key := strings.ToLower(strings.TrimSpace(parts[0]))
-		value, err := strconv.ParseFloat(strings.TrimSpace(parts[1]), 64)
-		if err != nil {
-			continue
-		}
-		boosts[key] = value
-	}
-	if len(boosts) == 0 {
-		return nil
-	}
-	return boosts
 }
