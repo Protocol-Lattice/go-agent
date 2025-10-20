@@ -16,6 +16,7 @@ import (
 	"github.com/Raezil/go-agent-development-kit/pkg/agent"
 	"github.com/Raezil/go-agent-development-kit/pkg/memory"
 	"github.com/Raezil/go-agent-development-kit/pkg/models"
+	"github.com/Raezil/go-agent-development-kit/pkg/subagents"
 	"github.com/Raezil/go-agent-development-kit/pkg/tools"
 )
 
@@ -36,9 +37,17 @@ func main() {
 	memoryMaxSize := flag.Int("memory-max-size", 200000, "Maximum number of memories to retain before pruning")
 	memorySourceBoost := flag.String("memory-source-boost", "", "Comma separated source=weight overrides (e.g. pagerduty=1.0,slack=0.6)")
 	memoryDisableSummaries := flag.Bool("memory-disable-summaries", false, "Disable cluster-based summarisation")
+	modelName := flag.String("model", "gemini-2.5-pro", "Gemini model ID")
 
 	flag.Parse()
 	ctx := context.Background()
+
+	// --- 🧩 LLMs ---
+	researcherModel, err := models.NewGeminiLLM(ctx, *modelName, "Research summary:")
+	if err != nil {
+		log.Fatalf("failed to create researcher model: %v", err)
+	}
+
 	memoryOpts := memory.Options{
 		Weights: memory.ScoreWeights{
 			Similarity: *memorySimWeight,
@@ -58,6 +67,7 @@ func main() {
 	}
 	adk, err := adk.New(ctx,
 		adk.WithDefaultSystemPrompt("You orchestrate a helpful assistant team."),
+		adk.WithSubAgents(subagents.NewResearcher(researcherModel)),
 		adk.WithModules(
 			adkmodules.NewModelModule("gemini-model", func(_ context.Context) (models.Agent, error) {
 				researcherModel, err := models.NewGeminiLLM(ctx, "gemini-2.5-pro", "Research summary:")

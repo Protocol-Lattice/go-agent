@@ -1,6 +1,11 @@
 package adk
 
-import "github.com/universal-tool-calling-protocol/go-utcp"
+import (
+	"context"
+
+	"github.com/Raezil/go-agent-development-kit/pkg/agent"
+	"github.com/universal-tool-calling-protocol/go-utcp"
+)
 
 // Option configures the AgentDevelopmentKit during construction.
 type Option func(*AgentDevelopmentKit) error
@@ -48,6 +53,26 @@ func WithAgentOptions(opts ...AgentOption) Option {
 		for _, opt := range opts {
 			kit.UseAgentOption(opt)
 		}
+		return nil
+	}
+}
+
+// WithSubAgents registers one or more sub-agents directly on the kit. The
+// sub-agents are appended to the aggregated set before the coordinator agent is
+// constructed. Nil entries are ignored to simplify conditional wiring.
+func WithSubAgents(subAgents ...agent.SubAgent) Option {
+	return func(kit *AgentDevelopmentKit) error {
+		provider := func(context.Context) (SubAgentBundle, error) {
+			bundle := SubAgentBundle{}
+			for _, sa := range subAgents {
+				if sa == nil {
+					continue
+				}
+				bundle.SubAgents = append(bundle.SubAgents, sa)
+			}
+			return bundle, nil
+		}
+		kit.UseSubAgentProvider(provider)
 		return nil
 	}
 }
