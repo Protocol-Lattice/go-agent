@@ -14,9 +14,10 @@ Build production-ready AI agents in Go with a batteries-included toolkit. The Go
 3. [Architecture Overview](#architecture-overview)
 4. [Quick Start](#quick-start)
 5. [Advanced Memory Engine](#advanced-memory-engine)
-6. [Development Workflow](#development-workflow)
-7. [Troubleshooting Tips](#troubleshooting-tips)
-8. [Contributing](#contributing)
+6. [Swarm (Shared Spaces)](#swarm-shared-spaces)
+7. [Development Workflow](#development-workflow)
+8. [Troubleshooting Tips](#troubleshooting-tips)
+9. [Contributing](#contributing)
 
 ---
 
@@ -127,6 +128,7 @@ sessionMemory := memory.NewSessionMemory(memory.NewMemoryBankWithStore(store), 8
     WithEngine(engine)
 ```
 
+
 Tune retrieval with runtime flags (no YAML required):
 ```bash
 go run ./cmd/demo \
@@ -136,6 +138,16 @@ go run ./cmd/demo \
   --memory-source-boost="pagerduty=1.0,slack=0.6"
 ```
 Schema migrations rely on online-safe `ALTER TABLE ... IF NOT EXISTS` statements to avoid downtime.
+
+## Swarm (Shared Spaces)
+
+Coordinate multiple agents that **share memory across named spaces** (e.g., `team:core`, `team:project-x`).  
+Swarm uses `memory.SharedSession` on top of the session memory engine to read/write memories visible to everyone in the same space.
+
+### When to use
+- You run several cooperating agents (e.g., *alpha*, *beta*, *researcher*) and want them to see each other’s latest notes.
+- You want *shared RAG context* retrieved from a team space while still keeping local, per-session short‑term memory.
+- You need explicit access control: grant write/read access per space and per session ID.
 
 ## Development Workflow
 1. Write or update Go code.
