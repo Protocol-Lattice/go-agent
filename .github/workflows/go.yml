@@ -1,38 +1,63 @@
-name: Go
+name: Go CI
 
 on:
   push:
-    branches: [ "main" ]
+    branches: ["main"]
   pull_request:
-    branches: [ "main" ]
+    branches: ["main"]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
 
 jobs:
-  build:
+  build-test:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        go: ["1.22.x", "1.23.x", "1.24.x", "1.25.x"]
 
     steps:
-    - uses: actions/checkout@v3
+      - name: Checkout
+        uses: actions/checkout@v4
 
-    - name: Set up Go
-      uses: actions/setup-go@v4
-      with:
-        go-version: '1.25.0'
+      - name: Set up Go ${{ matrix.go }}
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go }}
+          cache: true
 
-    - name: Clear Go Module Cache
-      run: go clean -modcache
+      - name: Go env
+        run: go env
 
-    - name: Install dependencies
-      run: |
-        go get github.com/lib/pq
-        go get github.com/gorilla/mux
+      - name: Tidy modules
+        run: go mod tidy
 
-    - name: Tidy and install modules
-      run: go mod tidy
+      - name: Build (all packages)
+        run: go build -v ./...
 
-    - name: Build
-      run: go build -v ./...
+      - name: Vet
+        run: go vet ./...
 
-    - name: Run Tests with Coverage
-      run: |
-        go test -v -coverprofile=coverage.out ./...
-        go tool cover -func=coverage.out
+      - name: Test (race + coverage)
+        run: |
+          go test -v -race -covermode=atomic -coverprofile=coverage.out ./...
+          go tool cover -func=coverage.out
+
+      - name: Upload coverage artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-${{ matrix.go }}
+          path: coverage.out
+
+      - name: govulncheck
+        uses: golang/govulncheck-action@v1
+        with:
+          go-version-input: ${{ matrix.go }}
+          # Set to true to upload SARIF to Code Scanning (requires security-events: write)
+          # upload-sarif: true
