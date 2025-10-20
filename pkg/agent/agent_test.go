@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/Raezil/go-agent-development-kit/pkg/memory"
@@ -203,6 +204,52 @@ func TestAgentPropagatesCustomCatalogErrors(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatalf("expected duplicate registration error from custom catalog")
+	}
+}
+
+func TestAgentSharesMemoryAcrossSpaces(t *testing.T) {
+	ctx := context.Background()
+	bank := memory.NewMemoryBankWithStore(memory.NewInMemoryStore())
+	mem := memory.NewSessionMemory(bank, 8).WithEmbedder(memory.DummyEmbedder{})
+
+	mem.Spaces.Grant("team:shared", "agent:alpha", memory.SpaceRoleWriter, 0)
+	mem.Spaces.Grant("team:shared", "agent:beta", memory.SpaceRoleWriter, 0)
+
+	alphaShared := memory.NewSharedSession(mem, "agent:alpha", "team:shared")
+	betaShared := memory.NewSharedSession(mem, "agent:beta", "team:shared")
+
+	alphaAgent, err := New(Options{Model: &stubModel{response: "ok"}, Memory: mem, Shared: alphaShared})
+	if err != nil {
+		t.Fatalf("alpha agent: %v", err)
+	}
+	betaAgent, err := New(Options{Model: &stubModel{response: "ok"}, Memory: mem, Shared: betaShared})
+	if err != nil {
+		t.Fatalf("beta agent: %v", err)
+	}
+
+	alphaAgent.storeMemory("agent:alpha", "assistant", "Swarm update ready for review", nil)
+
+	records, err := betaShared.Retrieve(ctx, "swarm update", 5)
+	if err != nil {
+		t.Fatalf("retrieve shared: %v", err)
+	}
+	found := false
+	for _, rec := range records {
+		if strings.Contains(rec.Content, "Swarm update ready") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected shared record to be retrievable")
+	}
+
+	prompt, err := betaAgent.buildPrompt(ctx, "agent:beta", "Provide the latest swarm plan")
+	if err != nil {
+		t.Fatalf("build prompt: %v", err)
+	}
+	if !strings.Contains(prompt, "Swarm update ready for review") {
+		t.Fatalf("expected prompt to include shared memory, got: %s", prompt)
 	}
 }
 
