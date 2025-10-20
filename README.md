@@ -13,11 +13,10 @@ Build production-ready AI agents in Go with a batteries-included toolkit. The Go
 2. [Key Features](#key-features)
 3. [Architecture Overview](#architecture-overview)
 4. [Quick Start](#quick-start)
-5. [Configuration & Extensibility](#configuration--extensibility)
-6. [Advanced Memory Engine](#advanced-memory-engine)
-7. [Development Workflow](#development-workflow)
-8. [Troubleshooting Tips](#troubleshooting-tips)
-9. [Contributing](#contributing)
+5. [Advanced Memory Engine](#advanced-memory-engine)
+6. [Development Workflow](#development-workflow)
+7. [Troubleshooting Tips](#troubleshooting-tips)
+8. [Contributing](#contributing)
 
 ---
 
@@ -98,12 +97,6 @@ go run ./cmd/quickstart
 ```
 
 Edit `cmd/quickstart/main.go` to swap models, register additional tools, or plug in real memory stores without changing the application scaffolding.
-
-## Configuration & Extensibility
-- **Swap language models** – Implement `models.Agent` or use bundled adapters (Gemini, Anthropic, Ollama).
-- **Add or remove tools** – Implement `agent.Tool` and pass them with `runtime.WithTools`. Tools follow the `tool:<name>` invocation pattern.
-- **Register sub-agents** – Add `agent.SubAgent` implementations with `runtime.WithSubAgents` and delegate in conversation with `subagent:<name> do something`.
-- **Memory backends** – Use the built-in in-memory default or supply a custom `runtime.WithMemoryFactory` / `runtime.WithSessionMemoryBuilder` for Postgres, Qdrant, or bespoke vector stores.
 
 ### Building with Modules
 The `pkg/adk` package introduces a lightweight module system so you can provision capabilities declaratively:
