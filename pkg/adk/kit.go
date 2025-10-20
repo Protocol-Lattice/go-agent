@@ -36,8 +36,6 @@ type AgentDevelopmentKit struct {
 
 	agentOptions []AgentOption
 	UTCP         utcp.UtcpClientInterface
-	Shared       *memory.SharedSession
-	Spaces       []string
 }
 
 // New constructs a kit, applies the provided options and bootstraps registered
