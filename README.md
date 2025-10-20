@@ -31,7 +31,7 @@ Whether you are experimenting locally or embedding agents inside an existing ser
 
 ## Key Features
 - **Runtime orchestration** – `pkg/runtime` exposes a single entry point for constructing an agent runtime with configurable models, tools, memory engines, and sub-agent registries. A thread-safe session manager keeps execution deterministic.
-- **Modular Agent Development Kit** – `pkg/adk` layers a pluggable module system on top of the existing runtime, memory, model, and tool abstractions so you can compose deployments with a few declarative options.
+- **Modular Agent Development Kit** – `pkg/adk` layers a pluggable module system on top of the existing adk, memory, model, and tool abstractions so you can compose deployments with a few declarative options.
 - **Coordinator + specialists** – `pkg/agent` contains the core coordinator logic, while `pkg/subagents` demonstrates how to plug in specialist personas (for example, a researcher) through a `ToolCatalog` and `SubAgentDirectory` abstraction.
 - **Tooling ecosystem** – Implement the `agent.Tool` interface and register implementations (echo, calculator, clock, etc.) under `pkg/tools`. Tools become available to the coordinator prompt automatically.
 - **Retrieval-augmented memory** – `pkg/memory` layers importance scoring, weighted retrieval (similarity, recency, source, importance), maximal marginal relevance, summarisation, and pruning strategies over pluggable vector stores (PostgreSQL + pgvector, Qdrant, in-memory).
@@ -45,34 +45,12 @@ cmd/demo              # CLI entry point that configures and drives the runtime
 cmd/quickstart        # Zero-config sample wired through the high-level kit
 pkg/
 ├── adk               # Modular Agent Development Kit and module interfaces
-├── runtime          # High-level runtime + session management
 ├── agent            # Coordinator agent, tool routing, sub-agent delegation
 ├── memory           # Memory engine, vector-store adapters, pruning strategies
 ├── models           # Gemini, Anthropic, Ollama, Dummy model adapters
 ├── subagents        # Example researcher persona powered by an LLM
 └── tools            # Built-in tools (echo, calculator, time)
 ```
-At the heart of the kit is `runtime.New`. Compose the runtime with expressive functional options and the builder wires up schema creation, session lifecycle, and safe concurrent access for you.
-
-```go
-rt, _ := runtime.New(
-    ctx,
-    runtime.WithDSN("postgres://admin:admin@localhost:5432/ragdb?sslmode=disable"),
-    runtime.WithSchemaPath("schema.sql"),
-    runtime.WithSessionWindow(8),
-    runtime.WithContextLimit(6),
-    runtime.WithCoordinatorModel(func(ctx context.Context) (models.Agent, error) {
-        return models.NewGeminiLLM(ctx, "gemini-2.5-pro", "Coordinator response:")
-    }),
-    runtime.WithTools(&tools.CalculatorTool{}),
-    runtime.WithSubAgents(subagents.NewResearcher(researcherModel)),
-)
-session := rt.NewSession("")
-reply, _ := rt.Generate(ctx, session.ID(), "How do I wire an agent?")
-```
-
-Skip `runtime.WithDSN` to default to the bundled in-memory store—perfect for local experiments or unit tests without Postgres.
-
 
 ## Quick Start
 ### Prerequisites
@@ -122,7 +100,7 @@ go run ./cmd/quickstart
 Edit `cmd/quickstart/main.go` to swap models, register additional tools, or plug in real memory stores without changing the application scaffolding.
 
 ## Configuration & Extensibility
-- **Swap language models** – Implement `models.Agent` or use bundled adapters (Gemini, Anthropic, Ollama). Provide a loader via `runtime.WithCoordinatorModel`.
+- **Swap language models** – Implement `models.Agent` or use bundled adapters (Gemini, Anthropic, Ollama).
 - **Add or remove tools** – Implement `agent.Tool` and pass them with `runtime.WithTools`. Tools follow the `tool:<name>` invocation pattern.
 - **Register sub-agents** – Add `agent.SubAgent` implementations with `runtime.WithSubAgents` and delegate in conversation with `subagent:<name> do something`.
 - **Memory backends** – Use the built-in in-memory default or supply a custom `runtime.WithMemoryFactory` / `runtime.WithSessionMemoryBuilder` for Postgres, Qdrant, or bespoke vector stores.
