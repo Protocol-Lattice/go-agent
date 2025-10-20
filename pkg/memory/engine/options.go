@@ -25,6 +25,11 @@ type Options struct {
 	EnableSummaries        bool
 	GraphNeighborhoodHops  int
 	GraphNeighborhoodLimit int
+	EnableMCTS             bool
+	MCTSSimulations        int
+	MCTSMaxDepth           int
+	MCTSExpansion          int
+	MCTSExploration        float64
 }
 
 // DefaultOptions returns the recommended defaults for the advanced memory engine.
@@ -47,6 +52,10 @@ func DefaultOptions() Options {
 		EnableSummaries:        true,
 		GraphNeighborhoodHops:  2,
 		GraphNeighborhoodLimit: 32,
+		MCTSSimulations:        128,
+		MCTSMaxDepth:           3,
+		MCTSExpansion:          12,
+		MCTSExploration:        1.41421356237,
 	}
 }
 
@@ -87,6 +96,18 @@ func (o Options) withDefaults() Options {
 	}
 	if o.GraphNeighborhoodLimit == 0 {
 		o.GraphNeighborhoodLimit = defaults.GraphNeighborhoodLimit
+	}
+	if o.MCTSSimulations == 0 {
+		o.MCTSSimulations = defaults.MCTSSimulations
+	}
+	if o.MCTSMaxDepth == 0 {
+		o.MCTSMaxDepth = defaults.MCTSMaxDepth
+	}
+	if o.MCTSExpansion == 0 {
+		o.MCTSExpansion = defaults.MCTSExpansion
+	}
+	if o.MCTSExploration == 0 {
+		o.MCTSExploration = defaults.MCTSExploration
 	}
 	return o
 }

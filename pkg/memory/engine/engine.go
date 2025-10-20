@@ -242,18 +242,20 @@ func (e *Engine) Retrieve(ctx context.Context, query string, limit int) ([]model
 	now := e.clock().UTC()
 	for i := range candidates {
 		rec := &candidates[i]
-		if rec.Importance == 0 {
-			rec.Importance = importanceScore(rec.Content, model.DecodeMetadata(rec.Metadata))
-		}
-		rec.Score = model.CosineSimilarity(embedding, rec.Embedding)
-		recency := recencyScore(now.Sub(rec.CreatedAt), e.opts.HalfLife)
+		recency := e.computeWeightedScore(now, weights, embedding, rec)
 		if e.metrics != nil {
 			e.metrics.ObserveRecency(recency)
 		}
-		sourceScore := e.sourceScore(rec.Source)
-		rec.WeightedScore = weights.Similarity*rec.Score + weights.Importance*rec.Importance + weights.Recency*recency + weights.Source*sourceScore
 	}
+
 	selected := mmrSelect(candidates, embedding, limit, e.opts.LambdaMMR)
+	if e.opts.EnableMCTS {
+		if graphStore, ok := e.store.(store.GraphStore); ok {
+			if refined := e.mctsRefine(ctx, now, graphStore, embedding, weights, candidates, limit); len(refined) > 0 {
+				selected = dedupeRecords(append(selected, refined...))
+			}
+		}
+	}
 	if e.opts.EnableSummaries {
 		if err := e.populateSummaries(ctx, selected); err != nil {
 			e.logf("populate summaries: %v", err)
@@ -262,7 +264,6 @@ func (e *Engine) Retrieve(ctx context.Context, query string, limit int) ([]model
 	if err := e.reembedOnDrift(ctx, selected); err != nil {
 		e.logf("reembed drift: %v", err)
 	}
-	e.metrics.IncRetrieved(len(selected))
 	sort.Slice(selected, func(i, j int) bool {
 		// 1) Highest importance first (hard rule)
 		if selected[i].Importance != selected[j].Importance {
@@ -276,7 +277,28 @@ func (e *Engine) Retrieve(ctx context.Context, query string, limit int) ([]model
 		return selected[i].CreatedAt.After(selected[j].CreatedAt)
 	})
 
+	if len(selected) > limit {
+		selected = selected[:limit]
+	}
+	if e.metrics != nil {
+		e.metrics.IncRetrieved(len(selected))
+	}
+
 	return selected, nil
+}
+
+func (e *Engine) computeWeightedScore(now time.Time, weights ScoreWeights, query []float32, rec *model.MemoryRecord) float64 {
+	if rec == nil {
+		return 0
+	}
+	if rec.Importance == 0 {
+		rec.Importance = importanceScore(rec.Content, model.DecodeMetadata(rec.Metadata))
+	}
+	rec.Score = model.CosineSimilarity(query, rec.Embedding)
+	recency := recencyScore(now.Sub(rec.CreatedAt), e.opts.HalfLife)
+	sourceScore := e.sourceScore(rec.Source)
+	rec.WeightedScore = weights.Similarity*rec.Score + weights.Importance*rec.Importance + weights.Recency*recency + weights.Source*sourceScore
+	return recency
 }
 
 // Prune applies TTL, size and deduplication policies.

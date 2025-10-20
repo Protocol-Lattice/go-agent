@@ -2,10 +2,12 @@ package engine
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
 	embedpkg "github.com/Raezil/go-agent-development-kit/pkg/memory/embed"
+	"github.com/Raezil/go-agent-development-kit/pkg/memory/model"
 	storepkg "github.com/Raezil/go-agent-development-kit/pkg/memory/store"
 )
 
@@ -116,4 +118,239 @@ func TestEngineReembedOnDrift(t *testing.T) {
 	if snap.Reembedded == 0 {
 		t.Fatalf("expected drift re-embedding metric to increment")
 	}
+}
+
+func TestEngineMCTSExpandsGraphNeighborhood(t *testing.T) {
+	ctx := context.Background()
+
+	baseOpts := Options{
+		Weights:                ScoreWeights{Similarity: 0.6, Importance: 0.25, Recency: 0.1, Source: 0.05},
+		HalfLife:               24 * time.Hour,
+		GraphNeighborhoodLimit: -1,
+		Clock: func() time.Time {
+			return time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)
+		},
+	}
+
+	withoutMCTSStore := newGraphTestStore()
+	withoutEngine := NewEngine(withoutMCTSStore, baseOpts).WithEmbedder(embedpkg.DummyEmbedder{})
+	rootA, neighborA, _ := seedGraphMemories(t, withoutEngine, withoutMCTSStore)
+
+	recordsWithout, err := withoutEngine.Retrieve(ctx, "core topic", 2)
+	if err != nil {
+		t.Fatalf("retrieve without mcts: %v", err)
+	}
+	rootPresent := false
+	for _, rec := range recordsWithout {
+		if rec.ID == neighborA.ID {
+			t.Fatalf("neighbor should not be returned without MCTS")
+		}
+		if rec.ID == rootA.ID {
+			rootPresent = true
+		}
+	}
+	if !rootPresent {
+		t.Fatalf("expected root memory to be present without MCTS")
+	}
+
+	withMCTSStore := newGraphTestStore()
+	mctsOpts := baseOpts
+	mctsOpts.EnableMCTS = true
+	mctsOpts.MCTSSimulations = 64
+	mctsOpts.MCTSExpansion = 4
+	mctsOpts.MCTSMaxDepth = 2
+	withEngine := NewEngine(withMCTSStore, mctsOpts).WithEmbedder(embedpkg.DummyEmbedder{})
+	rootB, neighborB, _ := seedGraphMemories(t, withEngine, withMCTSStore)
+
+	recordsWith, err := withEngine.Retrieve(ctx, "core topic", 2)
+	if err != nil {
+		t.Fatalf("retrieve with mcts: %v", err)
+	}
+	foundNeighbor := false
+	foundRoot := false
+	for _, rec := range recordsWith {
+		if rec.ID == neighborB.ID {
+			foundNeighbor = true
+		}
+		if rec.ID == rootB.ID {
+			foundRoot = true
+		}
+	}
+	if !foundNeighbor {
+		t.Fatalf("expected neighbor to be surfaced via MCTS traversal")
+	}
+	if !foundRoot {
+		t.Fatalf("expected root memory to remain accessible with MCTS")
+	}
+}
+
+type graphTestStore struct {
+	base       *storepkg.InMemoryStore
+	neighbors  map[int64][]int64
+	skipSearch map[int64]bool
+	cache      map[int64]model.MemoryRecord
+	mu         sync.RWMutex
+}
+
+func newGraphTestStore() *graphTestStore {
+	return &graphTestStore{
+		base:       storepkg.NewInMemoryStore(),
+		neighbors:  make(map[int64][]int64),
+		skipSearch: make(map[int64]bool),
+		cache:      make(map[int64]model.MemoryRecord),
+	}
+}
+
+func (s *graphTestStore) StoreMemory(ctx context.Context, sessionID, content string, metadata map[string]any, embedding []float32) error {
+	if err := s.base.StoreMemory(ctx, sessionID, content, metadata, embedding); err != nil {
+		return err
+	}
+	s.refreshCache(ctx)
+	return nil
+}
+
+func (s *graphTestStore) SearchMemory(ctx context.Context, queryEmbedding []float32, limit int) ([]model.MemoryRecord, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+	// request additional candidates so filtering still returns enough
+	results, err := s.base.SearchMemory(ctx, queryEmbedding, limit*4)
+	if err != nil {
+		return nil, err
+	}
+	filtered := make([]model.MemoryRecord, 0, len(results))
+	for _, rec := range results {
+		s.mu.RLock()
+		skip := s.skipSearch[rec.ID]
+		s.mu.RUnlock()
+		if skip {
+			continue
+		}
+		filtered = append(filtered, rec)
+		if len(filtered) >= limit {
+			break
+		}
+	}
+	return filtered, nil
+}
+
+func (s *graphTestStore) UpdateEmbedding(ctx context.Context, id int64, embedding []float32, lastEmbedded time.Time) error {
+	return s.base.UpdateEmbedding(ctx, id, embedding, lastEmbedded)
+}
+
+func (s *graphTestStore) DeleteMemory(ctx context.Context, ids []int64) error {
+	if err := s.base.DeleteMemory(ctx, ids); err != nil {
+		return err
+	}
+	s.refreshCache(ctx)
+	return nil
+}
+
+func (s *graphTestStore) Iterate(ctx context.Context, fn func(model.MemoryRecord) bool) error {
+	return s.base.Iterate(ctx, fn)
+}
+
+func (s *graphTestStore) Count(ctx context.Context) (int, error) {
+	return s.base.Count(ctx)
+}
+
+func (s *graphTestStore) UpsertGraph(_ context.Context, record model.MemoryRecord, edges []model.GraphEdge) error {
+	ids := make([]int64, 0, len(edges))
+	for _, edge := range edges {
+		ids = append(ids, edge.Target)
+	}
+	s.mu.Lock()
+	s.neighbors[record.ID] = ids
+	s.mu.Unlock()
+	return nil
+}
+
+func (s *graphTestStore) Neighborhood(_ context.Context, seedIDs []int64, hops, limit int) ([]model.MemoryRecord, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if limit <= 0 {
+		return nil, nil
+	}
+	type pair struct {
+		id    int64
+		depth int
+	}
+	queue := make([]pair, 0, len(seedIDs))
+	seen := make(map[int64]struct{}, len(seedIDs))
+	for _, id := range seedIDs {
+		queue = append(queue, pair{id: id, depth: 0})
+		seen[id] = struct{}{}
+	}
+	results := make([]model.MemoryRecord, 0, limit)
+	for len(queue) > 0 && len(results) < limit {
+		cur := queue[0]
+		queue = queue[1:]
+		if cur.depth >= hops {
+			continue
+		}
+		neighbors := s.neighbors[cur.id]
+		for _, nb := range neighbors {
+			if _, ok := seen[nb]; ok {
+				continue
+			}
+			seen[nb] = struct{}{}
+			if rec, ok := s.cache[nb]; ok {
+				results = append(results, rec)
+				if len(results) >= limit {
+					break
+				}
+				queue = append(queue, pair{id: nb, depth: cur.depth + 1})
+			}
+		}
+	}
+	return results, nil
+}
+
+func (s *graphTestStore) refreshCache(ctx context.Context) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cache := make(map[int64]model.MemoryRecord)
+	_ = s.base.Iterate(ctx, func(rec model.MemoryRecord) bool {
+		cache[rec.ID] = rec
+		return true
+	})
+	s.cache = cache
+}
+
+func (s *graphTestStore) SetNeighbors(source int64, targets []int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.neighbors[source] = append([]int64(nil), targets...)
+}
+
+func (s *graphTestStore) SetSkipSearch(id int64, skip bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if skip {
+		s.skipSearch[id] = true
+	} else {
+		delete(s.skipSearch, id)
+	}
+}
+
+func seedGraphMemories(t *testing.T, engine *Engine, store *graphTestStore) (model.MemoryRecord, model.MemoryRecord, model.MemoryRecord) {
+	t.Helper()
+	ctx := context.Background()
+	root, err := engine.Store(ctx, "graph-session", "Core topic overview", map[string]any{"importance": 0.6})
+	if err != nil {
+		t.Fatalf("store root: %v", err)
+	}
+	neighbor, err := engine.Store(ctx, "graph-session", "Detailed mitigation steps for the core topic", map[string]any{"importance": 0.95, "source": "pagerduty"})
+	if err != nil {
+		t.Fatalf("store neighbor: %v", err)
+	}
+	distractor, err := engine.Store(ctx, "graph-session", "Random lunch discussion", map[string]any{"importance": 0.2, "source": "slack"})
+	if err != nil {
+		t.Fatalf("store distractor: %v", err)
+	}
+
+	store.SetNeighbors(root.ID, []int64{neighbor.ID})
+	store.SetSkipSearch(neighbor.ID, true)
+
+	return root, neighbor, distractor
 }
