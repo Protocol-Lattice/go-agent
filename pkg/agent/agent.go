@@ -27,7 +27,6 @@ type Agent struct {
 	UTCPClient        utcp.UtcpClientInterface
 	mu                sync.Mutex
 	Shared            *memory.SharedSession
-	Spaces            []string
 }
 
 // Options configure a new Agent.
