@@ -112,3 +112,37 @@ func TestKitBuildAgent(t *testing.T) {
 		t.Fatalf("expected researcher prefix in %q", saResponse)
 	}
 }
+
+func TestKitWithSubAgentsOption(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	researcherModel := models.NewDummyLLM("Researcher reply:")
+	memoryOpts := DefaultMemoryOptions()
+
+	kitInstance, err := adk.New(ctx,
+		adk.WithDefaultContextLimit(6),
+		adk.WithModules(
+			kitmodules.NewModelModule("coordinator", kitmodules.StaticModelProvider(models.NewDummyLLM("Coordinator:"))),
+			kitmodules.InMemoryMemoryModule(4, memory.DummyEmbedder{}, &memoryOpts),
+		),
+		adk.WithSubAgents(subagents.NewResearcher(researcherModel)),
+	)
+	if err != nil {
+		t.Fatalf("kit.New: %v", err)
+	}
+
+	built, err := kitInstance.BuildAgent(ctx)
+	if err != nil {
+		t.Fatalf("BuildAgent: %v", err)
+	}
+
+	subAgents := built.SubAgents()
+	if len(subAgents) != 1 {
+		t.Fatalf("expected 1 subagent, got %d", len(subAgents))
+	}
+	if name := subAgents[0].Name(); name != "researcher" {
+		t.Fatalf("unexpected subagent name %q", name)
+	}
+}
