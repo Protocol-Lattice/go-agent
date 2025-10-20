@@ -39,7 +39,6 @@ func InMemoryMemoryModule(window int, embeeder memory.Embedder, opts *memory.Opt
 		}
 		mem := memory.NewSessionMemory(bank, size)
 		mem.WithEmbedder(embeeder)
-		mem.WithEmbedder(embeeder)
 		engine := memory.NewEngine(bank.Store, *opts)
 		mem.WithEngine(engine)
 		engineLogger := log.New(os.Stderr, "memory-engine: ", log.LstdFlags)
