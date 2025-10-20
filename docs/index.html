@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Go Agent Development Kit (GO-ADK)</title>
+  <link rel="stylesheet" href="assets/style.css" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+  <header class="hero">
+    <div class="container hero__content">
+      <div class="hero__badge">GO-ADK</div>
+      <h1>Build production-ready AI agents in Go.</h1>
+      <p class="hero__subtitle">
+        A batteries-included toolkit inspired by Google's Agent Development Kit. Compose language models,
+        tools, memory, and sub-agents with pragmatic APIs that keep you shipping fast.
+      </p>
+      <div class="hero__actions">
+        <a class="button button--primary" href="https://github.com/Raezil/go-agent-development-kit">View on GitHub</a>
+        <a class="button button--ghost" href="#quick-start">Quick Start</a>
+      </div>
+      <dl class="hero__stats">
+        <div>
+          <dt>Go 1.22+</dt>
+          <dd>Compatible</dd>
+        </div>
+        <div>
+          <dt>MIT</dt>
+          <dd>Open Source</dd>
+        </div>
+        <div>
+          <dt>UTCP</dt>
+          <dd>Native Tooling</dd>
+        </div>
+      </dl>
+    </div>
+    <div class="hero__background" aria-hidden="true"></div>
+  </header>
+
+  <main>
+    <section class="section section--light" id="why">
+      <div class="container">
+        <h2>Why GO-ADK?</h2>
+        <p class="section__lede">
+          Modern agents demand more than a single model call. GO-ADK orchestrates models, tools, memory, and multi-agent workflows
+          so you can focus on domain-specific logic instead of plumbing.
+        </p>
+        <div class="feature-grid">
+          <article class="feature-card">
+            <h3>Orchestrated Runtime</h3>
+            <p>
+              Configure coordinator models, tool catalogs, sub-agent registries, and memory stores using functional options. Sessions
+              are thread-safe and deterministic.
+            </p>
+          </article>
+          <article class="feature-card">
+            <h3>Modular Kit</h3>
+            <p>
+              Compose ready-made modules for models, memory, tools, and runtime configuration. Swap components without rewriting your application.
+            </p>
+          </article>
+          <article class="feature-card">
+            <h3>Tooling Ecosystem</h3>
+            <p>
+              Implement the <code>agent.Tool</code> interface once and register it everywhere. Built-in examples cover calculators, clocks, echo responders, and more.
+            </p>
+          </article>
+          <article class="feature-card">
+            <h3>Advanced Memory</h3>
+            <p>
+              Leverage importance scoring, recency weighting, maximal marginal relevance, and pluggable vector stores like PostgreSQL/pgvector or Qdrant.
+            </p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="architecture">
+      <div class="container">
+        <div class="section__split">
+          <div>
+            <h2>Architecture Overview</h2>
+            <p>
+              The kit exposes a layered design so you can start with a simple runtime and grow into modular deployments. Each package focuses on a single responsibility,
+              empowering you to extend or replace components as your product evolves.
+            </p>
+            <ul class="bullet-list">
+              <li><strong>pkg/runtime:</strong> Session management, orchestration, UTCP tool calling.</li>
+              <li><strong>pkg/agent:</strong> Coordinator logic, tool routing, and sub-agent delegation.</li>
+              <li><strong>pkg/memory:</strong> Retrieval augmented memory with configurable heuristics.</li>
+              <li><strong>pkg/models:</strong> Gemini, Anthropic, Ollama, and dummy adapters behind a unified interface.</li>
+              <li><strong>pkg/subagents:</strong> Specialist personas wired through the ToolCatalog.</li>
+              <li><strong>pkg/tools:</strong> Built-in tools ready to register.</li>
+            </ul>
+          </div>
+          <pre class="code-block"><code>cmd/demo              # CLI entry point to drive the runtime
+cmd/quickstart        # Zero-config sample using the high-level kit
+pkg/
+├── adk               # Modular agent kit + module interfaces
+├── runtime           # High-level runtime + session management
+├── agent             # Coordinator agent, tool routing
+├── memory            # Memory engine & vector stores
+├── models            # Model adapters (Gemini, Anthropic, ...)
+├── subagents         # Specialist personas
+└── tools             # Built-in tools</code></pre>
+        </div>
+      </div>
+    </section>
+
+    <section class="section section--light" id="quick-start">
+      <div class="container">
+        <h2>Quick Start</h2>
+        <div class="cards">
+          <article class="card">
+            <h3>Install</h3>
+            <pre class="code-block"><code>git clone https://github.com/Raezil/go-agent-development-kit.git
+cd go-agent-development-kit
+go mod download</code></pre>
+          </article>
+          <article class="card">
+            <h3>Configure</h3>
+            <pre class="code-block"><code>export GOOGLE_API_KEY=&quot;your-gemini-api-key&quot;
+export DATABASE_URL=&quot;postgres://admin:admin@localhost:5432/ragdb?sslmode=disable&quot;
+export ADK_EMBED_PROVIDER=&quot;gemini&quot;</code></pre>
+          </article>
+          <article class="card">
+            <h3>Run a Demo</h3>
+            <pre class="code-block"><code>go run ./cmd/demo --dsn &quot;$DATABASE_URL&quot;</code></pre>
+            <p>Or try the zero-config sample with <code>go run ./cmd/quickstart</code>.</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="capabilities">
+      <div class="container">
+        <h2>Capabilities</h2>
+        <div class="capability-grid">
+          <article class="capability">
+            <h3>Memory Engine</h3>
+            <p>Weighted retrieval, clustering, summarisation, and pruning keep context relevant without sacrificing recall.</p>
+            <ul>
+              <li>Configurable similarity vs. recency weightings</li>
+              <li>Source boosting for critical signals</li>
+              <li>MMR and summarisation pipelines</li>
+            </ul>
+          </article>
+          <article class="capability">
+            <h3>Tooling &amp; Sub-Agents</h3>
+            <p>Register any number of tools and specialist personas. UTCP keeps invocation provider-agnostic.</p>
+            <ul>
+              <li>Declarative tool catalogs</li>
+              <li>Sub-agent directories</li>
+              <li>Runtime prompts for orchestration</li>
+            </ul>
+          </article>
+          <article class="capability">
+            <h3>Deployment Ready</h3>
+            <p>Integrates with PostgreSQL/pgvector, ships with deterministic dummy models, and follows Go best practices for testing.</p>
+            <ul>
+              <li>In-memory mode for local prototyping</li>
+              <li>Schema bootstrapping via runtime options</li>
+              <li>Interfaces for plugging in custom providers</li>
+            </ul>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="section section--accent" id="call-to-action">
+      <div class="container cta">
+        <div>
+          <h2>Ship smarter agents faster.</h2>
+          <p>Start with the quickstart template, customise modules, and deploy your production-ready Go agents today.</p>
+        </div>
+        <a class="button button--light" href="https://github.com/Raezil/go-agent-development-kit">Get the code</a>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <div class="container footer__content">
+      <div>
+        <strong>Go Agent Development Kit</strong>
+        <p>Inspired by Google's Agent Development Kit documentation.</p>
+      </div>
+      <nav class="footer__nav">
+        <a href="#why">Why</a>
+        <a href="#architecture">Architecture</a>
+        <a href="#quick-start">Quick Start</a>
+        <a href="#capabilities">Capabilities</a>
+      </nav>
+    </div>
+    <p class="footer__note">&copy; <span id="year"></span> GO-ADK. Built with Go and curiosity.</p>
+  </footer>
+
+  <script>
+    const yearEl = document.getElementById('year');
+    if (yearEl) {
+      yearEl.textContent = new Date().getFullYear();
+    }
+  </script>
+</body>
+</html>
