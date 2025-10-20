@@ -24,7 +24,6 @@ import (
 func main() {
 	qdrantURL := flag.String("qdrant-url", "http://localhost:6333", "Qdrant base URL")
 	qdrantCollection := flag.String("qdrant-collection", "adk_memories", "Qdrant collection name")
-	// Advanced memory engine weights & knobs
 	modelName := flag.String("model", "gemini-2.5-pro", "Gemini model ID")
 	sessionID := flag.String("session-id", "cli:goroutines", "Session identifier used to store memories for this CLI")
 	sharedSpacesFlag := flag.String("shared-spaces", "", "Comma separated shared memory spaces to collaborate in")
@@ -39,7 +38,7 @@ func main() {
 	}
 
 	memoryOpts := engine.DefaultOptions()
-	adk, err := adk.New(ctx,
+	kit, err := adk.New(ctx,
 		adk.WithDefaultSystemPrompt("You orchestrate a helpful assistant team."),
 		adk.WithSubAgents(subagents.NewResearcher(researcherModel)),
 		adk.WithModules(
@@ -57,8 +56,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("failed to initialise kit: %v", err)
 	}
+
 	sharedSpaces := helpers.ParseCSVList(*sharedSpacesFlag)
-	shared, err := adk.NewSharedSession(ctx, *sessionID, sharedSpaces...)
+	shared, err := kit.NewSharedSession(ctx, *sessionID, sharedSpaces...)
 	if err != nil {
 		log.Fatalf("failed to attach shared session: %v", err)
 	}
@@ -69,12 +69,19 @@ func main() {
 		fmt.Println("No shared spaces configured. Launch multiple instances with --shared-spaces to collaborate.")
 	}
 
-	agent, err := adk.BuildAgent(ctx)
+	ag, err := kit.BuildAgent(ctx)
 	if err != nil {
 		log.Fatalf("failed to build agent: %v", err)
 	}
 
-	agent.SetSharedSpaces(shared)
+	// Hook shared session to agent and ensure grants so joins succeed.
+	ag.SetSharedSpaces(shared)
+	ag.EnsureSpaceGrants(*sessionID, sharedSpaces)
+	for _, s := range sharedSpaces {
+		if err := shared.Join(s); err != nil {
+			fmt.Printf("join %s: %v\n", s, err)
+		}
+	}
 
 	defer persistSwarm(ctx, shared)
 
@@ -84,7 +91,6 @@ func main() {
 	previewSwarm(ctx, shared)
 
 	reader := bufio.NewReader(os.Stdin)
-
 	for {
 		fmt.Print("> ")
 		line, err := reader.ReadString('\n')
@@ -97,19 +103,19 @@ func main() {
 			return
 		}
 
-		if handleSwarmCommand(ctx, shared, line) {
+		if handleSwarmCommand(ctx, ag, *sessionID, shared, line) {
 			continue
 		}
 
-		agent.Save(ctx, "user", line)
+		ag.Save(ctx, "user", line)
 
-		response, err := agent.Generate(ctx, *sessionID, line)
+		response, err := ag.Generate(ctx, *sessionID, line)
 		if err != nil {
 			fmt.Printf("error: %v\n", err)
 			continue
 		}
 		fmt.Printf("%s\n", response)
-		agent.Save(ctx, "agent", response)
+		ag.Save(ctx, "agent", response)
 	}
 }
 
@@ -130,7 +136,7 @@ func previewSwarm(ctx context.Context, shared *memory.SharedSession) {
 	renderSwarmRecords(records)
 }
 
-func handleSwarmCommand(ctx context.Context, shared *memory.SharedSession, line string) bool {
+func handleSwarmCommand(ctx context.Context, ag *agent.Agent, sessionID string, shared *memory.SharedSession, line string) bool {
 	if !strings.HasPrefix(line, "/swarm") {
 		return false
 	}
@@ -166,6 +172,8 @@ func handleSwarmCommand(ctx context.Context, shared *memory.SharedSession, line 
 			return true
 		}
 		space := fields[2]
+		// Ensure grant for this space, then join.
+		ag.EnsureSpaceGrants(sessionID, []string{space})
 		if err := shared.Join(space); err != nil {
 			fmt.Printf("Unable to join %s: %v\n", space, err)
 			return true

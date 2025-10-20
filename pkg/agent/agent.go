@@ -113,13 +113,13 @@ func New(opts Options) (*Agent, error) {
 	return a, nil
 }
 
-// Generatee processes a user message, optionally invoking tools or sub-agents.
+// Generate processes a user message, optionally invoking tools or sub-agents.
 func (a *Agent) Generate(ctx context.Context, sessionID, userInput string) (string, error) {
 	if strings.TrimSpace(userInput) == "" {
 		return "", errors.New("user input is empty")
 	}
 
-	a.storeMemory(sessionID, "user", userInput, nil) // 🧠 ← called here
+	a.storeMemory(sessionID, "user", userInput, nil)
 
 	if handled, output, metadata, err := a.handleCommand(ctx, sessionID, userInput); handled {
 		if err != nil {
@@ -162,13 +162,10 @@ func (a *Agent) buildPrompt(ctx context.Context, sessionID, userInput string) (s
 
 	switch queryType {
 	case QueryMath:
-		// 🧮 skip memory entirely
 		return fmt.Sprintf("%s\n\nCurrent user message:\n%s\n\nCompose the best possible assistant reply.\n",
-			a.systemPrompt,
-			strings.TrimSpace(userInput)), nil
+			a.systemPrompt, strings.TrimSpace(userInput)), nil
 
 	case QueryShortFactoid:
-		// 💬 use reduced memory weight — e.g. smaller limit or lower score thresholds
 		records, err := a.retrieveContext(ctx, sessionID, userInput, min(a.contextLimit/2, 3))
 		if err != nil {
 			return "", fmt.Errorf("retrieve context: %w", err)
@@ -176,7 +173,6 @@ func (a *Agent) buildPrompt(ctx context.Context, sessionID, userInput string) (s
 		return a.buildFullPrompt(userInput, records), nil
 
 	case QueryComplex:
-		// 🧠 full memory retrieval
 		records, err := a.retrieveContext(ctx, sessionID, userInput, a.contextLimit)
 		if err != nil {
 			return "", fmt.Errorf("retrieve context: %w", err)
@@ -280,7 +276,6 @@ func (a *Agent) renderMemory(records []memory.MemoryRecord) string {
 
 // escapePromptContent safely escapes content that might break formatting.
 func escapePromptContent(s string) string {
-	// Minimal escaping to avoid unbalanced backticks or weird JSON
 	s = strings.ReplaceAll(s, "`", "'")
 	return s
 }
@@ -467,4 +462,24 @@ func (a *Agent) SetSharedSpaces(shared *memory.SharedSession) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.Shared = shared
+}
+
+// EnsureSpaceGrants gives the provided sessionID writer access to each space.
+// This mirrors how tests set up spaces: mem.Spaces.Grant(space, session, role, ttl).
+func (a *Agent) EnsureSpaceGrants(sessionID string, spaces []string) {
+	if a == nil || a.memory == nil {
+		return
+	}
+	for _, s := range spaces {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			continue
+		}
+		a.memory.Spaces.Grant(s, sessionID, memory.SpaceRoleWriter, 0)
+	}
+}
+
+// SessionMemory exposes the underlying session memory (useful for advanced setup/tests).
+func (a *Agent) SessionMemory() *memory.SessionMemory {
+	return a.memory
 }
