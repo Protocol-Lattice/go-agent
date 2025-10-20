@@ -169,7 +169,7 @@ func (a *Agent) buildPrompt(ctx context.Context, sessionID, userInput string) (s
 
 	case QueryShortFactoid:
 		// 💬 use reduced memory weight — e.g. smaller limit or lower score thresholds
-		records, err := a.memory.RetrieveContext(ctx, sessionID, userInput, min(a.contextLimit/2, 3))
+		records, err := a.retrieveContext(ctx, sessionID, userInput, min(a.contextLimit/2, 3))
 		if err != nil {
 			return "", fmt.Errorf("retrieve context: %w", err)
 		}
@@ -177,7 +177,7 @@ func (a *Agent) buildPrompt(ctx context.Context, sessionID, userInput string) (s
 
 	case QueryComplex:
 		// 🧠 full memory retrieval
-		records, err := a.memory.RetrieveContext(ctx, sessionID, userInput, a.contextLimit)
+		records, err := a.retrieveContext(ctx, sessionID, userInput, a.contextLimit)
 		if err != nil {
 			return "", fmt.Errorf("retrieve context: %w", err)
 		}
@@ -368,6 +368,19 @@ func (a *Agent) storeMemory(sessionID, role, content string, extra map[string]st
 		}
 		meta[k] = v
 	}
+	a.mu.Lock()
+	if a.Shared != nil {
+		a.Shared.AddShortLocal(content, meta)
+		for _, space := range a.Shared.Spaces() {
+			if err := a.Shared.AddShortTo(space, content, meta); err != nil {
+				continue
+			}
+		}
+		a.mu.Unlock()
+		return
+	}
+	a.mu.Unlock()
+
 	metaBytes, _ := json.Marshal(meta)
 	embedding, err := a.memory.Embedder.Embed(context.Background(), content)
 	if err != nil {
@@ -415,6 +428,13 @@ func (a *Agent) SubAgents() []SubAgent {
 		return nil
 	}
 	return a.subAgentDirectory.All()
+}
+
+func (a *Agent) retrieveContext(ctx context.Context, sessionID, query string, limit int) ([]memory.MemoryRecord, error) {
+	if a.Shared != nil {
+		return a.Shared.Retrieve(ctx, query, limit)
+	}
+	return a.memory.RetrieveContext(ctx, sessionID, query, limit)
 }
 
 func metadataRole(metadata string) string {
