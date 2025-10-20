@@ -25,7 +25,7 @@ func main() {
 	qdrantCollection := flag.String("qdrant-collection", "adk_memories", "Qdrant collection name")
 	// Advanced memory engine weights & knobs
 	modelName := flag.String("model", "gemini-2.5-pro", "Gemini model ID")
-	sessionID := flag.String("session-id", "cli:quickstart", "Session identifier used to store memories for this CLI")
+	sessionID := flag.String("session-id", "cli:goroutines", "Session identifier used to store memories for this CLI")
 	sharedSpacesFlag := flag.String("shared-spaces", "", "Comma separated shared memory spaces to collaborate in")
 
 	flag.Parse()
@@ -56,9 +56,8 @@ func main() {
 	if err != nil {
 		log.Fatalf("failed to initialise kit: %v", err)
 	}
-
 	sharedSpaces := helpers.ParseCSVList(*sharedSpacesFlag)
-	shared, err := adk.SharedSession(ctx, *sessionID, sharedSpaces...)
+	shared, err := adk.NewSharedSession(ctx, *sessionID, sharedSpaces...)
 	if err != nil {
 		log.Fatalf("failed to attach shared session: %v", err)
 	}
@@ -71,6 +70,8 @@ func main() {
 	if err != nil {
 		log.Fatalf("failed to build agent: %v", err)
 	}
+
+	agent.SetSharedSpaces(shared)
 
 	fmt.Println("Agent Development Kit quickstart. Type a message and press enter (empty line exits).")
 	reader := bufio.NewReader(os.Stdin)
@@ -87,14 +88,14 @@ func main() {
 			return
 		}
 
-		helpers.RecordPrompt(ctx, shared, sharedSpaces, "user", line)
+		agent.Save(ctx, "user", line)
 
-		response, err := agent.Respond(ctx, *sessionID, line)
+		response, err := agent.Generate(ctx, *sessionID, line)
 		if err != nil {
 			fmt.Printf("error: %v\n", err)
 			continue
 		}
 		fmt.Printf("%s\n", response)
-		helpers.RecordPrompt(ctx, shared, sharedSpaces, "agent", response)
+		agent.Save(ctx, "agent", response)
 	}
 }

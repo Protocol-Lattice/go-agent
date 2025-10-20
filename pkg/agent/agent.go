@@ -26,6 +26,8 @@ type Agent struct {
 	subAgentDirectory SubAgentDirectory
 	UTCPClient        utcp.UtcpClientInterface
 	mu                sync.Mutex
+	Shared            *memory.SharedSession
+	Spaces            []string
 }
 
 // Options configure a new Agent.
@@ -39,6 +41,8 @@ type Options struct {
 	ToolCatalog       ToolCatalog
 	SubAgentDirectory SubAgentDirectory
 	UTCPClient        utcp.UtcpClientInterface
+
+	Shared *memory.SharedSession
 }
 
 // New creates an Agent with the provided options.
@@ -104,13 +108,14 @@ func New(opts Options) (*Agent, error) {
 		toolCatalog:       toolCatalog,
 		subAgentDirectory: subAgentDirectory,
 		UTCPClient:        opts.UTCPClient,
+		Shared:            opts.Shared,
 	}
 
 	return a, nil
 }
 
 // Respond processes a user message, optionally invoking tools or sub-agents.
-func (a *Agent) Respond(ctx context.Context, sessionID, userInput string) (string, error) {
+func (a *Agent) Generate(ctx context.Context, sessionID, userInput string) (string, error) {
 	if strings.TrimSpace(userInput) == "" {
 		return "", errors.New("user input is empty")
 	}
@@ -437,4 +442,10 @@ func splitCommand(payload string) (name string, args string) {
 		args = strings.TrimSpace(payload[len(name):])
 	}
 	return name, args
+}
+
+func (a *Agent) SetSharedSpaces(shared *memory.SharedSession) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.Shared = shared
 }

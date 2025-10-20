@@ -1,12 +1,10 @@
 package helpers
 
 import (
-	"context"
 	"strconv"
 	"strings"
 
 	"github.com/Raezil/go-agent-development-kit/pkg/agent"
-	"github.com/Raezil/go-agent-development-kit/pkg/memory"
 )
 
 func ParseSourceBoostFlag(raw string) map[string]float64 {
@@ -70,19 +68,4 @@ func ParseCSVList(raw string) []string {
 		}
 	}
 	return out
-}
-
-// recordPrompt stores a conversation turn into all shared spaces.
-// role should be "user" or "agent".
-func RecordPrompt(ctx context.Context, shared *memory.SharedSession, spaces []string, role, content string) {
-	if shared == nil || strings.TrimSpace(content) == "" || len(spaces) == 0 {
-		return
-	}
-	meta := map[string]string{"role": role}
-	for _, sp := range spaces {
-		if err := shared.AddShortTo(sp, content, meta); err != nil {
-			continue
-		}
-		_ = shared.FlushSpace(ctx, sp) // persist to long-term
-	}
 }

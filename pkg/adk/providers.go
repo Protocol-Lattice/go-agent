@@ -6,7 +6,6 @@ import (
 	"github.com/Raezil/go-agent-development-kit/pkg/agent"
 	"github.com/Raezil/go-agent-development-kit/pkg/memory"
 	"github.com/Raezil/go-agent-development-kit/pkg/models"
-	"github.com/Raezil/go-agent-development-kit/pkg/runtime"
 )
 
 // ModelProvider constructs a language model used by the coordinator agent.
@@ -48,9 +47,6 @@ type SubAgentBundle struct {
 
 // SubAgentProvider returns the sub-agent bundle to merge into the agent.
 type SubAgentProvider func(ctx context.Context) (SubAgentBundle, error)
-
-// RuntimeProvider constructs a runtime orchestrator.
-type RuntimeProvider func(ctx context.Context) (*runtime.Runtime, error)
 
 // AgentOption is applied to the low-level agent options prior to constructing
 // the coordinator agent instance.

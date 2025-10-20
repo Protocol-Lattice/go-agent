@@ -8,7 +8,6 @@ import (
 
 	"github.com/Raezil/go-agent-development-kit/pkg/agent"
 	"github.com/Raezil/go-agent-development-kit/pkg/memory"
-	"github.com/Raezil/go-agent-development-kit/pkg/runtime"
 	"github.com/universal-tool-calling-protocol/go-utcp"
 	"github.com/universal-tool-calling-protocol/go-utcp/src/tools"
 	"github.com/universal-tool-calling-protocol/go-utcp/src/transports"
@@ -31,13 +30,14 @@ type AgentDevelopmentKit struct {
 	sharedFactory    SharedSessionFactory
 	toolProviders    []ToolProvider
 	subAgentProvider []SubAgentProvider
-	runtimeProvider  RuntimeProvider
 
 	defaultSystemPrompt string
 	defaultContextLimit int
 
 	agentOptions []AgentOption
 	UTCP         utcp.UtcpClientInterface
+	Shared       *memory.SharedSession
+	Spaces       []string
 }
 
 // New constructs a kit, applies the provided options and bootstraps registered
@@ -182,20 +182,6 @@ func (k *AgentDevelopmentKit) SubAgentProviders() []SubAgentProvider {
 	out := make([]SubAgentProvider, len(k.subAgentProvider))
 	copy(out, k.subAgentProvider)
 	return out
-}
-
-// UseRuntimeProvider registers the runtime provider.
-func (k *AgentDevelopmentKit) UseRuntimeProvider(provider RuntimeProvider) {
-	k.mu.Lock()
-	defer k.mu.Unlock()
-	k.runtimeProvider = provider
-}
-
-// RuntimeProvider returns the configured runtime provider, if any.
-func (k *AgentDevelopmentKit) RuntimeProvider() RuntimeProvider {
-	k.mu.RLock()
-	defer k.mu.RUnlock()
-	return k.runtimeProvider
 }
 
 // UseAgentOption appends a default agent option applied prior to constructing
@@ -410,7 +396,7 @@ func (k *AgentDevelopmentKit) BuildAgent(ctx context.Context, opts ...AgentOptio
 // write memories in shared spaces (for example, team channels). The factory is
 // lazily initialised on first use so callers may request shared sessions before
 // or after constructing the coordinator agent.
-func (k *AgentDevelopmentKit) SharedSession(ctx context.Context, local string, spaces ...string) (*memory.SharedSession, error) {
+func (k *AgentDevelopmentKit) NewSharedSession(ctx context.Context, local string, spaces ...string) (*memory.SharedSession, error) {
 	if err := k.Bootstrap(ctx); err != nil {
 		return nil, err
 	}
@@ -458,24 +444,6 @@ func (k *AgentDevelopmentKit) SharedSession(ctx context.Context, local string, s
 	k.mu.Unlock()
 
 	return factory(local, spaces...), nil
-}
-
-// Runtime constructs a runtime using the configured runtime provider. If no
-// provider has been registered an error is returned.
-func (k *AgentDevelopmentKit) Runtime(ctx context.Context) (*runtime.Runtime, error) {
-	if err := k.Bootstrap(ctx); err != nil {
-		return nil, err
-	}
-
-	provider := k.RuntimeProvider()
-	if provider == nil {
-		return nil, fmt.Errorf("kit does not have a runtime provider configured")
-	}
-	runtime, err := provider(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("runtime provider: %w", err)
-	}
-	return runtime, nil
 }
 
 func (adk *AgentDevelopmentKit) CallTool(ctx context.Context, toolName string, args map[string]any) (any, error) {

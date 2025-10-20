@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/Raezil/go-agent-development-kit/pkg/agent"
+	"github.com/Raezil/go-agent-development-kit/pkg/memory"
 	"github.com/universal-tool-calling-protocol/go-utcp"
 )
 
@@ -80,6 +81,20 @@ func WithSubAgents(subAgents ...agent.SubAgent) Option {
 func WithUTCP(client utcp.UtcpClientInterface) Option {
 	return func(kit *AgentDevelopmentKit) error {
 		kit.UTCP = client
+		return nil
+	}
+}
+
+func WithShared(shared *memory.SharedSession) Option {
+	return func(kit *AgentDevelopmentKit) error {
+		kit.Shared = shared
+		return nil
+	}
+}
+
+func WithSpaces(spaces []string) Option {
+	return func(kit *AgentDevelopmentKit) error {
+		kit.Spaces = spaces
 		return nil
 	}
 }

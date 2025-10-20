@@ -9,7 +9,6 @@ import (
 	"github.com/Raezil/go-agent-development-kit/pkg/agent"
 	"github.com/Raezil/go-agent-development-kit/pkg/memory"
 	"github.com/Raezil/go-agent-development-kit/pkg/models"
-	"github.com/Raezil/go-agent-development-kit/pkg/runtime"
 )
 
 // StaticModelProvider returns a provider that always yields the supplied model.
@@ -143,13 +142,5 @@ func StaticSubAgentProvider(subAgents []agent.SubAgent, directory agent.SubAgent
 			bundle.SubAgents = append(bundle.SubAgents, sa)
 		}
 		return bundle, nil
-	}
-}
-
-// StaticRuntimeProvider returns a provider that always yields the supplied
-// runtime instance.
-func StaticRuntimeProvider(rt *runtime.Runtime) kit.RuntimeProvider {
-	return func(context.Context) (*runtime.Runtime, error) {
-		return rt, nil
 	}
 }

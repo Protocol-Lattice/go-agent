@@ -86,7 +86,7 @@ func TestKitBuildAgent(t *testing.T) {
 		t.Fatalf("BuildAgent: %v", err)
 	}
 
-	response, err := built.Respond(ctx, "session", "hello world")
+	response, err := built.Generate(ctx, "session", "hello world")
 	if err != nil {
 		t.Fatalf("Respond: %v", err)
 	}
@@ -95,7 +95,7 @@ func TestKitBuildAgent(t *testing.T) {
 	}
 
 	// Ensure tool registry works by issuing a command.
-	toolResponse, err := built.Respond(ctx, "session", "tool:echo {\"input\": \"ping\"}")
+	toolResponse, err := built.Generate(ctx, "session", "tool:echo {\"input\": \"ping\"}")
 	if err != nil {
 		t.Fatalf("tool invocation failed: %v", err)
 	}
@@ -104,7 +104,7 @@ func TestKitBuildAgent(t *testing.T) {
 	}
 
 	// Ensure sub-agent invocation path is configured.
-	saResponse, err := built.Respond(ctx, "session", "subagent:researcher Summarise the impact of refactoring")
+	saResponse, err := built.Generate(ctx, "session", "subagent:researcher Summarise the impact of refactoring")
 	if err != nil {
 		t.Fatalf("subagent invocation failed: %v", err)
 	}
@@ -182,11 +182,11 @@ func TestKitSharedSession(t *testing.T) {
 		t.Fatalf("grant beta: %v", err)
 	}
 
-	alpha, err := kitInstance.SharedSession(ctx, "agent:alpha", "team:shared")
+	alpha, err := kitInstance.NewSharedSession(ctx, "agent:alpha", "team:shared")
 	if err != nil {
 		t.Fatalf("SharedSession alpha: %v", err)
 	}
-	beta, err := kitInstance.SharedSession(ctx, "agent:beta", "team:shared")
+	beta, err := kitInstance.NewSharedSession(ctx, "agent:beta", "team:shared")
 	if err != nil {
 		t.Fatalf("SharedSession beta: %v", err)
 	}
