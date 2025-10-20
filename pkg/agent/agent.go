@@ -113,7 +113,7 @@ func New(opts Options) (*Agent, error) {
 	return a, nil
 }
 
-// Respond processes a user message, optionally invoking tools or sub-agents.
+// Generatee processes a user message, optionally invoking tools or sub-agents.
 func (a *Agent) Generate(ctx context.Context, sessionID, userInput string) (string, error) {
 	if strings.TrimSpace(userInput) == "" {
 		return "", errors.New("user input is empty")
