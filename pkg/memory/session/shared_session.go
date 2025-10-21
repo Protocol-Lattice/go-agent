@@ -212,109 +212,7 @@ func (ss *SharedSession) BroadcastLong(ctx context.Context, content string, meta
 // Retrieve merges short-term (local + spaces) and filtered long-term results.
 // Long-term retrieval oversamples then filters to the allowed sessionIDs.
 func (ss *SharedSession) Retrieve(ctx context.Context, query string, limit int) ([]model.MemoryRecord, error) {
-	if ss == nil || ss.base == nil || limit <= 0 {
-		return nil, nil
-	}
-	allowed := make(map[string]struct{})
-	for _, sid := range ss.allowedReadSessions() {
-		allowed[sid] = struct{}{}
-	}
-	// 1) Collect short-term across all allowed sessions.
-	ss.base.mu.RLock()
-	var short []model.MemoryRecord
-	for sid := range allowed {
-		if buf := ss.base.shortTerm[sid]; len(buf) > 0 {
-			short = append(short, buf...)
-		}
-	}
-	ss.base.mu.RUnlock()
-
-	// 2) Retrieve long-term (oversample, then filter by SessionID).
-	oversample := limit * 6
-	if oversample < limit {
-		oversample = limit
-	}
-	var long []model.MemoryRecord
-	if ss.base.Engine != nil {
-		recs, err := ss.base.Engine.Retrieve(ctx, query, oversample)
-		if err != nil {
-			return nil, err
-		}
-		for _, r := range recs {
-			if _, ok := allowed[r.SessionID]; ok {
-				long = append(long, r)
-			}
-		}
-	} else if ss.base.Bank != nil {
-		emb, err := ss.base.Embed(ctx, query)
-		if err != nil {
-			return nil, err
-		}
-		recs, err := ss.base.Bank.SearchMemory(ctx, emb, oversample)
-		if err != nil {
-			return nil, err
-		}
-		for _, r := range recs {
-			if _, ok := allowed[r.SessionID]; ok {
-				long = append(long, r)
-			}
-		}
-	}
-
-	// 3) Deduplicate by ID (when present) and by (session,content) as fallback.
-	seen := make(map[int64]struct{})
-	seenKey := make(map[string]struct{})
-	push := func(dst *[]model.MemoryRecord, rec model.MemoryRecord) {
-		if rec.ID != 0 {
-			if _, ok := seen[rec.ID]; ok {
-				return
-			}
-			seen[rec.ID] = struct{}{}
-		} else {
-			key := rec.SessionID + "\u241F" + strings.TrimSpace(rec.Content)
-			if _, ok := seenKey[key]; ok {
-				return
-			}
-			seenKey[key] = struct{}{}
-		}
-		*dst = append(*dst, rec)
-	}
-	var merged []model.MemoryRecord
-	for _, r := range short {
-		push(&merged, r)
-	}
-	for _, r := range long {
-		push(&merged, r)
-	}
-
-	// 4) If we have more than limit, keep short-term first, then most relevant long-term that remain.
-	if len(merged) <= limit {
-		return merged, nil
-	}
-	// Keep all short-term if possible, then top long-term until limit.
-	shortCount := len(short)
-	if shortCount >= limit {
-		return merged[:limit], nil
-	}
-	// We already appended short first; trim to keep them and the best-scored long that followed.
-	return merged[:limit], nil
-}
-
-// allowedReadSessions returns local + joined spaces with read access.
-func (ss *SharedSession) allowedReadSessions() []string {
-	ss.mu.RLock()
-	spaces := make([]string, 0, len(ss.joined))
-	for s := range ss.joined {
-		spaces = append(spaces, s)
-	}
-	ss.mu.RUnlock()
-	out := []string{ss.local}
-	for _, space := range spaces {
-		if ss.canRead(space) {
-			out = append(out, space)
-		}
-	}
-	return out
+	return ss.retrieve(ctx, query, limit, true)
 }
 
 // allowedWriteSessions returns local + joined spaces with write access.
@@ -352,4 +250,117 @@ func (ss *SharedSession) canWrite(space string) bool {
 		return true
 	}
 	return ss.registry.CanWrite(space, ss.local)
+}
+
+// RetrieveShared returns only joined shared spaces (excludes local).
+func (ss *SharedSession) RetrieveShared(ctx context.Context, query string, limit int) ([]model.MemoryRecord, error) {
+	return ss.retrieve(ctx, query, limit, false)
+}
+
+func (ss *SharedSession) retrieve(ctx context.Context, query string, limit int, includeLocal bool) ([]model.MemoryRecord, error) {
+	if ss == nil || ss.base == nil || limit <= 0 {
+		return nil, nil
+	}
+
+	// Build the allowed set (optionally excluding local).
+	allowed := make(map[string]struct{})
+	for _, sid := range ss.allowedReadSessionsFiltered(includeLocal) {
+		allowed[sid] = struct{}{}
+	}
+
+	// 1) Short-term: merge across allowed sessions only.
+	ss.base.mu.RLock()
+	var short []model.MemoryRecord
+	for sid := range allowed {
+		if buf := ss.base.shortTerm[sid]; len(buf) > 0 {
+			short = append(short, buf...)
+		}
+	}
+	ss.base.mu.RUnlock()
+
+	// 2) Long-term: oversample and filter to allowed sessions.
+	oversample := limit * 6
+	if oversample < limit {
+		oversample = limit
+	}
+	var long []model.MemoryRecord
+	if ss.base.Engine != nil {
+		recs, err := ss.base.Engine.Retrieve(ctx, query, oversample)
+		if err != nil {
+			return nil, err
+		}
+		for _, r := range recs {
+			if _, ok := allowed[r.SessionID]; ok {
+				long = append(long, r)
+			}
+		}
+	} else if ss.base.Bank != nil {
+		emb, err := ss.base.Embed(ctx, query)
+		if err != nil {
+			return nil, err
+		}
+		recs, err := ss.base.Bank.SearchMemory(ctx, emb, oversample)
+		if err != nil {
+			return nil, err
+		}
+		for _, r := range recs {
+			if _, ok := allowed[r.SessionID]; ok {
+				long = append(long, r)
+			}
+		}
+	}
+
+	// 3) Deduplicate (by ID or (session,content)), keep short first.
+	seen := make(map[int64]struct{})
+	seenKey := make(map[string]struct{})
+	push := func(dst *[]model.MemoryRecord, rec model.MemoryRecord) {
+		if rec.ID != 0 {
+			if _, ok := seen[rec.ID]; ok {
+				return
+			}
+			seen[rec.ID] = struct{}{}
+			*dst = append(*dst, rec)
+			return
+		}
+		key := rec.SessionID + "\u241F" + strings.TrimSpace(rec.Content)
+		if _, ok := seenKey[key]; ok {
+			return
+		}
+		seenKey[key] = struct{}{}
+		*dst = append(*dst, rec)
+	}
+	var merged []model.MemoryRecord
+	for _, r := range short {
+		push(&merged, r)
+	}
+	for _, r := range long {
+		push(&merged, r)
+	}
+
+	if len(merged) <= limit {
+		return merged, nil
+	}
+	// Keep all short if possible, then best remaining long (we already order short first).
+	return merged[:limit], nil
+}
+
+// Helper: same as allowedReadSessions() but with a toggle for local.
+func (ss *SharedSession) allowedReadSessionsFiltered(includeLocal bool) []string {
+	ss.mu.RLock()
+	spaces := make([]string, 0, len(ss.joined))
+	for s := range ss.joined {
+		spaces = append(spaces, s)
+	}
+	ss.mu.RUnlock()
+
+	out := make([]string, 0, 1+len(spaces))
+	if includeLocal {
+		out = append(out, ss.local)
+	}
+	for _, space := range spaces {
+		if ss.canRead(space) {
+			out = append(out, space)
+		}
+	}
+	return out
 }
