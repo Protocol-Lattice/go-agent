@@ -152,3 +152,23 @@ Swarm uses `memory.SharedSession` on top of the session memory engine to read/wr
 ## Contributing
 Issues and pull requests are welcome! Please update the README and examples when contributing new models, tools, or memory backends so the community benefits from your additions.
 
+## 🙏 Acknowledgments
+
+**Upstream inspiration**
+- Google’s [Agent Development Kit (Python)](https://github.com/googleapis/agent-development-kit) — the conceptual baseline for runtime composition, modules, and memory patterns.
+
+**Open-source building blocks**
+- The Go ecosystem and community.
+- Storage & vector search: PostgreSQL + [pgvector](https://github.com/pgvector/pgvector) and/or [Qdrant](https://qdrant.tech).
+- LLM providers & runtimes: OpenAI, Anthropic (Claude), Google (Gemini), and [Ollama](https://ollama.com) for local models.
+
+**Interoperability**
+- The Universal Tool Calling Protocol (UTCP) community for portable, vendor-agnostic tool-calling across models and runtimes.
+
+**Contributors & early testers**
+- Thanks to everyone filing issues, improving docs, and running benchmarks. You make this project better with every PR and comment.
+
+**Logos & trademarks**
+- All product names, logos, and brands are property of their respective owners; they’re used here for identification purposes only.
+
+*If we missed you, please open an issue or PR to
