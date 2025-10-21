@@ -155,4 +155,4 @@ Issues and pull requests are welcome! Please update the README and examples when
 ## 🙏 Acknowledgments
 
 **Upstream inspiration**
-- Google’s [Agent Development Kit (Python)](https://github.com/googleapis/agent-development-kit) — the conceptual baseline for runtime composition, modules, and memory patterns.
+- Google’s [Agent Development Kit (Python)](https://github.com/google/adk-python) — the conceptual baseline for runtime composition, modules, and memory patterns.
