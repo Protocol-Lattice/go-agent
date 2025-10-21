@@ -19,15 +19,10 @@ import (
 	"github.com/Raezil/go-agent-development-kit/pkg/models"
 	"github.com/Raezil/go-agent-development-kit/pkg/subagents"
 	"github.com/Raezil/go-agent-development-kit/pkg/tools"
-)
 
-// participant binds an Agent with its own session identity and shared-session handle.
-type participant struct {
-	Alias     string
-	SessionID string
-	Agent     *agent.Agent
-	Shared    *memory.SharedSession
-}
+	// swarm API
+	"github.com/Raezil/go-agent-development-kit/pkg/swarm"
+)
 
 func main() {
 	// --- Flags
@@ -35,21 +30,19 @@ func main() {
 	qdrantCollection := flag.String("qdrant-collection", "adk_memories", "Qdrant collection name")
 	modelName := flag.String("model", "gemini-2.5-pro", "Gemini model ID")
 
-	// Comma-separated agents. Each item can be either:
-	//   - "agent:alice"            (alias inferred from last path element => "alice")
-	//   - "alice=agent:alice"      (explicit alias)
-	agentsFlag := flag.String("agents", "alice=agent:alice,bob=agent:bob", "Comma-separated agents (alias=sessionID or sessionID)")
-
-	// Comma-separated shared spaces to collaborate in, e.g. "team:core,team:shared"
-	sharedSpacesFlag := flag.String("shared-spaces", "team:shared", "Comma-separated shared memory spaces")
-
+	// Examples:
+	//   --agents="agent:alice,agent:bob"
+	//   --agents="alice=agent:alice,bob=agent:bob"
+	agentsFlag := flag.String("agents", "alice=agent:alice2,bob=agent:bob2", "Comma-separated agents (alias=sessionID or alias=sessionID)")
+	sharedSpacesFlag := flag.String("shared-spaces", "team:kamil,team:lukasz", "Comma-separated shared memory spaces")
 	flag.Parse()
+
 	ctx := context.Background()
 
-	// --- Coordinator LLM & modules shared by all participants
+	// --- Shared runtime
 	researcherModel, err := models.NewGeminiLLM(ctx, *modelName, "Research summary:")
 	if err != nil {
-		log.Fatalf("failed to create researcher model: %v", err)
+		log.Fatalf("create researcher model: %v", err)
 	}
 	memOpts := engine.DefaultOptions()
 
@@ -65,7 +58,7 @@ func main() {
 		),
 	)
 	if err != nil {
-		log.Fatalf("failed to initialise kit: %v", err)
+		log.Fatalf("init kit: %v", err)
 	}
 
 	// --- Parse agents & spaces
@@ -73,51 +66,62 @@ func main() {
 	if len(sharedSpaces) == 0 {
 		fmt.Println("No shared spaces configured. Use --shared-spaces=team:core,team:shared to collaborate.")
 	}
-
-	parts := parseAgents(*agentsFlag)
-	if len(parts) == 0 {
+	aliasToID, order := parseAgents(*agentsFlag)
+	if len(aliasToID) == 0 {
 		log.Fatal("no agents parsed from --agents")
 	}
 
-	// --- Build participants (each with its own Agent + SharedSession)
-	for i := range parts {
+	// --- Build swarm participants
+	participants := swarm.Participants{}
+	for _, alias := range order {
+		sessionID := aliasToID[alias]
+
 		ag, err := kit.BuildAgent(ctx)
 		if err != nil {
-			log.Fatalf("build agent %q: %v", parts[i].Alias, err)
+			log.Fatalf("build agent %q: %v", alias, err)
 		}
-
-		shared, err := kit.NewSharedSession(ctx, parts[i].SessionID, sharedSpaces...)
+		shared, err := kit.NewSharedSession(ctx, sessionID, sharedSpaces...)
 		if err != nil {
-			log.Fatalf("attach shared session (%s): %v", parts[i].Alias, err)
+			log.Fatalf("attach shared session (%s): %v", alias, err)
 		}
 
-		// Wire shared spaces + grants for this principal
 		ag.SetSharedSpaces(shared)
-		ag.EnsureSpaceGrants(parts[i].SessionID, sharedSpaces)
+		ag.EnsureSpaceGrants(sessionID, sharedSpaces)
 
-		for _, s := range sharedSpaces {
-			if err := shared.Join(s); err != nil {
-				fmt.Printf("[%s] join %s: %v\n", parts[i].Alias, s, err)
-			}
+		p := &swarm.Participant{
+			Alias:     alias,
+			SessionID: sessionID,
+			Agent:     ag,
+			Shared:    shared,
 		}
+		participants[sessionID] = p
+	}
 
-		parts[i].Agent = ag
-		parts[i].Shared = shared
+	cluster := swarm.NewSwarm(&participants)
+	defer cluster.Save(ctx)
+
+	// Join spaces (best-effort) for each participant using swarm facade
+	for _, alias := range order {
+		id := aliasToID[alias]
+		for _, s := range sharedSpaces {
+			_ = cluster.Join(id, s) // prints user-friendly error internally on failure
+		}
 	}
 
 	// --- UX banner
 	fmt.Println("Agent Development Kit — multi-agent swarm. Empty line to exit.")
-	fmt.Printf("Agents: %s\n", strings.Join(listAliases(parts), ", "))
+	fmt.Printf("Agents: %s\n", strings.Join(order, ", "))
 	if len(sharedSpaces) > 0 {
 		fmt.Printf("Shared spaces: %s\n", strings.Join(sharedSpaces, ", "))
 	}
 
-	// Default active agent = first
-	active := 0
-	showPrompt(parts, active)
+	// Default active = first
+	activeAlias := order[0]
+	activeID := aliasToID[activeAlias]
+	showPrompt(activeAlias, activeID)
 
-	// Initial swarm peek (from active)
-	previewSwarm(ctx, parts[active].Shared)
+	// Initial peek
+	previewSwarm(ctx, cluster, activeID)
 
 	// --- Interactive loop
 	reader := bufio.NewReader(os.Stdin)
@@ -129,28 +133,33 @@ func main() {
 		}
 		line = strings.TrimSpace(line)
 		if line == "" {
-			flushAll(ctx, parts)
+			flushAll(ctx, cluster)
 			fmt.Println("Goodbye!")
 			return
 		}
 
-		// Commands first
-		if handleGlobalCommand(line, &active, parts) {
-			showPrompt(parts, active)
+		// Commands
+		if handled, newActive := handleGlobalCommand(line, order, aliasToID); handled {
+			if newActive != "" {
+				activeAlias = newActive
+				activeID = aliasToID[activeAlias]
+				fmt.Printf("Switched to [%s]\n", activeAlias)
+				showPrompt(activeAlias, activeID)
+			}
 			continue
 		}
-		if handleSwarmCommand(ctx, parts[active], line) {
+		if handleSwarmCommand(ctx, kit, cluster, activeID, line) {
 			continue
 		}
-		if routed := handleRoutedSay(ctx, parts, line); routed {
+		if handled := handleRoutedSay(ctx, cluster, aliasToID, line); handled {
 			continue
 		}
-		if broadcast := handleBroadcast(ctx, parts, line); broadcast {
+		if handled := handleBroadcast(ctx, cluster, participants, line); handled {
 			continue
 		}
 
-		// Default: send to active agent
-		p := parts[active]
+		// Default: send to active participant
+		p := cluster.GetParticipant(activeID)
 		p.Agent.Save(ctx, "user", line)
 		resp, err := p.Agent.Generate(ctx, p.SessionID, line)
 		if err != nil {
@@ -162,10 +171,12 @@ func main() {
 	}
 }
 
-// parseAgents supports "alias=sessionID" or plain "sessionID" (alias is last token after ':').
-func parseAgents(csv string) []participant {
+// --- Parsing helpers
+
+func parseAgents(csv string) (map[string]string, []string) {
 	items := helpers.ParseCSVList(csv)
-	out := make([]participant, 0, len(items))
+	aliasToID := make(map[string]string, len(items))
+	order := make([]string, 0, len(items))
 	for _, it := range items {
 		alias := ""
 		session := it
@@ -176,12 +187,14 @@ func parseAgents(csv string) []participant {
 		if alias == "" {
 			alias = inferAlias(session)
 		}
-		if session == "" || alias == "" {
+		if alias == "" || session == "" {
 			continue
 		}
-		out = append(out, participant{Alias: alias, SessionID: session})
+		aliasToID[alias] = session
+		order = append(order, alias)
 	}
-	return out
+	sort.Strings(order)
+	return aliasToID, order
 }
 
 func inferAlias(session string) string {
@@ -189,56 +202,45 @@ func inferAlias(session string) string {
 	return strings.TrimSpace(parts[len(parts)-1])
 }
 
-func listAliases(parts []participant) []string {
-	out := make([]string, 0, len(parts))
-	for _, p := range parts {
-		out = append(out, p.Alias)
-	}
-	sort.Strings(out)
-	return out
-}
+// --- UX helpers
 
-func showPrompt(parts []participant, active int) {
+func showPrompt(activeAlias, activeID string) {
 	fmt.Printf("Active: [%s] (session=%s). Use /who, /use <alias>, /say <alias> <msg>, /broadcast <msg>, /swarm ...\n",
-		parts[active].Alias, parts[active].SessionID)
+		activeAlias, activeID)
 }
 
 // --- Command handlers
 
 // handleGlobalCommand: /who, /use <alias>
-func handleGlobalCommand(line string, active *int, parts []participant) bool {
+func handleGlobalCommand(line string, order []string, aliasToID map[string]string) (handled bool, newActive string) {
 	if !strings.HasPrefix(line, "/") {
-		return false
+		return false, ""
 	}
 	fields := strings.Fields(line)
 	switch fields[0] {
 	case "/who":
-		for _, p := range parts {
-			fmt.Printf("- %s (session=%s)\n", p.Alias, p.SessionID)
+		for _, a := range order {
+			fmt.Printf("- %s (session=%s)\n", a, aliasToID[a])
 		}
-		return true
+		return true, ""
 	case "/use":
 		if len(fields) < 2 {
 			fmt.Println("Usage: /use <alias>")
-			return true
+			return true, ""
 		}
 		target := strings.TrimSpace(fields[1])
-		for i, p := range parts {
-			if p.Alias == target {
-				*active = i
-				fmt.Printf("Switched to [%s]\n", p.Alias)
-				return true
-			}
+		if _, ok := aliasToID[target]; !ok {
+			fmt.Printf("No such agent alias: %s\n", target)
+			return true, ""
 		}
-		fmt.Printf("No such agent alias: %s\n", target)
-		return true
+		return true, target
 	default:
-		return false
+		return false, ""
 	}
 }
 
 // handleRoutedSay: `/say <alias> <message...>`
-func handleRoutedSay(ctx context.Context, parts []participant, line string) bool {
+func handleRoutedSay(ctx context.Context, cluster *swarm.Swarm, aliasToID map[string]string, line string) bool {
 	if !strings.HasPrefix(line, "/say ") {
 		return false
 	}
@@ -254,26 +256,26 @@ func handleRoutedSay(ctx context.Context, parts []participant, line string) bool
 	}
 	alias := seg[0]
 	msg := strings.TrimSpace(strings.TrimPrefix(rest, alias))
-	for _, p := range parts {
-		if p.Alias != alias {
-			continue
-		}
-		p.Agent.Save(ctx, "user", msg)
-		resp, err := p.Agent.Generate(ctx, p.SessionID, msg)
-		if err != nil {
-			fmt.Printf("[%s] error: %v\n", p.Alias, err)
-			return true
-		}
-		fmt.Printf("[%s] %s\n", p.Alias, resp)
-		p.Agent.Save(ctx, "agent", resp)
+	id, ok := aliasToID[alias]
+	if !ok {
+		fmt.Printf("No such agent alias: %s\n", alias)
 		return true
 	}
-	fmt.Printf("No such agent alias: %s\n", alias)
+
+	p := cluster.GetParticipant(id)
+	p.Agent.Save(ctx, "user", msg)
+	resp, err := p.Agent.Generate(ctx, p.SessionID, msg)
+	if err != nil {
+		fmt.Printf("[%s] error: %v\n", p.Alias, err)
+		return true
+	}
+	fmt.Printf("[%s] %s\n", p.Alias, resp)
+	p.Agent.Save(ctx, "agent", resp)
 	return true
 }
 
 // handleBroadcast: `/broadcast <message...>`
-func handleBroadcast(ctx context.Context, parts []participant, line string) bool {
+func handleBroadcast(ctx context.Context, cluster *swarm.Swarm, participants swarm.Participants, line string) bool {
 	if !strings.HasPrefix(line, "/broadcast ") {
 		return false
 	}
@@ -282,7 +284,7 @@ func handleBroadcast(ctx context.Context, parts []participant, line string) bool
 		fmt.Println("Usage: /broadcast <message>")
 		return true
 	}
-	for _, p := range parts {
+	for _, p := range participants {
 		p.Agent.Save(ctx, "user", msg)
 		resp, err := p.Agent.Generate(ctx, p.SessionID, msg)
 		if err != nil {
@@ -295,24 +297,31 @@ func handleBroadcast(ctx context.Context, parts []participant, line string) bool
 	return true
 }
 
-// handleSwarmCommand operates on the selected participant's shared session.
-func handleSwarmCommand(ctx context.Context, p participant, line string) bool {
+// handleSwarmCommand operates on the active participant via GetParticipant(id)
+// NOTE: we pass kit to allow short-term memory reset via re-binding SharedSession.
+func handleSwarmCommand(ctx context.Context, kit *adk.AgentDevelopmentKit, cluster *swarm.Swarm, participantID string, line string) bool {
 	if !strings.HasPrefix(line, "/swarm") {
 		return false
 	}
 	fields := strings.Fields(line)
+	p := cluster.GetParticipant(participantID)
+	if p == nil {
+		fmt.Println("Swarm participant not found for this session.")
+		return true
+	}
 	if len(fields) == 1 {
-		fmt.Println("/swarm commands: peek, spaces, join <space>, leave <space>, flush")
-		previewSwarm(ctx, p.Shared)
+		fmt.Println("/swarm commands: peek, spaces, join <space>, leave <space>, flush, clear")
+		previewSwarm(ctx, cluster, participantID)
 		return true
 	}
 	if p.Shared == nil {
 		fmt.Println("Swarm not configured for this agent.")
 		return true
 	}
+
 	switch fields[1] {
 	case "peek":
-		previewSwarm(ctx, p.Shared)
+		previewSwarm(ctx, cluster, participantID)
 	case "spaces":
 		spaces := p.Shared.Spaces()
 		sort.Strings(spaces)
@@ -330,24 +339,50 @@ func handleSwarmCommand(ctx context.Context, p participant, line string) bool {
 			return true
 		}
 		space := fields[2]
-		// Ensure grants then join.
 		p.Agent.EnsureSpaceGrants(p.SessionID, []string{space})
-		if err := p.Shared.Join(space); err != nil {
-			fmt.Printf("Unable to join %s: %v\n", space, err)
+		if failed := cluster.Join(participantID, space); failed {
 			return true
 		}
 		fmt.Printf("Joined swarm space %s\n", space)
+
 	case "leave":
 		if len(fields) < 3 {
 			fmt.Println("Usage: /swarm leave <space>")
 			return true
 		}
 		space := fields[2]
-		p.Shared.Leave(space)
+
+		// 1) Leave the space
+		cluster.Leave(participantID, space)
 		fmt.Printf("Left swarm space %s\n", space)
+
+		// 2) Reset short-term memory by re-binding SharedSession with remaining spaces
+		remaining := p.Shared.Spaces()
+		newShared, err := kit.NewSharedSession(ctx, p.SessionID, remaining...)
+		if err != nil {
+			fmt.Printf("Warning: left space, but failed to reset short-term memory: %v\n", err)
+			return true
+		}
+		p.Shared = newShared
+		p.Agent.SetSharedSpaces(newShared)
+		fmt.Println("Short-term memory cleared for this participant after leaving the space.")
+
 	case "flush":
-		flushOne(ctx, p)
+		p.Save(ctx)
 		fmt.Println("Swarm memories flushed to long-term storage.")
+
+	case "clear":
+		// Manual short-term wipe: rebuild with same spaces
+		current := p.Shared.Spaces()
+		newShared, err := kit.NewSharedSession(ctx, p.SessionID, current...)
+		if err != nil {
+			fmt.Printf("Unable to clear short-term memory: %v\n", err)
+			return true
+		}
+		p.Shared = newShared
+		p.Agent.SetSharedSpaces(newShared)
+		fmt.Println("Short-term memory cleared (local buffer reset).")
+
 	default:
 		fmt.Printf("Unknown /swarm command: %s\n", fields[1])
 	}
@@ -356,11 +391,12 @@ func handleSwarmCommand(ctx context.Context, p participant, line string) bool {
 
 // --- Swarm helpers
 
-func previewSwarm(ctx context.Context, shared *memory.SharedSession) {
-	if shared == nil {
+func previewSwarm(ctx context.Context, cluster *swarm.Swarm, participantID string) {
+	p := cluster.GetParticipant(participantID)
+	if p == nil || p.Shared == nil {
 		return
 	}
-	records, err := shared.Retrieve(ctx, "recent swarm updates", 5)
+	records, err := p.Retrieve(ctx)
 	if err != nil {
 		fmt.Printf("Unable to read swarm intelligence: %v\n", err)
 		return
@@ -383,22 +419,6 @@ func renderSwarmRecords(records []memory.MemoryRecord) {
 	}
 }
 
-func flushOne(ctx context.Context, p participant) {
-	if p.Shared == nil {
-		return
-	}
-	if err := p.Shared.FlushLocal(ctx); err != nil {
-		fmt.Printf("[%s] flush local: %v\n", p.Alias, err)
-	}
-	for _, space := range p.Shared.Spaces() {
-		if err := p.Shared.FlushSpace(ctx, space); err != nil {
-			fmt.Printf("[%s] flush space %s: %v\n", p.Alias, space, err)
-		}
-	}
-}
-
-func flushAll(ctx context.Context, parts []participant) {
-	for _, p := range parts {
-		flushOne(ctx, p)
-	}
+func flushAll(ctx context.Context, cluster *swarm.Swarm) {
+	cluster.Save(ctx)
 }
