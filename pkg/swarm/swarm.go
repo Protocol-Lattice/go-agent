@@ -20,20 +20,33 @@ func (swarm *Swarm) GetParticipant(id string) *Participant {
 	return (*swarm.Participants)[id]
 }
 
-func (swarm *Swarm) Save(ctx context.Context) {
+func (swarm *Swarm) Save(ctx context.Context) error {
 	for _, p := range *swarm.Participants {
 		p.Save(ctx)
 	}
+	return nil
 }
 
 func (swarm *Swarm) Retrieve(ctx context.Context, id string) ([]memory.MemoryRecord, error) {
-	return swarm.GetParticipant(id).Retrieve(ctx)
+	p := swarm.GetParticipant(id)
+	if p == nil {
+		return nil, nil
+	}
+	return p.Retrieve(ctx)
 }
 
 func (swarm *Swarm) Join(id, space string) bool {
-	return swarm.GetParticipant(id).Join(space)
+	p := swarm.GetParticipant(id)
+	if p == nil {
+		return true // signal error if participant unknown
+	}
+	return p.Join(space)
 }
 
 func (swarm *Swarm) Leave(id, space string) {
-	swarm.GetParticipant(id).Leave(space)
+	p := swarm.GetParticipant(id)
+	if p == nil {
+		return
+	}
+	p.Leave(space)
 }

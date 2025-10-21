@@ -23,6 +23,42 @@ import (
 	"github.com/Raezil/go-agent-development-kit/pkg/swarm"
 )
 
+// ---- Adapter: concrete ADK *agent.Agent -> swarm.ConversationAgent ----
+
+type coreAgent interface {
+	EnsureSpaceGrants(sessionID string, spaces []string)
+	SetSharedSpaces(shared *memory.SharedSession)
+	Save(ctx context.Context, role, content string) // matches *agent.Agent
+	Generate(ctx context.Context, sessionID, prompt string) (string, error)
+}
+
+type agentAdapter struct {
+	inner coreAgent
+}
+
+func (a *agentAdapter) EnsureSpaceGrants(sessionID string, spaces []string) {
+	a.inner.EnsureSpaceGrants(sessionID, spaces)
+}
+
+// Translate swarm.SharedSession -> *memory.SharedSession for the concrete agent API.
+func (a *agentAdapter) SetSharedSpaces(shared swarm.SharedSession) {
+	if ss, ok := shared.(*memory.SharedSession); ok {
+		a.inner.SetSharedSpaces(ss)
+		return
+	}
+	// Best effort: ignore if not the concrete type (keeps CLI resilient).
+}
+
+func (a *agentAdapter) Save(ctx context.Context, role, content string) {
+	a.inner.Save(ctx, role, content)
+}
+
+func (a *agentAdapter) Generate(ctx context.Context, sessionID, prompt string) (string, error) {
+	return a.inner.Generate(ctx, sessionID, prompt)
+}
+
+// ---- End adapter ----
+
 /*
 Flags:
 
@@ -84,7 +120,7 @@ func main() {
 
 	participants := swarm.Participants{}
 	for _, e := range entries {
-		ag, err := kit.BuildAgent(ctx)
+		agCore, err := kit.BuildAgent(ctx)
 		if err != nil {
 			log.Fatalf("failed to build agent for %s (%s): %v", e.Alias, e.SessionID, err)
 		}
@@ -92,17 +128,19 @@ func main() {
 		if err != nil {
 			log.Fatalf("failed to attach shared session for %s: %v", e.SessionID, err)
 		}
+
+		// Wrap concrete agent so it satisfies swarm.ConversationAgent.
+		ag := &agentAdapter{inner: agCore}
 		ag.SetSharedSpaces(shared)
-		ag.EnsureSpaceGrants(e.SessionID, sharedSpaces)
 
 		p := &swarm.Participant{
 			Alias:     e.Alias,
 			SessionID: e.SessionID,
-			Agent:     ag,
-			Shared:    shared,
+			Agent:     ag,     // ConversationAgent
+			Shared:    shared, // SharedSession
 		}
 		for _, s := range sharedSpaces {
-			_ = p.Join(s) // best-effort join; prints on error
+			_ = p.Join(s) // best-effort join; Participant.Join ensures grants, prints on error
 		}
 		participants[e.SessionID] = p
 	}
@@ -142,9 +180,11 @@ func main() {
 			case line == "/help":
 				printHelp()
 				continue
+
 			case line == "/agents":
 				listAgents(cluster, activeID)
 				continue
+
 			case strings.HasPrefix(line, "/as "):
 				newID := strings.TrimSpace(strings.TrimPrefix(line, "/as "))
 				if newID == "" {
@@ -160,6 +200,7 @@ func main() {
 				fmt.Printf("Switched active participant to %s (%s)\n", active.Alias, active.SessionID)
 				previewParticipantSwarm(ctx, active)
 				continue
+
 			default:
 				if handleSwarmCommand(ctx, kit, cluster, activeID, line) {
 					continue
@@ -205,6 +246,7 @@ func handleSwarmCommand(ctx context.Context, kit *adk.AgentDevelopmentKit, clust
 	switch fields[1] {
 	case "peek":
 		previewParticipantSwarm(ctx, p)
+
 	case "spaces":
 		spaces := p.Shared.Spaces()
 		sort.Strings(spaces)
@@ -216,13 +258,14 @@ func handleSwarmCommand(ctx context.Context, kit *adk.AgentDevelopmentKit, clust
 		for _, space := range spaces {
 			fmt.Printf("- %s\n", space)
 		}
+
 	case "join":
 		if len(fields) < 3 {
 			fmt.Println("Usage: /swarm join <space>")
 			return true
 		}
 		space := fields[2]
-		p.Agent.EnsureSpaceGrants(p.SessionID, []string{space})
+		// Grants + join happen inside Participant.Join via interfaces.
 		if failed := cluster.Join(participantID, space); failed {
 			return true
 		}
@@ -253,6 +296,7 @@ func handleSwarmCommand(ctx context.Context, kit *adk.AgentDevelopmentKit, clust
 	case "flush":
 		p.Save(ctx)
 		fmt.Println("Swarm memories flushed to long-term storage.")
+
 	case "clear":
 		// Manual short-term wipe: rebuild with same spaces.
 		current := p.Shared.Spaces()
@@ -264,6 +308,7 @@ func handleSwarmCommand(ctx context.Context, kit *adk.AgentDevelopmentKit, clust
 		p.Shared = newShared
 		p.Agent.SetSharedSpaces(newShared)
 		fmt.Println("Short-term memory cleared (local buffer reset).")
+
 	default:
 		fmt.Printf("Unknown /swarm command: %s\n", fields[1])
 	}

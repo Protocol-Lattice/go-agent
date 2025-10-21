@@ -24,6 +24,41 @@ import (
 	"github.com/Raezil/go-agent-development-kit/pkg/swarm"
 )
 
+//
+// Adapter: *agent.Agent -> swarm.ConversationAgent
+//
+
+type coreAgent interface {
+	EnsureSpaceGrants(sessionID string, spaces []string)
+	SetSharedSpaces(shared *memory.SharedSession)
+	Save(ctx context.Context, role, content string)
+	Generate(ctx context.Context, sessionID, prompt string) (string, error)
+}
+
+type agentAdapter struct{ inner coreAgent }
+
+func (a *agentAdapter) EnsureSpaceGrants(sessionID string, spaces []string) {
+	a.inner.EnsureSpaceGrants(sessionID, spaces)
+}
+
+func (a *agentAdapter) SetSharedSpaces(shared swarm.SharedSession) {
+	if ss, ok := shared.(*memory.SharedSession); ok {
+		a.inner.SetSharedSpaces(ss)
+	}
+}
+
+func (a *agentAdapter) Save(ctx context.Context, role, content string) {
+	a.inner.Save(ctx, role, content)
+}
+
+func (a *agentAdapter) Generate(ctx context.Context, sessionID, prompt string) (string, error) {
+	return a.inner.Generate(ctx, sessionID, prompt)
+}
+
+//
+// Main
+//
+
 func main() {
 	// --- Flags
 	qdrantURL := flag.String("qdrant-url", "http://localhost:6333", "Qdrant base URL")
@@ -76,7 +111,7 @@ func main() {
 	for _, alias := range order {
 		sessionID := aliasToID[alias]
 
-		ag, err := kit.BuildAgent(ctx)
+		agCore, err := kit.BuildAgent(ctx)
 		if err != nil {
 			log.Fatalf("build agent %q: %v", alias, err)
 		}
@@ -85,14 +120,15 @@ func main() {
 			log.Fatalf("attach shared session (%s): %v", alias, err)
 		}
 
+		// Wrap concrete agent so it satisfies swarm.ConversationAgent.
+		ag := &agentAdapter{inner: agCore}
 		ag.SetSharedSpaces(shared)
-		ag.EnsureSpaceGrants(sessionID, sharedSpaces)
 
 		p := &swarm.Participant{
 			Alias:     alias,
 			SessionID: sessionID,
-			Agent:     ag,
-			Shared:    shared,
+			Agent:     ag,     // ConversationAgent
+			Shared:    shared, // SharedSession
 		}
 		participants[sessionID] = p
 	}
@@ -322,6 +358,7 @@ func handleSwarmCommand(ctx context.Context, kit *adk.AgentDevelopmentKit, clust
 	switch fields[1] {
 	case "peek":
 		previewSwarm(ctx, cluster, participantID)
+
 	case "spaces":
 		spaces := p.Shared.Spaces()
 		sort.Strings(spaces)
@@ -333,13 +370,14 @@ func handleSwarmCommand(ctx context.Context, kit *adk.AgentDevelopmentKit, clust
 		for _, s := range spaces {
 			fmt.Printf("- %s\n", s)
 		}
+
 	case "join":
 		if len(fields) < 3 {
 			fmt.Println("Usage: /swarm join <space>")
 			return true
 		}
 		space := fields[2]
-		p.Agent.EnsureSpaceGrants(p.SessionID, []string{space})
+		// Grants + join happen inside Participant.Join via interfaces.
 		if failed := cluster.Join(participantID, space); failed {
 			return true
 		}
