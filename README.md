@@ -84,21 +84,6 @@ Install the `pgvector` extension and let the CLI bootstrap schemas automatically
 CREATE EXTENSION IF NOT EXISTS vector;
 ```
 
-### Run the Demo Conversation
-```bash
-go run ./cmd/demo --dsn "$DATABASE_URL"
-```
-Flags let you customise the coordinator model (`--model`), session identifier (`--session`), context limit (`--context`), and short-term memory window (`--window`). Provide additional prompts as positional arguments to override the default script.
-
-### Try the Zero-Config Kit Quickstart
-Spin up an in-memory agent (Gemini model + echo tool) using the new modular kit:
-
-```bash
-go run ./cmd/quickstart
-```
-
-Edit `cmd/quickstart/main.go` to swap models, register additional tools, or plug in real memory stores without changing the application scaffolding.
-
 ### Building with Modules
 The `pkg/adk` package introduces a lightweight module system so you can provision capabilities declaratively:
 
