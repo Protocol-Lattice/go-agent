@@ -30,7 +30,6 @@ Modern agents demand more than a single model call—they require deterministic 
 Whether you are experimenting locally or embedding agents inside an existing service, GADK provides a consistent foundation.
 
 ## Key Features
-- **Runtime orchestration** – `pkg/runtime` exposes a single entry point for constructing an agent runtime with configurable models, tools, memory engines, and sub-agent registries. A thread-safe session manager keeps execution deterministic.
 - **Modular Agent Development Kit** – `pkg/adk` layers a pluggable module system on top of the existing adk, memory, model, and tool abstractions so you can compose deployments with a few declarative options.
 - **Coordinator + specialists** – `pkg/agent` contains the core coordinator logic, while `pkg/subagents` demonstrates how to plug in specialist personas (for example, a researcher) through a `ToolCatalog` and `SubAgentDirectory` abstraction.
 - **Tooling ecosystem** – Implement the `agent.Tool` interface and register implementations (echo, calculator, clock, etc.) under `pkg/tools`. Tools become available to the coordinator prompt automatically.
