@@ -40,7 +40,7 @@ Whether you are experimenting locally or embedding agents inside an existing ser
 
 ## Architecture Overview
 ```
-cmd/demo              # CLI entry point that configures and drives the runtime
+cmd/team              
 cmd/quickstart        # Zero-config sample wired through the high-level kit
 pkg/
 ├── adk               # Modular Agent Development Kit and module interfaces
