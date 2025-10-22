@@ -1,0 +1,4 @@
+Go-ADK Context Upload – quick test notes.
+
+- Goal: verify ingest → chunk → embed → write.
+- Expect: a few chunks, stored under space=team:shared.

@@ -5,11 +5,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/Raezil/go-agent-development-kit/pkg/memory"
 	"github.com/Raezil/go-agent-development-kit/pkg/models"
+	"github.com/Raezil/go-agent-development-kit/pkg/upload"
 	"github.com/universal-tool-calling-protocol/go-utcp"
 )
 
@@ -27,6 +31,21 @@ type Agent struct {
 	UTCPClient        utcp.UtcpClientInterface
 	mu                sync.Mutex
 	Shared            *memory.SharedSession
+	Ingest            *upload.Ingestor
+}
+
+// Attachment describes a file to ingest alongside a user message.
+// Prefer Path if you already have a file on disk; otherwise use Name+Reader.
+type Attachment struct {
+	// One of Path OR (Name+Reader) must be set.
+	Path   string
+	Name   string
+	MIME   string            // optional, let Ingestor sniff if empty
+	Reader io.Reader         // optional, used when Path == ""
+	Tags   []string          // optional
+	TTL    *time.Duration    // optional override
+	Meta   map[string]string // optional
+	Scope  upload.Scope      // default: upload.ScopeSpace (shared space / swarm)
 }
 
 // Options configure a new Agent.
@@ -40,6 +59,7 @@ type Options struct {
 	ToolCatalog       ToolCatalog
 	SubAgentDirectory SubAgentDirectory
 	UTCPClient        utcp.UtcpClientInterface
+	Ingest            *upload.Ingestor
 
 	Shared *memory.SharedSession
 }
@@ -482,4 +502,131 @@ func (a *Agent) EnsureSpaceGrants(sessionID string, spaces []string) {
 // SessionMemory exposes the underlying session memory (useful for advanced setup/tests).
 func (a *Agent) SessionMemory() *memory.SessionMemory {
 	return a.memory
+}
+
+// GenerateWithAttachments ingests files, updates memory context, and then generates.
+func (a *Agent) GenerateWithAttachments(ctx context.Context, sessionID, userInput string, atts []Attachment) (string, error) {
+	if strings.TrimSpace(userInput) == "" && len(atts) == 0 {
+		return "", errors.New("both user input and attachments are empty")
+	}
+	// Guard: require ingestor only if there are attachments
+	if len(atts) > 0 && a.Ingest == nil {
+		return "", errors.New("attachments provided but Agent.Ingest is nil")
+	}
+
+	// 1) Persist the user message first (so it’s part of history regardless of ingest)
+	if strings.TrimSpace(userInput) != "" {
+		a.storeMemory(sessionID, "user", userInput, nil)
+	}
+
+	// 2) Ingest files (if any) into the session’s space (SharedSession or sessionID).
+	if len(atts) > 0 {
+		ingestedIDs, ingestMeta, err := a.ingestAttachments(ctx, sessionID, atts)
+		if err != nil {
+			// Write a structured error into memory to keep provenance
+			a.storeMemory(sessionID, "assistant",
+				fmt.Sprintf("attachment ingest failed: %v", err),
+				map[string]string{"source": "ingest", "severity": "error"},
+			)
+			return "", err
+		}
+		// Log a short assistant message summarizing what was ingested
+		a.storeMemory(sessionID, "assistant",
+			fmt.Sprintf("Ingested %d attachment chunk(s) for context.", len(ingestedIDs)),
+			ingestMeta,
+		)
+	}
+
+	// 3) Build prompt with fresh memory (now includes ingested content)
+	prompt, err := a.buildPrompt(ctx, sessionID, userInput)
+	if err != nil {
+		return "", err
+	}
+
+	// 4) Generate
+	completion, err := a.model.Generate(ctx, prompt)
+	if err != nil {
+		return "", err
+	}
+
+	response := fmt.Sprint(completion)
+	a.storeMemory(sessionID, "assistant", response, nil)
+	return response, nil
+}
+
+// ingestAttachments is a small utility that streams each attachment into the Ingestor.
+// It chooses a reasonable default scope (shared space) and tags everything with session/sessionID.
+func (a *Agent) ingestAttachments(ctx context.Context, sessionID string, atts []Attachment) ([]string, map[string]string, error) {
+	// Serialize concurrent ingests across one Agent to avoid surprising races in custom stores/embedders.
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	space := sessionID
+	scopeDefault := upload.ScopeSpace
+	allIDs := make([]string, 0, len(atts)*2)
+
+	start := time.Now()
+	for _, att := range atts {
+		var name string
+		var r io.Reader
+		var closeFn func() error
+
+		if att.Path != "" {
+			f, err := os.Open(att.Path)
+			if err != nil {
+				return nil, nil, fmt.Errorf("open %q: %w", att.Path, err)
+			}
+			r = f
+			name = baseName(att.Path)
+			closeFn = f.Close
+		} else if att.Reader != nil && att.Name != "" {
+			r = att.Reader
+			name = att.Name
+		} else {
+			return nil, nil, errors.New("each attachment needs Path or (Name+Reader)")
+		}
+
+		opts := upload.IngestOptions{
+			Space: space,
+			Scope: firstNonZeroScope(att.Scope, scopeDefault),
+			Tags:  append([]string{"session:" + sessionID}, att.Tags...),
+			TTL:   att.TTL,
+			Meta:  att.Meta,
+		}
+
+		ids, err := a.Ingest.IngestReader(name, att.MIME, r, opts)
+		if closeFn != nil {
+			_ = closeFn()
+		}
+		if err != nil {
+			return nil, nil, fmt.Errorf("ingest %q failed: %w", name, err)
+		}
+		allIDs = append(allIDs, ids...)
+	}
+
+	meta := map[string]string{
+		"source":       "ingest",
+		"ingest_space": space,
+		"ingest_scope": string(scopeDefault),
+		"elapsed_ms":   fmt.Sprintf("%d", time.Since(start).Milliseconds()),
+	}
+	return allIDs, meta, nil
+}
+
+// helpers
+
+func baseName(p string) string {
+	// no path import here to keep this tiny
+	i := strings.LastIndexAny(p, `/\`)
+	if i < 0 {
+		return p
+	}
+	return p[i+1:]
+}
+
+func firstNonZeroScope(s, def upload.Scope) upload.Scope {
+	if s == "" {
+		return def
+	}
+	return s
 }

@@ -6,6 +6,7 @@ require (
 	github.com/anthropics/anthropic-sdk-go v1.13.0
 	github.com/google/generative-ai-go v0.20.1
 	github.com/jackc/pgx/v5 v5.7.6
+	github.com/ledongthuc/pdf v0.0.0-20250511090121-5959a4027728
 	github.com/ollama/ollama v0.12.5
 	github.com/sashabaranov/go-openai v1.41.2
 	github.com/universal-tool-calling-protocol/go-utcp v1.7.1
