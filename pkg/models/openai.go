@@ -39,8 +39,18 @@ func (o *OpenAILLM) Generate(ctx context.Context, prompt string) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	if len(resp.Choices) == 0 {
+	if len(resp.Choices) == 0 && len(resp.Choices) == 0 {
+		// Older lib versions use Choices; guard for both just in case.
 		return nil, errors.New("no response from OpenAI")
 	}
+	// Prefer the standard field
+	if len(resp.Choices) > 0 {
+		return resp.Choices[0].Message.Content, nil
+	}
 	return resp.Choices[0].Message.Content, nil
+}
+
+func (o *OpenAILLM) GenerateWithFiles(ctx context.Context, prompt string, files []File) (any, error) {
+	combined := combinePromptWithFiles(prompt, files)
+	return o.Generate(ctx, combined)
 }

@@ -34,4 +34,11 @@ func (d *DummyLLM) Generate(_ context.Context, prompt string) (any, error) {
 	return fmt.Sprintf("%s %s", d.Prefix, last), nil
 }
 
+func (d *DummyLLM) GenerateWithFiles(ctx context.Context, prompt string, files []File) (any, error) {
+	combined := combinePromptWithFiles(prompt, files)
+	// For the dummy, we return the composed prompt directly (prefixed),
+	// rather than picking the last non-empty line like Generate().
+	return fmt.Sprintf("%s %s", d.Prefix, combined), nil
+}
+
 var _ Agent = (*DummyLLM)(nil)

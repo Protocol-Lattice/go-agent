@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/Raezil/go-agent-development-kit/pkg/memory"
+	"github.com/Raezil/go-agent-development-kit/pkg/models"
 )
 
 type stubModel struct {
@@ -14,6 +15,9 @@ type stubModel struct {
 	err      error
 }
 
+func (g *stubModel) GenerateWithFiles(ctx context.Context, prompt string, files []models.File) (any, error) {
+	return nil, nil
+}
 func (m *stubModel) Generate(ctx context.Context, prompt string) (any, error) {
 	if m.err != nil {
 		return nil, m.err

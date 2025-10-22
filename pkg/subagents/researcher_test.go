@@ -4,12 +4,18 @@ import (
 	"context"
 	"strings"
 	"testing"
+
+	"github.com/Raezil/go-agent-development-kit/pkg/models"
 )
 
 type fakeModel struct {
 	response any
 	err      error
 	prompts  []string
+}
+
+func (g *fakeModel) GenerateWithFiles(ctx context.Context, prompt string, files []models.File) (any, error) {
+	return nil, nil
 }
 
 func (f *fakeModel) Generate(ctx context.Context, prompt string) (any, error) {

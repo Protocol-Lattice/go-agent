@@ -58,3 +58,8 @@ func (a *AnthropicLLM) Generate(ctx context.Context, prompt string) (any, error)
 	}
 	return b.String(), nil
 }
+
+func (a *AnthropicLLM) GenerateWithFiles(ctx context.Context, prompt string, files []File) (any, error) {
+	combined := combinePromptWithFiles(prompt, files)
+	return a.Generate(ctx, combined)
+}

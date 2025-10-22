@@ -8,6 +8,7 @@ import (
 
 	"github.com/Raezil/go-agent-development-kit/pkg/agent"
 	"github.com/Raezil/go-agent-development-kit/pkg/memory"
+	"github.com/Raezil/go-agent-development-kit/pkg/upload"
 	"github.com/universal-tool-calling-protocol/go-utcp"
 	"github.com/universal-tool-calling-protocol/go-utcp/src/tools"
 	"github.com/universal-tool-calling-protocol/go-utcp/src/transports"
@@ -36,6 +37,7 @@ type AgentDevelopmentKit struct {
 
 	agentOptions []AgentOption
 	UTCP         utcp.UtcpClientInterface
+	Ingest       *upload.Ingestor
 }
 
 // New constructs a kit, applies the provided options and bootstraps registered
@@ -313,6 +315,7 @@ func (k *AgentDevelopmentKit) BuildAgent(ctx context.Context, opts ...AgentOptio
 		SystemPrompt: defaultPrompt,
 		ContextLimit: defaultLimit,
 		UTCPClient:   utcp,
+		Ingest:       k.Ingest,
 	}
 
 	for _, opt := range defaultAgentOptions {
