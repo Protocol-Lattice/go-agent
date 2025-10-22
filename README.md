@@ -112,15 +112,6 @@ sessionMemory := memory.NewSessionMemory(memory.NewMemoryBankWithStore(store), 8
     WithEngine(engine)
 ```
 
-
-Tune retrieval with runtime flags (no YAML required):
-```bash
-go run ./cmd/demo \
-  --memory-sim-weight=0.6 \
-  --memory-recency-weight=0.2 \
-  --memory-half-life=48h \
-  --memory-source-boost="pagerduty=1.0,slack=0.6"
-```
 Schema migrations rely on online-safe `ALTER TABLE ... IF NOT EXISTS` statements to avoid downtime.
 
 ## Swarm (Shared Spaces)
