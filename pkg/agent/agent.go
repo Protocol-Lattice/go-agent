@@ -631,3 +631,41 @@ func firstNonZeroScope(s, def upload.Scope) upload.Scope {
 	}
 	return s
 }
+
+// GenerateWithFiles sends the user message plus in-memory files to the model
+// without ingesting them into long-term memory. Use this when you already have
+// file bytes (e.g., uploaded via API) and want the model to consider them
+// ephemerally for this turn only.
+func (a *Agent) GenerateWithFiles(
+	ctx context.Context,
+	sessionID string,
+	userInput string,
+	files []models.File,
+) (string, error) {
+	// Validate input: at least some content must be provided.
+	if strings.TrimSpace(userInput) == "" && len(files) == 0 {
+		return "", errors.New("both user input and files are empty")
+	}
+
+	// Store the user message in short-term memory for conversational continuity.
+	if strings.TrimSpace(userInput) != "" {
+		a.storeMemory(sessionID, "user", userInput, nil)
+	}
+
+	// Build the base prompt using existing memory/context/tooling.
+	prompt, err := a.buildPrompt(ctx, sessionID, userInput)
+	if err != nil {
+		return "", err
+	}
+
+	// Ask the provider to render a file-aware prompt (inline text, reference non-text).
+	completion, err := a.model.GenerateWithFiles(ctx, prompt, files)
+	if err != nil {
+		return "", err
+	}
+
+	// Persist assistant reply and return it.
+	response := fmt.Sprint(completion)
+	a.storeMemory(sessionID, "assistant", response, nil)
+	return response, nil
+}

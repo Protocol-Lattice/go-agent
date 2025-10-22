@@ -4,7 +4,6 @@ import (
 	"context"
 
 	"github.com/Raezil/go-agent-development-kit/pkg/agent"
-	"github.com/Raezil/go-agent-development-kit/pkg/upload"
 	"github.com/universal-tool-calling-protocol/go-utcp"
 )
 
@@ -81,13 +80,6 @@ func WithSubAgents(subAgents ...agent.SubAgent) Option {
 func WithUTCP(client utcp.UtcpClientInterface) Option {
 	return func(kit *AgentDevelopmentKit) error {
 		kit.UTCP = client
-		return nil
-	}
-}
-
-func WithIngestor(ingest *upload.Ingestor) Option {
-	return func(kit *AgentDevelopmentKit) error {
-		kit.Ingest = ingest
 		return nil
 	}
 }

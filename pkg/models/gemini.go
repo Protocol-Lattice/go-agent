@@ -37,7 +37,6 @@ func NewGeminiLLM(ctx context.Context, model, promptPrefix string) (*GeminiLLM, 
 func (g *GeminiLLM) Generate(ctx context.Context, prompt string) (any, error) {
 	model := g.Client.GenerativeModel(g.Model)
 
-	// 🧠 Prepend the role or personality if defined.
 	fullPrompt := prompt
 	if prefix := strings.TrimSpace(g.PromptPrefix); prefix != "" {
 		fullPrompt = fmt.Sprintf("%s %s", prefix, prompt)
@@ -47,9 +46,14 @@ func (g *GeminiLLM) Generate(ctx context.Context, prompt string) (any, error) {
 	if err != nil {
 		return nil, fmt.Errorf("gemini generate: %w", err)
 	}
-	if len(resp.Candidates) == 0 || resp.Candidates[0].Content == nil {
+	if len(resp.Candidates) == 0 || resp.Candidates[0].Content == nil || len(resp.Candidates[0].Content.Parts) == 0 {
 		return nil, errors.New("gemini: empty response")
 	}
 
 	return resp.Candidates[0].Content.Parts[0], nil
+}
+
+func (g *GeminiLLM) GenerateWithFiles(ctx context.Context, prompt string, files []File) (any, error) {
+	combined := combinePromptWithFiles(prompt, files)
+	return g.Generate(ctx, combined)
 }

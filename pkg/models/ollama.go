@@ -33,11 +33,10 @@ func NewOllamaLLM(model string, promptPrefix string) (*OllamaLLM, error) {
 
 	httpClient := &http.Client{
 		Timeout: 60 * time.Second,
-		// (Optional) Transport tweaks, TLS settings, proxy, etc.
 	}
 
 	c := ollama.NewClient(u, httpClient)
-	return &OllamaLLM{Client: c, Model: model}, nil
+	return &OllamaLLM{Client: c, Model: model, PromptPrefix: promptPrefix}, nil
 }
 
 func (o *OllamaLLM) Generate(ctx context.Context, prompt string) (any, error) {
@@ -75,4 +74,9 @@ func (o *OllamaLLM) Generate(ctx context.Context, prompt string) (any, error) {
 		Done:       last.Done,
 		DoneReason: last.DoneReason,
 	}, nil
+}
+
+func (o *OllamaLLM) GenerateWithFiles(ctx context.Context, prompt string, files []File) (any, error) {
+	combined := combinePromptWithFiles(prompt, files)
+	return o.Generate(ctx, combined)
 }
