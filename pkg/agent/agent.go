@@ -128,6 +128,7 @@ func New(opts Options) (*Agent, error) {
 		subAgentDirectory: subAgentDirectory,
 		UTCPClient:        opts.UTCPClient,
 		Shared:            opts.Shared,
+		Ingest:            opts.Ingest,
 	}
 
 	return a, nil

@@ -3,15 +3,25 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/Raezil/go-agent-development-kit/pkg/adk"
+	"github.com/Raezil/go-agent-development-kit/pkg/adk/modules"
+	"github.com/Raezil/go-agent-development-kit/pkg/agent"
+	"github.com/Raezil/go-agent-development-kit/pkg/memory"
+	"github.com/Raezil/go-agent-development-kit/pkg/memory/engine"
+	"github.com/Raezil/go-agent-development-kit/pkg/models"
+	"github.com/Raezil/go-agent-development-kit/pkg/subagents"
+	"github.com/Raezil/go-agent-development-kit/pkg/tools"
 	contextio "github.com/Raezil/go-agent-development-kit/pkg/upload"
 )
 
@@ -54,6 +64,10 @@ func main() {
 	quiet := flag.Bool("quiet", false, "Suppress per-file logs; only print final JSON report")
 	printText := flag.Bool("print-text", true, "Include extracted chunk text in the JSON report")
 	textMax := flag.Int("text-max", 300, "If >0, max characters per chunk to include in JSON")
+	qdrantURL := flag.String("qdrant-url", "http://localhost:6333", "Qdrant base URL")
+	qdrantCollection := flag.String("qdrant-collection", "adk_memories", "Qdrant collection name")
+	modelName := flag.String("model", "gemini-2.5-pro", "Gemini model ID")
+
 	flag.Parse()
 
 	if flag.NArg() == 0 {
@@ -226,6 +240,7 @@ func main() {
 			report.Failed++
 		}
 	}
+	ctx := context.Background()
 
 	// Final machine-readable report
 	enc := json.NewEncoder(os.Stdout)
@@ -233,8 +248,67 @@ func main() {
 	if err := enc.Encode(report); err != nil {
 		fmt.Fprintf(os.Stderr, "error: cannot encode JSON report: %v\n", err)
 	}
+	researcherModel, err := models.NewGeminiLLM(ctx, *modelName, "Research summary:")
+	if err != nil {
+		log.Fatalf("create researcher model: %v", err)
+	}
+	memOpts := engine.DefaultOptions()
+	kit, err := adk.New(ctx,
+		adk.WithDefaultSystemPrompt("You orchestrate a helpful assistant team."),
+		adk.WithSubAgents(subagents.NewResearcher(researcherModel)),
+		adk.WithModules(
+			modules.NewModelModule("gemini-model", func(_ context.Context) (models.Agent, error) {
+				return models.NewGeminiLLM(ctx, *modelName, "Swarm orchestration:")
+			}),
+			modules.InQdrantMemory(100000, *qdrantURL, *qdrantCollection, memory.AutoEmbedder(), &memOpts),
+			modules.NewToolModule("essentials", modules.StaticToolProvider([]agent.Tool{&tools.EchoTool{}}, nil)),
+		),
+		adk.WithIngestor(ing),
+	)
+	agCore, err := kit.BuildAgent(ctx)
+	if err != nil {
+		log.Fatalf("build agent %q: %v", "alias", err)
+	}
+	var atts []agent.Attachment
+	for _, p := range flag.Args() {
+		data, err := os.ReadFile(p)
+		if err != nil {
+			log.Printf("skip attach %s: %v", p, err)
+			continue
+		}
+		atts = append(atts, agent.Attachment{
+			Name:   filepath.Base(p),
+			MIME:   detectMIME(data),      // or your MIME detector
+			Reader: bytes.NewReader(data), // or Bytes: data, depending on your struct
+			// Optional: Size, Meta, Tags, etc., if your struct supports them
+		})
+	}
+	res, err := agCore.GenerateWithAttachments(ctx, *space, "Summarize uploaded files", atts)
+	if err != nil {
+		log.Fatalf("generate with attachments: %v", err)
+	}
+	printAgentResponse(res)
 
+	// Optional: persist for later inspection
+	_ = os.WriteFile("summary.txt", []byte(res), 0644)
+
+	fmt.Println(res)
 	os.Exit(exitCode)
+}
+func printAgentResponse(res string) {
+	fmt.Println("\n--- Agent Response ---")
+	// Pretty-print if it looks like JSON; otherwise just print raw
+	if json.Valid([]byte(res)) {
+		var v any
+		if err := json.Unmarshal([]byte(res), &v); err == nil {
+			b, _ := json.MarshalIndent(v, "", "  ")
+			fmt.Println(string(b))
+		} else {
+			fmt.Println(res)
+		}
+	} else {
+		fmt.Println(res)
+	}
 }
 
 // ---- helpers ----
