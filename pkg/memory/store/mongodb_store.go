@@ -19,6 +19,8 @@ type MongoStore struct {
 	counterCollection *mongo.Collection
 }
 
+const mongoCloseTimeout = 5 * time.Second
+
 func NewMongoStore(ctx context.Context, uri, database, collection string) (*MongoStore, error) {
 	if uri == "" {
 		return nil, errors.New("mongo uri is required")
@@ -178,6 +180,39 @@ func (ms *MongoStore) Count(ctx context.Context) (int, error) {
 	return int(count), err
 }
 
+// CreateSchema ensures the primary collection has useful indexes and initializes the counter collection.
+func (ms *MongoStore) CreateSchema(ctx context.Context, _ string) error {
+	if ms == nil || ms.collection == nil {
+		return nil
+	}
+
+	indexes := []mongo.IndexModel{
+		{
+			Keys:    bson.D{{Key: "session_id", Value: 1}, {Key: "created_at", Value: -1}},
+			Options: options.Index().SetName("session_created_at"),
+		},
+		{
+			Keys:    bson.D{{Key: "space", Value: 1}},
+			Options: options.Index().SetName("space"),
+		},
+	}
+	if _, err := ms.collection.Indexes().CreateMany(ctx, indexes); err != nil {
+		return err
+	}
+
+	if ms.counterCollection != nil {
+		_, err := ms.counterCollection.Indexes().CreateOne(ctx, mongo.IndexModel{
+			Keys:    bson.D{{Key: "_id", Value: 1}},
+			Options: options.Index().SetName("counter_id").SetUnique(true),
+		})
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 func (ms *MongoStore) nextID(ctx context.Context) (int64, error) {
 	if ms.counterCollection == nil {
 		return 0, errors.New("mongo counter collection is not configured")
@@ -257,4 +292,14 @@ func float32Embedding(vec []float64) []float32 {
 		out[i] = float32(v)
 	}
 	return out
+}
+
+// Close releases the underlying MongoDB client.
+func (ms *MongoStore) Close() error {
+	if ms == nil || ms.client == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), mongoCloseTimeout)
+	defer cancel()
+	return ms.client.Disconnect(ctx)
 }
