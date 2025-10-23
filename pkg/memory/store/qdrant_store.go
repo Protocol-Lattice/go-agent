@@ -318,7 +318,6 @@ func (qs *QdrantStore) SearchMemory(ctx context.Context, queryEmbedding []float3
 			Content:      model.StringFromAny(meta["content"]),
 			Metadata:     encodeMetadata(meta["metadata"]),
 			Embedding:    point.Vector,
-			Score:        point.Score,
 			Importance:   model.FloatFromAny(meta["importance"]),
 			Source:       model.StringFromAny(meta["source"]),
 			Summary:      model.StringFromAny(meta["summary"]),
@@ -342,7 +341,12 @@ func (qs *QdrantStore) SearchMemory(ctx context.Context, queryEmbedding []float3
 		if len(record.GraphEdges) == 0 {
 			record.GraphEdges = model.ValidGraphEdges(metaMap)
 		}
+		record.Score = model.MaxCosineSimilarity(queryEmbedding, record)
 		results = append(results, record)
+	}
+	sort.SliceStable(results, func(i, j int) bool { return results[i].Score > results[j].Score })
+	if limit > 0 && len(results) > limit {
+		results = results[:limit]
 	}
 	return results, nil
 }
