@@ -265,6 +265,9 @@ func (qs *QdrantStore) StoreMemory(ctx context.Context, sessionID, content strin
 	} else {
 		payload["graph_edges"] = edges
 	}
+	if matrix := model.ValidEmbeddingMatrix(metaMap); len(matrix) > 0 {
+		payload[model.EmbeddingMatrixKey] = matrix
+	}
 	pointID := qs.generateID()
 	req := map[string]any{
 		"points": []map[string]any{{
@@ -323,6 +326,13 @@ func (qs *QdrantStore) SearchMemory(ctx context.Context, queryEmbedding []float3
 			LastEmbedded: model.TimeFromAny(meta["last_embedded"]),
 		}
 		model.HydrateRecordFromMetadata(&record, metaMap)
+		if len(record.EmbeddingMatrix) == 0 {
+			if matrix := model.DecodeEmbeddingMatrix(meta[model.EmbeddingMatrixKey]); len(matrix) > 0 {
+				record.EmbeddingMatrix = matrix
+			} else if matrix := model.DecodeEmbeddingMatrix(point.Payload[model.EmbeddingMatrixKey]); len(matrix) > 0 {
+				record.EmbeddingMatrix = matrix
+			}
+		}
 		if record.Space == "" {
 			record.Space = model.StringFromAny(meta["space"])
 			if record.Space == "" {
@@ -424,7 +434,15 @@ func (qs *QdrantStore) Iterate(ctx context.Context, fn func(model.MemoryRecord) 
 				CreatedAt:    model.TimeFromAny(meta["created_at"]),
 				LastEmbedded: model.TimeFromAny(meta["last_embedded"]),
 			}
-			model.HydrateRecordFromMetadata(&rec, model.DecodeMetadata(rec.Metadata))
+			metaMap := model.DecodeMetadata(rec.Metadata)
+			model.HydrateRecordFromMetadata(&rec, metaMap)
+			if len(rec.EmbeddingMatrix) == 0 {
+				if matrix := model.DecodeEmbeddingMatrix(metaMap[model.EmbeddingMatrixKey]); len(matrix) > 0 {
+					rec.EmbeddingMatrix = matrix
+				} else if matrix := model.DecodeEmbeddingMatrix(point.Payload[model.EmbeddingMatrixKey]); len(matrix) > 0 {
+					rec.EmbeddingMatrix = matrix
+				}
+			}
 
 			if cont := fn(rec); !cont {
 				return nil

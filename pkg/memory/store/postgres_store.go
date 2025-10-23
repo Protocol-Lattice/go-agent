@@ -53,17 +53,18 @@ func (ps *PostgresStore) StoreMemory(ctx context.Context, sessionID, content str
 	}
 	meta := model.DecodeMetadata(metadataJSON)
 	rec := model.MemoryRecord{
-		ID:           id,
-		SessionID:    sessionID,
-		Space:        model.StringFromAny(meta["space"]),
-		Content:      content,
-		Metadata:     metadataJSON,
-		Embedding:    embedding,
-		Importance:   importance,
-		Source:       source,
-		Summary:      summary,
-		LastEmbedded: lastEmbedded,
-		GraphEdges:   model.ValidGraphEdges(meta),
+		ID:              id,
+		SessionID:       sessionID,
+		Space:           model.StringFromAny(meta["space"]),
+		Content:         content,
+		Metadata:        metadataJSON,
+		Embedding:       embedding,
+		Importance:      importance,
+		Source:          source,
+		Summary:         summary,
+		LastEmbedded:    lastEmbedded,
+		GraphEdges:      model.ValidGraphEdges(meta),
+		EmbeddingMatrix: model.ValidEmbeddingMatrix(meta),
 	}
 	if rec.Space == "" {
 		rec.Space = sessionID
