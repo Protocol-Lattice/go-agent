@@ -22,3 +22,28 @@ func CosineSimilarity(a, b []float32) float64 {
 	}
 	return dot / (math.Sqrt(normA) * math.Sqrt(normB))
 }
+
+// MaxCosineSimilarity computes the maximum cosine similarity across all vector pairs.
+func MaxCosineSimilarity(a [][]float32, b [][]float32) float64 {
+	if len(a) == 0 || len(b) == 0 {
+		return 0
+	}
+	best := math.Inf(-1)
+	for _, av := range a {
+		if len(av) == 0 {
+			continue
+		}
+		for _, bv := range b {
+			if len(bv) == 0 {
+				continue
+			}
+			if sim := CosineSimilarity(av, bv); sim > best {
+				best = sim
+			}
+		}
+	}
+	if best == math.Inf(-1) {
+		return 0
+	}
+	return best
+}

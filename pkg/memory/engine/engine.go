@@ -92,10 +92,11 @@ func (e *Engine) Store(ctx context.Context, sessionID, content string, metadata 
 	if e.store == nil {
 		return model.MemoryRecord{}, errors.New("memory engine has no store")
 	}
-	embedding, err := e.embed(ctx, content)
+	embedding, additional, err := e.embedMulti(ctx, content)
 	if err != nil {
 		return model.MemoryRecord{}, fmt.Errorf("embed content: %w", err)
 	}
+	vectors := combineEmbeddings(embedding, additional)
 	now := e.clock().UTC()
 	if metadata == nil {
 		metadata = map[string]any{}
@@ -109,13 +110,23 @@ func (e *Engine) Store(ctx context.Context, sessionID, content string, metadata 
 	edges := model.SanitizeGraphEdges(metadata)
 	importance := importanceScore(content, metadata)
 	metadata["importance"] = importance
+	if len(additional) > 0 {
+		metadata["multi_embeddings"] = additional
+	} else {
+		delete(metadata, "multi_embeddings")
+	}
 	// Deduplication based on cosine similarity.
-	candidates, err := e.store.SearchMemory(ctx, embedding, 5)
+	var candidates []model.MemoryRecord
+	if multiStore, ok := e.store.(store.MultiVectorStore); ok && len(vectors) > 0 {
+		candidates, err = multiStore.SearchMemoryMulti(ctx, vectors, 5)
+	} else {
+		candidates, err = e.store.SearchMemory(ctx, embedding, 5)
+	}
 	if err != nil {
 		return model.MemoryRecord{}, err
 	}
 	for _, cand := range candidates {
-		sim := model.CosineSimilarity(embedding, cand.Embedding)
+		sim := model.MaxCosineSimilarity(vectors, cand.AllEmbeddings())
 		if sim >= e.opts.DuplicateSimilarity {
 			e.metrics.IncDeduplicated()
 			return cand, nil
@@ -123,13 +134,14 @@ func (e *Engine) Store(ctx context.Context, sessionID, content string, metadata 
 	}
 	// Cluster summary for the new record.
 	newRecord := model.MemoryRecord{
-		SessionID:    sessionID,
-		Content:      content,
-		Embedding:    embedding,
-		Importance:   importance,
-		Source:       model.StringFromAny(metadata["source"]),
-		CreatedAt:    now,
-		LastEmbedded: now,
+		SessionID:       sessionID,
+		Content:         content,
+		Embedding:       embedding,
+		MultiEmbeddings: additional,
+		Importance:      importance,
+		Source:          model.StringFromAny(metadata["source"]),
+		CreatedAt:       now,
+		LastEmbedded:    now,
 	}
 	if e.opts.EnableSummaries {
 		summary, sumErr := e.clusterSummary(ctx, append(candidates, newRecord), newRecord)
@@ -140,11 +152,21 @@ func (e *Engine) Store(ctx context.Context, sessionID, content string, metadata 
 		}
 	}
 	metadata["last_embedded"] = now.UTC().Format(time.RFC3339Nano)
-	if err := e.store.StoreMemory(ctx, sessionID, content, metadata, embedding); err != nil {
-		return model.MemoryRecord{}, err
+	var storeErr error
+	if multiStore, ok := e.store.(store.MultiVectorStore); ok && len(vectors) > 0 {
+		storeErr = multiStore.StoreMemoryMulti(ctx, sessionID, content, metadata, vectors)
+	} else {
+		storeErr = e.store.StoreMemory(ctx, sessionID, content, metadata, embedding)
+	}
+	if storeErr != nil {
+		return model.MemoryRecord{}, storeErr
 	}
 	stored := newRecord
-	if results, err := e.store.SearchMemory(ctx, embedding, 1); err == nil && len(results) > 0 {
+	if multiStore, ok := e.store.(store.MultiVectorStore); ok && len(vectors) > 0 {
+		if results, err := multiStore.SearchMemoryMulti(ctx, vectors, 1); err == nil && len(results) > 0 {
+			stored = results[0]
+		}
+	} else if results, err := e.store.SearchMemory(ctx, embedding, 1); err == nil && len(results) > 0 {
 		stored = results[0]
 	}
 	if stored.Space == "" {
@@ -160,6 +182,9 @@ func (e *Engine) Store(ctx context.Context, sessionID, content string, metadata 
 	stored.Metadata = model.StringFromAny(metadata)
 	stored.Summary = model.StringFromAny(metadata["summary"])
 	stored.Importance = importance
+	if len(stored.MultiEmbeddings) == 0 {
+		stored.MultiEmbeddings = newRecord.MultiEmbeddings
+	}
 	if graphStore, ok := e.store.(store.GraphStore); ok {
 		if err := graphStore.UpsertGraph(ctx, stored, stored.GraphEdges); err != nil {
 			e.logf("upsert graph: %v", err)
@@ -176,15 +201,21 @@ func (e *Engine) Retrieve(ctx context.Context, query string, limit int) ([]model
 	if limit <= 0 {
 		return nil, nil
 	}
-	embedding, err := e.embed(ctx, query)
+	embedding, additional, err := e.embedMulti(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("embed query: %w", err)
 	}
+	queryVectors := combineEmbeddings(embedding, additional)
 	searchLimit := limit * 4
 	if searchLimit < limit {
 		searchLimit = limit
 	}
-	candidates, err := e.store.SearchMemory(ctx, embedding, searchLimit)
+	var candidates []model.MemoryRecord
+	if multiStore, ok := e.store.(store.MultiVectorStore); ok && len(queryVectors) > 0 {
+		candidates, err = multiStore.SearchMemoryMulti(ctx, queryVectors, searchLimit)
+	} else {
+		candidates, err = e.store.SearchMemory(ctx, embedding, searchLimit)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -230,9 +261,7 @@ func (e *Engine) Retrieve(ctx context.Context, query string, limit int) ([]model
 						}
 						existingKey[key] = struct{}{}
 					}
-					if len(nb.Embedding) > 0 {
-						nb.Score = model.CosineSimilarity(embedding, nb.Embedding)
-					}
+					nb.Score = model.MaxCosineSimilarity(queryVectors, nb.AllEmbeddings())
 					candidates = append(candidates, nb)
 				}
 			}
@@ -245,7 +274,7 @@ func (e *Engine) Retrieve(ctx context.Context, query string, limit int) ([]model
 		if rec.Importance == 0 {
 			rec.Importance = importanceScore(rec.Content, model.DecodeMetadata(rec.Metadata))
 		}
-		rec.Score = model.CosineSimilarity(embedding, rec.Embedding)
+		rec.Score = model.MaxCosineSimilarity(queryVectors, rec.AllEmbeddings())
 		recency := recencyScore(now.Sub(rec.CreatedAt), e.opts.HalfLife)
 		if e.metrics != nil {
 			e.metrics.ObserveRecency(recency)
@@ -253,7 +282,7 @@ func (e *Engine) Retrieve(ctx context.Context, query string, limit int) ([]model
 		sourceScore := e.sourceScore(rec.Source)
 		rec.WeightedScore = weights.Similarity*rec.Score + weights.Importance*rec.Importance + weights.Recency*recency + weights.Source*sourceScore
 	}
-	selected := mmrSelect(candidates, embedding, limit, e.opts.LambdaMMR)
+	selected := mmrSelect(candidates, queryVectors, limit, e.opts.LambdaMMR)
 	if e.opts.EnableSummaries {
 		if err := e.populateSummaries(ctx, selected); err != nil {
 			e.logf("populate summaries: %v", err)
@@ -476,6 +505,32 @@ func canonicalKey(s string) string {
 	return b.String()
 }
 
+func (e *Engine) embedMulti(ctx context.Context, text string) ([]float32, [][]float32, error) {
+	if e.embedder == nil {
+		e.embedder = embed.AutoEmbedder()
+	}
+	if multi, ok := e.embedder.(embed.MultiVectorEmbedder); ok && multi != nil {
+		if vectors, err := multi.EmbedMany(ctx, text); err == nil && len(vectors) > 0 {
+			primary := append([]float32(nil), vectors[0]...)
+			extras := make([][]float32, 0, len(vectors)-1)
+			for _, vec := range vectors[1:] {
+				if len(vec) == 0 {
+					continue
+				}
+				extras = append(extras, append([]float32(nil), vec...))
+			}
+			if len(primary) > 0 {
+				return primary, extras, nil
+			}
+		}
+	}
+	vec, err := e.embed(ctx, text)
+	if err != nil {
+		return nil, nil, err
+	}
+	return vec, nil, nil
+}
+
 func (e *Engine) embed(ctx context.Context, text string) ([]float32, error) {
 	if e.embedder == nil {
 		e.embedder = embed.AutoEmbedder()
@@ -487,6 +542,28 @@ func (e *Engine) embed(ctx context.Context, text string) ([]float32, error) {
 	return vec, nil
 }
 
+func combineEmbeddings(primary []float32, extras [][]float32) [][]float32 {
+	total := 0
+	if len(primary) > 0 {
+		total++
+	}
+	total += len(extras)
+	if total == 0 {
+		return nil
+	}
+	vectors := make([][]float32, 0, total)
+	if len(primary) > 0 {
+		vectors = append(vectors, primary)
+	}
+	for _, extra := range extras {
+		if len(extra) == 0 {
+			continue
+		}
+		vectors = append(vectors, extra)
+	}
+	return vectors
+}
+
 func (e *Engine) reembedOnDrift(ctx context.Context, records []model.MemoryRecord) error {
 	for _, rec := range records {
 		if rec.ID == 0 {
@@ -496,7 +573,7 @@ func (e *Engine) reembedOnDrift(ctx context.Context, records []model.MemoryRecor
 		if age < e.opts.HalfLife && rec.LastEmbedded.After(time.Time{}) {
 			continue
 		}
-		vec, err := e.embed(ctx, rec.Content)
+		vec, _, err := e.embedMulti(ctx, rec.Content)
 		if err != nil {
 			return err
 		}
@@ -596,7 +673,7 @@ func importanceScore(content string, metadata map[string]any) float64 {
 	return clamp(lengthScore+keywordBoost, 0, 1)
 }
 
-func mmrSelect(records []model.MemoryRecord, query []float32, limit int, lambda float64) []model.MemoryRecord {
+func mmrSelect(records []model.MemoryRecord, query [][]float32, limit int, lambda float64) []model.MemoryRecord {
 	if limit >= len(records) {
 		out := make([]model.MemoryRecord, len(records))
 		copy(out, records)
@@ -617,11 +694,11 @@ func mmrSelect(records []model.MemoryRecord, query []float32, limit int, lambda 
 		for i, cand := range remaining {
 			relevance := cand.WeightedScore
 			if relevance == 0 {
-				relevance = model.CosineSimilarity(query, cand.Embedding)
+				relevance = model.MaxCosineSimilarity(query, cand.AllEmbeddings())
 			}
 			var maxSim float64
 			for _, sel := range selected {
-				if sim := model.CosineSimilarity(cand.Embedding, sel.Embedding); sim > maxSim {
+				if sim := model.MaxCosineSimilarity(cand.AllEmbeddings(), sel.AllEmbeddings()); sim > maxSim {
 					maxSim = sim
 				}
 			}

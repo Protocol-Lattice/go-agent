@@ -310,17 +310,18 @@ func (qs *QdrantStore) SearchMemory(ctx context.Context, queryEmbedding []float3
 			metaMap = model.DecodeMetadata(encodeMetadata(meta["metadata"]))
 		}
 		record := model.MemoryRecord{
-			ID:           id,
-			SessionID:    model.StringFromAny(meta["session_id"]),
-			Content:      model.StringFromAny(meta["content"]),
-			Metadata:     encodeMetadata(meta["metadata"]),
-			Embedding:    point.Vector,
-			Score:        point.Score,
-			Importance:   model.FloatFromAny(meta["importance"]),
-			Source:       model.StringFromAny(meta["source"]),
-			Summary:      model.StringFromAny(meta["summary"]),
-			CreatedAt:    model.TimeFromAny(meta["created_at"]),
-			LastEmbedded: model.TimeFromAny(meta["last_embedded"]),
+			ID:              id,
+			SessionID:       model.StringFromAny(meta["session_id"]),
+			Content:         model.StringFromAny(meta["content"]),
+			Metadata:        encodeMetadata(meta["metadata"]),
+			Embedding:       point.Vector,
+			MultiEmbeddings: model.Float32MatrixFromAny(metaMap["multi_embeddings"]),
+			Score:           point.Score,
+			Importance:      model.FloatFromAny(meta["importance"]),
+			Source:          model.StringFromAny(meta["source"]),
+			Summary:         model.StringFromAny(meta["summary"]),
+			CreatedAt:       model.TimeFromAny(meta["created_at"]),
+			LastEmbedded:    model.TimeFromAny(meta["last_embedded"]),
 		}
 		model.HydrateRecordFromMetadata(&record, metaMap)
 		if record.Space == "" {
@@ -424,7 +425,9 @@ func (qs *QdrantStore) Iterate(ctx context.Context, fn func(model.MemoryRecord) 
 				CreatedAt:    model.TimeFromAny(meta["created_at"]),
 				LastEmbedded: model.TimeFromAny(meta["last_embedded"]),
 			}
-			model.HydrateRecordFromMetadata(&rec, model.DecodeMetadata(rec.Metadata))
+			metaDecoded := model.DecodeMetadata(rec.Metadata)
+			rec.MultiEmbeddings = model.Float32MatrixFromAny(metaDecoded["multi_embeddings"])
+			model.HydrateRecordFromMetadata(&rec, metaDecoded)
 
 			if cont := fn(rec); !cont {
 				return nil
@@ -589,16 +592,17 @@ func (qs *QdrantStore) Neighborhood(ctx context.Context, seedIDs []int64, hops, 
 			metaMap = model.DecodeMetadata(encodeMetadata(meta["metadata"]))
 		}
 		record := model.MemoryRecord{
-			ID:           id,
-			SessionID:    model.StringFromAny(meta["session_id"]),
-			Content:      model.StringFromAny(meta["content"]),
-			Metadata:     encodeMetadata(meta["metadata"]),
-			Embedding:    point.Vector,
-			Importance:   model.FloatFromAny(meta["importance"]),
-			Source:       model.StringFromAny(meta["source"]),
-			Summary:      model.StringFromAny(meta["summary"]),
-			CreatedAt:    model.TimeFromAny(meta["created_at"]),
-			LastEmbedded: model.TimeFromAny(meta["last_embedded"]),
+			ID:              id,
+			SessionID:       model.StringFromAny(meta["session_id"]),
+			Content:         model.StringFromAny(meta["content"]),
+			Metadata:        encodeMetadata(meta["metadata"]),
+			Embedding:       point.Vector,
+			MultiEmbeddings: model.Float32MatrixFromAny(metaMap["multi_embeddings"]),
+			Importance:      model.FloatFromAny(meta["importance"]),
+			Source:          model.StringFromAny(meta["source"]),
+			Summary:         model.StringFromAny(meta["summary"]),
+			CreatedAt:       model.TimeFromAny(meta["created_at"]),
+			LastEmbedded:    model.TimeFromAny(meta["last_embedded"]),
 		}
 		model.HydrateRecordFromMetadata(&record, metaMap)
 		if record.Space == "" {

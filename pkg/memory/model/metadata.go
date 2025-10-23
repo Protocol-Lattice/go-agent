@@ -11,6 +11,11 @@ func NormalizeMetadata(meta map[string]any, fallback time.Time) (importance floa
 	source = StringFromAny(meta["source"])
 	summary = StringFromAny(meta["summary"])
 	lastEmbedded = TimeFromAny(meta["last_embedded"])
+	if mv := Float32MatrixFromAny(meta["multi_embeddings"]); len(mv) > 0 {
+		meta["multi_embeddings"] = mv
+	} else {
+		delete(meta, "multi_embeddings")
+	}
 	if space := StringFromAny(meta["space"]); space != "" {
 		meta["space"] = space
 	}
@@ -131,4 +136,84 @@ func HydrateRecordFromMetadata(rec *MemoryRecord, meta map[string]any) {
 	if len(rec.GraphEdges) == 0 {
 		rec.GraphEdges = ValidGraphEdges(meta)
 	}
+	if len(rec.MultiEmbeddings) == 0 {
+		rec.MultiEmbeddings = Float32MatrixFromAny(meta["multi_embeddings"])
+	}
+}
+
+func Float32SliceFromAny(v any) []float32 {
+	switch t := v.(type) {
+	case nil:
+		return nil
+	case []float32:
+		out := make([]float32, len(t))
+		copy(out, t)
+		return out
+	case []float64:
+		out := make([]float32, len(t))
+		for i, val := range t {
+			out[i] = float32(val)
+		}
+		return out
+	case []any:
+		out := make([]float32, 0, len(t))
+		for _, val := range t {
+			out = append(out, float32(FloatFromAny(val)))
+		}
+		return out
+	case json.RawMessage:
+		var arr []float64
+		if err := json.Unmarshal(t, &arr); err == nil {
+			return Float32SliceFromAny(arr)
+		}
+	case string:
+		if t == "" {
+			return nil
+		}
+		var arr []float64
+		if err := json.Unmarshal([]byte(t), &arr); err == nil {
+			return Float32SliceFromAny(arr)
+		}
+	}
+	return nil
+}
+
+func Float32MatrixFromAny(v any) [][]float32 {
+	switch t := v.(type) {
+	case nil:
+		return nil
+	case [][]float32:
+		out := make([][]float32, len(t))
+		for i, row := range t {
+			if row == nil {
+				continue
+			}
+			cp := make([]float32, len(row))
+			copy(cp, row)
+			out[i] = cp
+		}
+		return out
+	case []any:
+		out := make([][]float32, 0, len(t))
+		for _, row := range t {
+			if slice := Float32SliceFromAny(row); len(slice) > 0 {
+				out = append(out, slice)
+			}
+		}
+		return out
+	case json.RawMessage:
+		var arr []any
+		if err := json.Unmarshal(t, &arr); err == nil {
+			return Float32MatrixFromAny(arr)
+		}
+	case string:
+		if t == "" {
+			return nil
+		}
+		var arr []any
+		if err := json.Unmarshal([]byte(t), &arr); err == nil {
+			return Float32MatrixFromAny(arr)
+		}
+	}
+	return nil
 }
