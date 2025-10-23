@@ -161,10 +161,115 @@ func (qs *QdrantStore) CreateSchema(ctx context.Context, schemaPath string) erro
 		return errors.New("schema file 'request.vectors' is required")
 	}
 
+	normalized, err := normalizeQdrantVectors(cfg.Request.Vectors)
+	if err != nil {
+		return err
+	}
+	cfg.Request.Vectors = normalized
+
 	return qs.createCollection(ctx, cfg.BaseURL, cfg.APIKey, cfg.Collection, cfg.Request)
 }
 
 // --- Internal HTTP call with robust handling (idempotent, dual-status parsing) ---
+
+func normalizeQdrantVectors(raw json.RawMessage) (json.RawMessage, error) {
+	if len(raw) == 0 {
+		return raw, errors.New("schema file 'request.vectors' is required")
+	}
+
+	var obj map[string]any
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		return raw, fmt.Errorf("schema file 'request.vectors' must be a JSON object: %w", err)
+	}
+	if len(obj) == 0 {
+		return raw, errors.New("schema file 'request.vectors' cannot be empty")
+	}
+
+	if sizeVal, ok := obj["size"]; ok {
+		if !isPositiveNumber(sizeVal) {
+			return raw, errors.New("schema file 'request.vectors.size' must be positive")
+		}
+		if _, hasDistance := obj["distance"]; !hasDistance {
+			obj["distance"] = DistanceCosine
+		}
+		normalized, err := json.Marshal(obj)
+		if err != nil {
+			return raw, err
+		}
+		return normalized, nil
+	}
+
+	updated := false
+	found := false
+	for name, val := range obj {
+		entry, ok := val.(map[string]any)
+		if !ok {
+			return raw, fmt.Errorf("schema file vector %q must be an object", name)
+		}
+		if !isPositiveNumber(entry["size"]) {
+			return raw, fmt.Errorf("schema file vector %q missing positive size", name)
+		}
+		found = true
+		if _, hasDistance := entry["distance"]; !hasDistance {
+			entry["distance"] = DistanceCosine
+			updated = true
+		}
+		obj[name] = entry
+	}
+	if !found {
+		return raw, errors.New("schema file 'request.vectors' must define at least one vector with a size")
+	}
+	if !updated {
+		return raw, nil
+	}
+	normalized, err := json.Marshal(obj)
+	if err != nil {
+		return raw, err
+	}
+	return normalized, nil
+}
+
+func isPositiveNumber(v any) bool {
+	switch t := v.(type) {
+	case nil:
+		return false
+	case float64:
+		return t > 0
+	case float32:
+		return t > 0
+	case int:
+		return t > 0
+	case int32:
+		return t > 0
+	case int64:
+		return t > 0
+	case uint:
+		return t > 0
+	case uint32:
+		return t > 0
+	case uint64:
+		return t > 0
+	case json.Number:
+		if i, err := t.Int64(); err == nil {
+			return i > 0
+		}
+		if f, err := t.Float64(); err == nil {
+			return f > 0
+		}
+		return false
+	case string:
+		t = strings.TrimSpace(t)
+		if t == "" {
+			return false
+		}
+		if i, err := strconv.ParseFloat(t, 64); err == nil {
+			return i > 0
+		}
+		return false
+	default:
+		return false
+	}
+}
 
 func (qs *QdrantStore) createCollection(ctx context.Context, baseURL, apiKey, collection string, req CreateCollectionRequest) error {
 	u, err := url.Parse(strings.TrimRight(baseURL, "/"))

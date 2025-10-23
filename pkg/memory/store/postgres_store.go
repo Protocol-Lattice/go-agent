@@ -347,6 +347,7 @@ CREATE TABLE IF NOT EXISTS memory_bank (
 
 CREATE INDEX IF NOT EXISTS memory_session_idx ON memory_bank (session_id);
 CREATE INDEX IF NOT EXISTS memory_embedding_idx ON memory_bank USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
+CREATE INDEX IF NOT EXISTS memory_created_idx ON memory_bank (created_at DESC);
 
 ALTER TABLE memory_bank ADD COLUMN IF NOT EXISTS importance DOUBLE PRECISION DEFAULT 0;
 ALTER TABLE memory_bank ADD COLUMN IF NOT EXISTS source TEXT DEFAULT '';
@@ -360,6 +361,8 @@ CREATE TABLE IF NOT EXISTS memory_nodes (
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+CREATE INDEX IF NOT EXISTS memory_nodes_space_idx ON memory_nodes (space);
+
 CREATE TABLE IF NOT EXISTS memory_edges (
     from_memory BIGINT NOT NULL REFERENCES memory_bank(id) ON DELETE CASCADE,
     to_memory BIGINT NOT NULL REFERENCES memory_bank(id) ON DELETE CASCADE,
@@ -369,6 +372,7 @@ CREATE TABLE IF NOT EXISTS memory_edges (
 );
 
 CREATE INDEX IF NOT EXISTS memory_edges_to_idx ON memory_edges (to_memory);
+CREATE INDEX IF NOT EXISTS memory_edges_from_idx ON memory_edges (from_memory);
 `
 
 func vectorFromJSON(jsonEmbed []byte) string {

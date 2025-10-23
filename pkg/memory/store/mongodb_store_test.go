@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -26,7 +27,7 @@ func TestFloatEmbeddingConversions(t *testing.T) {
 
 func TestMongoMemoryDocumentToRecordHydratesMetadata(t *testing.T) {
 	ts := time.Now().UTC().Truncate(time.Millisecond)
-	metadata := `{"space":"custom","importance":0.8,"source":"user","summary":"context","last_embedded":"` + ts.Format(time.RFC3339Nano) + `","graph_edges":[{"target":7,"type":"explains"}]}`
+	metadata := `{"space":"custom","importance":0.8,"source":"user","summary":"context","last_embedded":"` + ts.Format(time.RFC3339Nano) + `","graph_edges":[{"target":7,"type":"explains"}],"multi_embeddings":[[0.1,0.2],[0.3,0.4]]}`
 
 	doc := mongoMemoryDocument{
 		ID:        42,
@@ -70,6 +71,9 @@ func TestMongoMemoryDocumentToRecordHydratesMetadata(t *testing.T) {
 	if len(rec.Embedding) != len(doc.Embedding) {
 		t.Fatalf("expected embedding length %d, got %d", len(doc.Embedding), len(rec.Embedding))
 	}
+	if len(rec.MultiEmbeddings) != 2 {
+		t.Fatalf("expected 2 multi embeddings, got %d", len(rec.MultiEmbeddings))
+	}
 }
 
 func TestMongoStoreCloseNilClient(t *testing.T) {
@@ -87,5 +91,44 @@ func TestMongoStoreCreateSchemaOnNilStore(t *testing.T) {
 	store = &MongoStore{}
 	if err := store.CreateSchema(nil, ""); err != nil {
 		t.Fatalf("expected nil error when collection is nil, got %v", err)
+	}
+}
+
+func TestMongoStoreStoreMemoryMultiMetadata(t *testing.T) {
+	store := &MongoStore{}
+	meta := map[string]any{}
+	embeddings := [][]float32{{1, 0}, {0.5, 0.5}}
+	if err := store.StoreMemoryMulti(context.Background(), "session", "content", meta, embeddings); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	extras, ok := meta["multi_embeddings"].([][]float32)
+	if !ok {
+		t.Fatalf("expected multi_embeddings stored in metadata")
+	}
+	if len(extras) != 1 {
+		t.Fatalf("expected 1 auxiliary vector, got %d", len(extras))
+	}
+	embeddings[1][0] = 99
+	if extras[0][0] == 99 {
+		t.Fatalf("expected auxiliary vectors to be cloned, but saw mutation")
+	}
+
+	meta = map[string]any{"multi_embeddings": [][]float32{{42}}}
+	if err := store.StoreMemoryMulti(context.Background(), "session", "content", meta, embeddings[:1]); err != nil {
+		t.Fatalf("unexpected error for single vector: %v", err)
+	}
+	if _, exists := meta["multi_embeddings"]; exists {
+		t.Fatalf("expected multi_embeddings removed when only primary vector provided")
+	}
+}
+
+func TestMongoStoreSearchMemoryMultiNil(t *testing.T) {
+	var store *MongoStore
+	results, err := store.SearchMemoryMulti(context.Background(), [][]float32{{1, 2}}, 5)
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if results != nil {
+		t.Fatalf("expected nil results, got %v", results)
 	}
 }

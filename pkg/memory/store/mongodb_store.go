@@ -91,6 +91,23 @@ func (ms *MongoStore) StoreMemory(ctx context.Context, sessionID, content string
 	return err
 }
 
+// StoreMemoryMulti persists a record with multiple embeddings, cloning auxiliary vectors into metadata.
+func (ms *MongoStore) StoreMemoryMulti(ctx context.Context, sessionID, content string, metadata map[string]any, embeddings [][]float32) error {
+	var primary []float32
+	if len(embeddings) > 0 {
+		primary = embeddings[0]
+	}
+	if metadata == nil {
+		metadata = map[string]any{}
+	}
+	if len(embeddings) > 1 {
+		metadata["multi_embeddings"] = cloneFloat32Matrix(embeddings[1:])
+	} else {
+		delete(metadata, "multi_embeddings")
+	}
+	return ms.StoreMemory(ctx, sessionID, content, metadata, primary)
+}
+
 func (ms *MongoStore) SearchMemory(ctx context.Context, queryEmbedding []float32, limit int) ([]model.MemoryRecord, error) {
 	if ms == nil || ms.collection == nil || limit <= 0 {
 		return nil, nil
@@ -118,6 +135,47 @@ func (ms *MongoStore) SearchMemory(ctx context.Context, queryEmbedding []float32
 	if err := cursor.Err(); err != nil {
 		return nil, err
 	}
+	sort.Slice(scoredRecords, func(i, j int) bool { return scoredRecords[i].score > scoredRecords[j].score })
+	if len(scoredRecords) > limit {
+		scoredRecords = scoredRecords[:limit]
+	}
+	records := make([]model.MemoryRecord, len(scoredRecords))
+	for i, sc := range scoredRecords {
+		records[i] = sc.record
+	}
+	return records, nil
+}
+
+// SearchMemoryMulti scores records against multiple query vectors, returning the top results.
+func (ms *MongoStore) SearchMemoryMulti(ctx context.Context, queryEmbeddings [][]float32, limit int) ([]model.MemoryRecord, error) {
+	if ms == nil || ms.collection == nil || limit <= 0 || len(queryEmbeddings) == 0 {
+		return nil, nil
+	}
+	cursor, err := ms.collection.Find(ctx, bson.M{})
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+
+	type scored struct {
+		record model.MemoryRecord
+		score  float64
+	}
+
+	var scoredRecords []scored
+	for cursor.Next(ctx) {
+		var doc mongoMemoryDocument
+		if err := cursor.Decode(&doc); err != nil {
+			return nil, err
+		}
+		rec := doc.toRecord()
+		rec.Score = model.MaxCosineSimilarity(queryEmbeddings, rec.AllEmbeddings())
+		scoredRecords = append(scoredRecords, scored{record: rec, score: rec.Score})
+	}
+	if err := cursor.Err(); err != nil {
+		return nil, err
+	}
+
 	sort.Slice(scoredRecords, func(i, j int) bool { return scoredRecords[i].score > scoredRecords[j].score })
 	if len(scoredRecords) > limit {
 		scoredRecords = scoredRecords[:limit]
@@ -194,6 +252,14 @@ func (ms *MongoStore) CreateSchema(ctx context.Context, _ string) error {
 		{
 			Keys:    bson.D{{Key: "space", Value: 1}},
 			Options: options.Index().SetName("space"),
+		},
+		{
+			Keys:    bson.D{{Key: "created_at", Value: -1}},
+			Options: options.Index().SetName("created_at_desc"),
+		},
+		{
+			Keys:    bson.D{{Key: "graph_edges.target", Value: 1}},
+			Options: options.Index().SetName("graph_edge_target"),
 		},
 	}
 	if _, err := ms.collection.Indexes().CreateMany(ctx, indexes); err != nil {
@@ -292,6 +358,22 @@ func float32Embedding(vec []float64) []float32 {
 		out[i] = float32(v)
 	}
 	return out
+}
+
+func cloneFloat32Matrix(vectors [][]float32) [][]float32 {
+	if len(vectors) == 0 {
+		return nil
+	}
+	cloned := make([][]float32, len(vectors))
+	for i, vec := range vectors {
+		if len(vec) == 0 {
+			continue
+		}
+		cp := make([]float32, len(vec))
+		copy(cp, vec)
+		cloned[i] = cp
+	}
+	return cloned
 }
 
 // Close releases the underlying MongoDB client.
