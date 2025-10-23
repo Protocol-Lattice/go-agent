@@ -31,19 +31,38 @@ func (s *InMemoryStore) StoreMemory(_ context.Context, sessionID, content string
 	importance, source, summary, lastEmbedded, metadataJSON := model.NormalizeMetadata(metadata, now)
 	s.nextID++
 	record := model.MemoryRecord{
-		ID:           s.nextID,
-		SessionID:    sessionID,
-		Content:      content,
-		Metadata:     metadataJSON,
-		Embedding:    append([]float32(nil), embedding...),
-		Importance:   importance,
-		Source:       source,
-		Summary:      summary,
-		CreatedAt:    now,
-		LastEmbedded: lastEmbedded,
+		ID:              s.nextID,
+		SessionID:       sessionID,
+		Content:         content,
+		Metadata:        metadataJSON,
+		Embedding:       append([]float32(nil), embedding...),
+		MultiEmbeddings: model.Float32MatrixFromAny(model.DecodeMetadata(metadataJSON)["multi_embeddings"]),
+		Importance:      importance,
+		Source:          source,
+		Summary:         summary,
+		CreatedAt:       now,
+		LastEmbedded:    lastEmbedded,
 	}
 	s.records[record.ID] = record
 	return nil
+}
+
+// StoreMemoryMulti persists a record with multiple embeddings.
+func (s *InMemoryStore) StoreMemoryMulti(ctx context.Context, sessionID, content string, metadata map[string]any, embeddings [][]float32) error {
+	primary := []float32(nil)
+	if len(embeddings) > 0 {
+		primary = embeddings[0]
+	}
+	if metadata == nil {
+		metadata = map[string]any{}
+	}
+	if len(embeddings) > 1 {
+		extras := cloneMatrix(embeddings[1:])
+		metadata["multi_embeddings"] = extras
+	} else {
+		delete(metadata, "multi_embeddings")
+	}
+	return s.StoreMemory(ctx, sessionID, content, metadata, primary)
 }
 
 func (s *InMemoryStore) SearchMemory(_ context.Context, queryEmbedding []float32, limit int) ([]model.MemoryRecord, error) {
@@ -60,6 +79,42 @@ func (s *InMemoryStore) SearchMemory(_ context.Context, queryEmbedding []float32
 	for _, rec := range s.records {
 		score := model.CosineSimilarity(queryEmbedding, rec.Embedding)
 		rec.Score = score
+		rec.MultiEmbeddings = cloneMatrix(rec.MultiEmbeddings)
+		scoredRecords = append(scoredRecords, scored{rec: rec, score: score})
+	}
+	sort.Slice(scoredRecords, func(i, j int) bool {
+		return scoredRecords[i].score > scoredRecords[j].score
+	})
+	if len(scoredRecords) > limit {
+		scoredRecords = scoredRecords[:limit]
+	}
+	result := make([]model.MemoryRecord, len(scoredRecords))
+	for i, sc := range scoredRecords {
+		result[i] = sc.rec
+	}
+	return result, nil
+}
+
+// SearchMemoryMulti scores records against multiple query embeddings.
+func (s *InMemoryStore) SearchMemoryMulti(_ context.Context, queryEmbeddings [][]float32, limit int) ([]model.MemoryRecord, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if limit <= 0 {
+		return nil, nil
+	}
+	if len(queryEmbeddings) == 0 {
+		return nil, nil
+	}
+	type scored struct {
+		rec   model.MemoryRecord
+		score float64
+	}
+	scoredRecords := make([]scored, 0, len(s.records))
+	for _, rec := range s.records {
+		vectors := rec.AllEmbeddings()
+		score := model.MaxCosineSimilarity(queryEmbeddings, vectors)
+		rec.Score = score
+		rec.MultiEmbeddings = cloneMatrix(rec.MultiEmbeddings)
 		scoredRecords = append(scoredRecords, scored{rec: rec, score: score})
 	}
 	sort.Slice(scoredRecords, func(i, j int) bool {
@@ -106,7 +161,9 @@ func (s *InMemoryStore) Iterate(_ context.Context, fn func(model.MemoryRecord) b
 	}
 	sort.Slice(ids, func(i, j int) bool { return s.records[ids[i]].CreatedAt.Before(s.records[ids[j]].CreatedAt) })
 	for _, id := range ids {
-		if !fn(s.records[id]) {
+		rec := s.records[id]
+		rec.MultiEmbeddings = cloneMatrix(rec.MultiEmbeddings)
+		if !fn(rec) {
 			break
 		}
 	}
@@ -117,4 +174,20 @@ func (s *InMemoryStore) Count(_ context.Context) (int, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return len(s.records), nil
+}
+
+func cloneMatrix(src [][]float32) [][]float32 {
+	if len(src) == 0 {
+		return nil
+	}
+	out := make([][]float32, len(src))
+	for i, vec := range src {
+		if len(vec) == 0 {
+			continue
+		}
+		cp := make([]float32, len(vec))
+		copy(cp, vec)
+		out[i] = cp
+	}
+	return out
 }

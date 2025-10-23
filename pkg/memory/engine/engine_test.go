@@ -2,12 +2,43 @@ package engine
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
 	embedpkg "github.com/Raezil/go-agent-development-kit/pkg/memory/embed"
 	storepkg "github.com/Raezil/go-agent-development-kit/pkg/memory/store"
 )
+
+type keywordMultiEmbedder struct{}
+
+func (keywordMultiEmbedder) baseVector(text string) []float32 {
+	lower := strings.ToLower(text)
+	fields := strings.Fields(lower)
+	vec := make([]float32, 4)
+	vec[0] = float32(strings.Count(lower, "a") + strings.Count(lower, "e"))
+	vec[1] = float32(strings.Count(lower, "d") + strings.Count(lower, "t"))
+	vec[2] = float32(strings.Count(lower, "c") + strings.Count(lower, "r"))
+	vec[3] = float32(len(fields))
+	return vec
+}
+
+func (k keywordMultiEmbedder) Embed(_ context.Context, text string) ([]float32, error) {
+	return k.baseVector(text), nil
+}
+
+func (k keywordMultiEmbedder) EmbedMany(ctx context.Context, text string) ([][]float32, error) {
+	primary, _ := k.Embed(ctx, text)
+	secondary := make([]float32, len(primary))
+	keywords := []string{"database", "cache", "frontend", "latency"}
+	lower := strings.ToLower(text)
+	for i, kw := range keywords {
+		if strings.Contains(lower, kw) {
+			secondary[i%len(secondary)] = 1
+		}
+	}
+	return [][]float32{primary, secondary}, nil
+}
 
 func TestEngineWeightedRetrievalAndSummaries(t *testing.T) {
 	memStore := storepkg.NewInMemoryStore()
@@ -115,5 +146,42 @@ func TestEngineReembedOnDrift(t *testing.T) {
 	snap := engine.MetricsSnapshot()
 	if snap.Reembedded == 0 {
 		t.Fatalf("expected drift re-embedding metric to increment")
+	}
+}
+
+func TestEngineMultiVectorRetrieval(t *testing.T) {
+	memStore := storepkg.NewInMemoryStore()
+	engine := NewEngine(memStore, Options{}).WithEmbedder(keywordMultiEmbedder{})
+	ctx := context.Background()
+
+	if _, err := engine.Store(ctx, "alpha", "Discuss quarterly planning for mobile app", nil); err != nil {
+		t.Fatalf("store planning memory: %v", err)
+	}
+	if _, err := engine.Store(ctx, "alpha", "Database outage runbook and recovery checklist", nil); err != nil {
+		t.Fatalf("store database memory: %v", err)
+	}
+	if _, err := engine.Store(ctx, "alpha", "Cache eviction strategies for nightly batch", nil); err != nil {
+		t.Fatalf("store cache memory: %v", err)
+	}
+
+	records, err := engine.Retrieve(ctx, "mitigation steps for database failure", 2)
+	if err != nil {
+		t.Fatalf("retrieve: %v", err)
+	}
+	if len(records) == 0 {
+		t.Fatalf("expected at least one record")
+	}
+	found := false
+	for _, rec := range records {
+		if strings.Contains(strings.ToLower(rec.Content), "database") {
+			found = true
+			if len(rec.MultiEmbeddings) == 0 {
+				t.Fatalf("expected multi-embeddings to be stored with the record")
+			}
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected database runbook to be present in retrieval results")
 	}
 }

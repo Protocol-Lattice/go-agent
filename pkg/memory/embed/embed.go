@@ -13,11 +13,22 @@ type Embedder interface {
 	Embed(ctx context.Context, text string) ([]float32, error)
 }
 
+// MultiVectorEmbedder returns multiple embeddings representing different aspects of the text.
+type MultiVectorEmbedder interface {
+	Embed(ctx context.Context, text string) ([]float32, error)
+	EmbedMany(ctx context.Context, text string) ([][]float32, error)
+}
+
 // ---------- Dummy (fallback) ----------
 type DummyEmbedder struct{}
 
 func (DummyEmbedder) Embed(_ context.Context, text string) ([]float32, error) {
 	return DummyEmbedding(text), nil
+}
+
+func (DummyEmbedder) EmbedMany(ctx context.Context, text string) ([][]float32, error) {
+	vec, _ := DummyEmbedder{}.Embed(ctx, text)
+	return [][]float32{vec}, nil
 }
 
 // DummyEmbedding is kept for tests/back-compat.

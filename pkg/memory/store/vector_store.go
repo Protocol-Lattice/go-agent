@@ -17,6 +17,12 @@ type VectorStore interface {
 	Count(ctx context.Context) (int, error)
 }
 
+// MultiVectorStore can persist and retrieve memories with multiple embeddings.
+type MultiVectorStore interface {
+	StoreMemoryMulti(ctx context.Context, sessionID, content string, metadata map[string]any, embeddings [][]float32) error
+	SearchMemoryMulti(ctx context.Context, queryEmbeddings [][]float32, limit int) ([]model.MemoryRecord, error)
+}
+
 // SchemaInitializer allows stores to expose optional schema/bootstrap routines.
 type SchemaInitializer interface {
 	CreateSchema(ctx context.Context, schemaPath string) error
