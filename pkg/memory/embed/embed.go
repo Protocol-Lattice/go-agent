@@ -6,8 +6,6 @@ import (
 	"log"
 	"os"
 	"strings"
-
-	fastembed "github.com/anush008/fastembed-go"
 )
 
 // Embedder is a pluggable text-embedding provider.
@@ -57,12 +55,10 @@ func AutoEmbedder() Embedder {
 			return e
 		}
 	case "fastembed":
-		if e, err := NewFastEmbeed(context.Background(), &Options{
-			Model:     fastembed.BGESmallENV15,
-			CacheDir:  ".fastembed",
-			BatchSize: 64,
-		}); err == nil {
-			return e
+		if opts := defaultFastEmbedOptions(); opts != nil {
+			if e, err := NewFastEmbeed(context.Background(), opts); err == nil {
+				return e
+			}
 		}
 	}
 
