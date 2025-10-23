@@ -115,7 +115,7 @@ func (e *Engine) Store(ctx context.Context, sessionID, content string, metadata 
 		return model.MemoryRecord{}, err
 	}
 	for _, cand := range candidates {
-		sim := model.CosineSimilarity(embedding, cand.Embedding)
+		sim := model.MaxCosineSimilarity(embedding, cand)
 		if sim >= e.opts.DuplicateSimilarity {
 			e.metrics.IncDeduplicated()
 			return cand, nil
@@ -230,8 +230,8 @@ func (e *Engine) Retrieve(ctx context.Context, query string, limit int) ([]model
 						}
 						existingKey[key] = struct{}{}
 					}
-					if len(nb.Embedding) > 0 {
-						nb.Score = model.CosineSimilarity(embedding, nb.Embedding)
+					if score := model.MaxCosineSimilarity(embedding, nb); score != 0 {
+						nb.Score = score
 					}
 					candidates = append(candidates, nb)
 				}
@@ -245,7 +245,7 @@ func (e *Engine) Retrieve(ctx context.Context, query string, limit int) ([]model
 		if rec.Importance == 0 {
 			rec.Importance = importanceScore(rec.Content, model.DecodeMetadata(rec.Metadata))
 		}
-		rec.Score = model.CosineSimilarity(embedding, rec.Embedding)
+		rec.Score = model.MaxCosineSimilarity(embedding, *rec)
 		recency := recencyScore(now.Sub(rec.CreatedAt), e.opts.HalfLife)
 		if e.metrics != nil {
 			e.metrics.ObserveRecency(recency)
@@ -500,7 +500,7 @@ func (e *Engine) reembedOnDrift(ctx context.Context, records []model.MemoryRecor
 		if err != nil {
 			return err
 		}
-		sim := model.CosineSimilarity(vec, rec.Embedding)
+		sim := model.MaxCosineSimilarity(vec, rec)
 		if sim >= e.opts.DriftThreshold {
 			continue
 		}
@@ -617,11 +617,11 @@ func mmrSelect(records []model.MemoryRecord, query []float32, limit int, lambda 
 		for i, cand := range remaining {
 			relevance := cand.WeightedScore
 			if relevance == 0 {
-				relevance = model.CosineSimilarity(query, cand.Embedding)
+				relevance = model.MaxCosineSimilarity(query, cand)
 			}
 			var maxSim float64
 			for _, sel := range selected {
-				if sim := model.CosineSimilarity(cand.Embedding, sel.Embedding); sim > maxSim {
+				if sim := model.RecordSimilarity(cand, sel); sim > maxSim {
 					maxSim = sim
 				}
 			}
@@ -650,19 +650,23 @@ func clusterRecords(records []model.MemoryRecord, threshold float64) [][]model.M
 	}
 	var clusters []cluster
 	for _, rec := range records {
+		vec := model.RepresentativeEmbedding(rec)
+		if len(vec) == 0 {
+			continue
+		}
 		placed := false
 		for i := range clusters {
-			sim := model.CosineSimilarity(rec.Embedding, float32Slice(clusters[i].centroid))
+			sim := model.CosineSimilarity(vec, float32Slice(clusters[i].centroid))
 			if sim >= threshold {
 				clusters[i].records = append(clusters[i].records, rec)
-				clusters[i].centroid = updateCentroid(clusters[i].centroid, rec.Embedding)
+				clusters[i].centroid = updateCentroid(clusters[i].centroid, vec)
 				placed = true
 				break
 			}
 		}
 		if !placed {
 			clusters = append(clusters, cluster{
-				centroid: float32To64(rec.Embedding),
+				centroid: float32To64(vec),
 				records:  []model.MemoryRecord{rec},
 			})
 		}

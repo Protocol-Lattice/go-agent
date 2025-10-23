@@ -2,9 +2,11 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -41,29 +43,35 @@ func (ps *PostgresStore) StoreMemory(ctx context.Context, sessionID, content str
 		metadata["space"] = sessionID
 	}
 	importance, source, summary, lastEmbedded, metadataJSON := model.NormalizeMetadata(metadata, time.Now().UTC())
+	meta := model.DecodeMetadata(metadataJSON)
+	matrix := model.ValidEmbeddingMatrix(meta)
 	query := `
-                INSERT INTO memory_bank (session_id, content, metadata, embedding, importance, source, summary, last_embedded)
-                VALUES ($1, $2, $3::jsonb, $4::vector, $5, $6, $7, $8)
+                INSERT INTO memory_bank (session_id, content, metadata, embedding, importance, source, summary, last_embedded, embedding_matrix)
+                VALUES ($1, $2, $3::jsonb, $4::vector, $5, $6, $7, $8, $9::jsonb)
                 RETURNING id;
         `
 	jsonEmbed, _ := json.Marshal(embedding)
+	var matrixJSON []byte
+	if len(matrix) > 0 {
+		matrixJSON, _ = json.Marshal(matrix)
+	}
 	var id int64
-	if err := ps.DB.QueryRow(ctx, query, sessionID, content, metadataJSON, vectorFromJSON(jsonEmbed), importance, source, summary, lastEmbedded).Scan(&id); err != nil {
+	if err := ps.DB.QueryRow(ctx, query, sessionID, content, metadataJSON, vectorFromJSON(jsonEmbed), importance, source, summary, lastEmbedded, matrixJSON).Scan(&id); err != nil {
 		return err
 	}
-	meta := model.DecodeMetadata(metadataJSON)
 	rec := model.MemoryRecord{
-		ID:           id,
-		SessionID:    sessionID,
-		Space:        model.StringFromAny(meta["space"]),
-		Content:      content,
-		Metadata:     metadataJSON,
-		Embedding:    embedding,
-		Importance:   importance,
-		Source:       source,
-		Summary:      summary,
-		LastEmbedded: lastEmbedded,
-		GraphEdges:   model.ValidGraphEdges(meta),
+		ID:              id,
+		SessionID:       sessionID,
+		Space:           model.StringFromAny(meta["space"]),
+		Content:         content,
+		Metadata:        metadataJSON,
+		Embedding:       embedding,
+		Importance:      importance,
+		Source:          source,
+		Summary:         summary,
+		LastEmbedded:    lastEmbedded,
+		GraphEdges:      model.ValidGraphEdges(meta),
+		EmbeddingMatrix: matrix,
 	}
 	if rec.Space == "" {
 		rec.Space = sessionID
@@ -81,7 +89,7 @@ func (ps *PostgresStore) SearchMemory(ctx context.Context, queryEmbedding []floa
 	}
 	jsonEmbed, _ := json.Marshal(queryEmbedding)
 	rows, err := ps.DB.Query(ctx, `
-        SELECT id, session_id, content, metadata::text, importance, source, summary, created_at, last_embedded, embedding::text, (embedding <-> $1::vector) AS score
+        SELECT id, session_id, content, metadata::text, importance, source, summary, created_at, last_embedded, embedding::text, embedding_matrix::text, (embedding <-> $1::vector) AS score
         FROM memory_bank
         ORDER BY embedding <-> $1::vector
         LIMIT $2;
@@ -95,16 +103,25 @@ func (ps *PostgresStore) SearchMemory(ctx context.Context, queryEmbedding []floa
 	for rows.Next() {
 		var rec model.MemoryRecord
 		var embeddingText string
-		if err := rows.Scan(&rec.ID, &rec.SessionID, &rec.Content, &rec.Metadata, &rec.Importance, &rec.Source, &rec.Summary, &rec.CreatedAt, &rec.LastEmbedded, &embeddingText, &rec.Score); err != nil {
+		var matrixText sql.NullString
+		if err := rows.Scan(&rec.ID, &rec.SessionID, &rec.Content, &rec.Metadata, &rec.Importance, &rec.Source, &rec.Summary, &rec.CreatedAt, &rec.LastEmbedded, &embeddingText, &matrixText, &rec.Score); err != nil {
 			return nil, err
 		}
 		rec.Embedding = parseVector(embeddingText)
-		model.HydrateRecordFromMetadata(&rec, model.DecodeMetadata(rec.Metadata))
-		rec.Score = 1 - rec.Score
+		meta := model.DecodeMetadata(rec.Metadata)
+		model.HydrateRecordFromMetadata(&rec, meta)
+		if len(rec.EmbeddingMatrix) == 0 && matrixText.Valid && strings.TrimSpace(matrixText.String) != "" {
+			rec.EmbeddingMatrix = model.DecodeEmbeddingMatrix(matrixText.String)
+		}
+		rec.Score = model.MaxCosineSimilarity(queryEmbedding, rec)
 		if rec.Space == "" {
 			rec.Space = rec.SessionID
 		}
 		records = append(records, rec)
+	}
+	sort.SliceStable(records, func(i, j int) bool { return records[i].Score > records[j].Score })
+	if limit > 0 && len(records) > limit {
+		records = records[:limit]
 	}
 	return records, nil
 }
@@ -341,6 +358,7 @@ CREATE TABLE IF NOT EXISTS memory_bank (
     content TEXT NOT NULL,
     metadata JSONB,
     embedding vector(768),
+    embedding_matrix JSONB,
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -351,6 +369,7 @@ ALTER TABLE memory_bank ADD COLUMN IF NOT EXISTS importance DOUBLE PRECISION DEF
 ALTER TABLE memory_bank ADD COLUMN IF NOT EXISTS source TEXT DEFAULT '';
 ALTER TABLE memory_bank ADD COLUMN IF NOT EXISTS summary TEXT DEFAULT '';
 ALTER TABLE memory_bank ADD COLUMN IF NOT EXISTS last_embedded TIMESTAMPTZ DEFAULT NOW();
+ALTER TABLE memory_bank ADD COLUMN IF NOT EXISTS embedding_matrix JSONB;
 
 CREATE TABLE IF NOT EXISTS memory_nodes (
     memory_id BIGINT PRIMARY KEY REFERENCES memory_bank(id) ON DELETE CASCADE,

@@ -15,6 +15,7 @@ func NormalizeMetadata(meta map[string]any, fallback time.Time) (importance floa
 		meta["space"] = space
 	}
 	edges := SanitizeGraphEdges(meta)
+	matrix := SanitizeEmbeddingMatrix(meta)
 	if lastEmbedded.IsZero() {
 		if fallback.IsZero() {
 			fallback = time.Now().UTC()
@@ -27,6 +28,9 @@ func NormalizeMetadata(meta map[string]any, fallback time.Time) (importance floa
 	meta["last_embedded"] = lastEmbedded.UTC().Format(time.RFC3339Nano)
 	if len(edges) > 0 {
 		meta["graph_edges"] = edges
+	}
+	if len(matrix) > 0 {
+		meta[EmbeddingMatrixKey] = matrix
 	}
 	jsonBytes, _ := json.Marshal(meta)
 	jsonString = string(jsonBytes)
@@ -130,5 +134,8 @@ func HydrateRecordFromMetadata(rec *MemoryRecord, meta map[string]any) {
 	}
 	if len(rec.GraphEdges) == 0 {
 		rec.GraphEdges = ValidGraphEdges(meta)
+	}
+	if len(rec.EmbeddingMatrix) == 0 {
+		rec.EmbeddingMatrix = ValidEmbeddingMatrix(meta)
 	}
 }

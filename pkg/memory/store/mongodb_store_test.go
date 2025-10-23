@@ -26,7 +26,7 @@ func TestFloatEmbeddingConversions(t *testing.T) {
 
 func TestMongoMemoryDocumentToRecordHydratesMetadata(t *testing.T) {
 	ts := time.Now().UTC().Truncate(time.Millisecond)
-	metadata := `{"space":"custom","importance":0.8,"source":"user","summary":"context","last_embedded":"` + ts.Format(time.RFC3339Nano) + `","graph_edges":[{"target":7,"type":"explains"}]}`
+	metadata := `{"space":"custom","importance":0.8,"source":"user","summary":"context","last_embedded":"` + ts.Format(time.RFC3339Nano) + `","graph_edges":[{"target":7,"type":"explains"}],"embedding_matrix":[[0.5,0.6]]}`
 
 	doc := mongoMemoryDocument{
 		ID:        42,
@@ -69,6 +69,9 @@ func TestMongoMemoryDocumentToRecordHydratesMetadata(t *testing.T) {
 	}
 	if len(rec.Embedding) != len(doc.Embedding) {
 		t.Fatalf("expected embedding length %d, got %d", len(doc.Embedding), len(rec.Embedding))
+	}
+	if len(rec.EmbeddingMatrix) != 1 || len(rec.EmbeddingMatrix[0]) != 2 {
+		t.Fatalf("expected embedding matrix hydrated, got %#v", rec.EmbeddingMatrix)
 	}
 }
 

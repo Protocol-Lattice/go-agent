@@ -17,6 +17,10 @@ func TestNormalizeMetadata(t *testing.T) {
 			map[string]any{"target": json.Number("12"), "type": string(EdgeExplains)},
 			map[string]any{"target": 0, "type": "unknown"},
 		},
+		EmbeddingMatrixKey: []any{
+			[]any{json.Number("0.5"), 1, "not-a-number"},
+			[]any{},
+		},
 	}
 	importance, source, summary, lastEmbedded, jsonStr := NormalizeMetadata(meta, fallback)
 	if math.Abs(importance-0.75) > 1e-9 {
@@ -38,6 +42,10 @@ func TestNormalizeMetadata(t *testing.T) {
 	edges := ValidGraphEdges(decoded)
 	if len(edges) != 1 || edges[0].Target != 12 || edges[0].Type != EdgeExplains {
 		t.Fatalf("unexpected sanitized edges: %#v", edges)
+	}
+	matrix := ValidEmbeddingMatrix(decoded)
+	if len(matrix) != 1 || len(matrix[0]) != 2 {
+		t.Fatalf("unexpected sanitized matrix: %#v", matrix)
 	}
 }
 
@@ -123,6 +131,9 @@ func TestHydrateRecordFromMetadata(t *testing.T) {
 		"graph_edges": []any{
 			map[string]any{"target": 10, "type": string(EdgeFollows)},
 		},
+		EmbeddingMatrixKey: []any{
+			[]any{0.1, 0.2, 0.3},
+		},
 	}
 	HydrateRecordFromMetadata(rec, meta)
 	if rec.Importance != 0.8 || rec.Source != "memory" || rec.Summary != "short" || rec.Space != "team" {
@@ -133,6 +144,28 @@ func TestHydrateRecordFromMetadata(t *testing.T) {
 	}
 	if len(rec.GraphEdges) != 1 || rec.GraphEdges[0].Target != 10 {
 		t.Fatalf("expected graph edges to be hydrated, got %#v", rec.GraphEdges)
+	}
+	if len(rec.EmbeddingMatrix) != 1 || len(rec.EmbeddingMatrix[0]) != 3 {
+		t.Fatalf("expected embedding matrix to hydrate, got %#v", rec.EmbeddingMatrix)
+	}
+}
+
+func TestDecodeEmbeddingMatrixVariants(t *testing.T) {
+	cases := []struct {
+		name string
+		raw  any
+		want int
+	}{
+		{"nil", nil, 0},
+		{"single", []float32{1, 2}, 1},
+		{"nested_any", []any{[]any{1, "2", json.Number("3")}}, 1},
+		{"json_string", `[[1.1,2.2],[3.3,4.4]]`, 2},
+		{"bytes", []byte(`[[5,6]]`), 1},
+	}
+	for _, tc := range cases {
+		if got := DecodeEmbeddingMatrix(tc.raw); len(got) != tc.want {
+			t.Fatalf("%s: expected %d rows, got %d", tc.name, tc.want, len(got))
+		}
 	}
 }
 

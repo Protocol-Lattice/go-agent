@@ -65,6 +65,7 @@ func (ms *MongoStore) StoreMemory(ctx context.Context, sessionID, content string
 		space = sessionID
 	}
 	edges := model.ValidGraphEdges(meta)
+	matrix := model.ValidEmbeddingMatrix(meta)
 
 	id, err := ms.nextID(ctx)
 	if err != nil {
@@ -83,6 +84,9 @@ func (ms *MongoStore) StoreMemory(ctx context.Context, sessionID, content string
 		"summary":       summary,
 		"created_at":    now,
 		"last_embedded": lastEmbedded,
+	}
+	if len(matrix) > 0 {
+		doc["embedding_matrix"] = float64Matrix(matrix)
 	}
 	if len(edges) > 0 {
 		doc["graph_edges"] = edges
@@ -112,7 +116,7 @@ func (ms *MongoStore) SearchMemory(ctx context.Context, queryEmbedding []float32
 			return nil, err
 		}
 		rec := doc.toRecord()
-		rec.Score = model.CosineSimilarity(queryEmbedding, rec.Embedding)
+		rec.Score = model.MaxCosineSimilarity(queryEmbedding, rec)
 		scoredRecords = append(scoredRecords, scored{record: rec, score: rec.Score})
 	}
 	if err := cursor.Err(); err != nil {
@@ -238,6 +242,7 @@ type mongoMemoryDocument struct {
 	Content      string            `bson:"content"`
 	Metadata     string            `bson:"metadata"`
 	Embedding    []float64         `bson:"embedding"`
+	EmbeddingMat [][]float64       `bson:"embedding_matrix,omitempty"`
 	Importance   float64           `bson:"importance"`
 	Source       string            `bson:"source"`
 	Summary      string            `bson:"summary"`
@@ -248,21 +253,25 @@ type mongoMemoryDocument struct {
 
 func (doc mongoMemoryDocument) toRecord() model.MemoryRecord {
 	rec := model.MemoryRecord{
-		ID:           doc.ID,
-		SessionID:    doc.SessionID,
-		Space:        doc.Space,
-		Content:      doc.Content,
-		Metadata:     doc.Metadata,
-		Embedding:    float32Embedding(doc.Embedding),
-		Importance:   doc.Importance,
-		Source:       doc.Source,
-		Summary:      doc.Summary,
-		CreatedAt:    doc.CreatedAt,
-		LastEmbedded: doc.LastEmbedded,
-		GraphEdges:   doc.GraphEdges,
+		ID:              doc.ID,
+		SessionID:       doc.SessionID,
+		Space:           doc.Space,
+		Content:         doc.Content,
+		Metadata:        doc.Metadata,
+		Embedding:       float32Embedding(doc.Embedding),
+		EmbeddingMatrix: float32Matrix(doc.EmbeddingMat),
+		Importance:      doc.Importance,
+		Source:          doc.Source,
+		Summary:         doc.Summary,
+		CreatedAt:       doc.CreatedAt,
+		LastEmbedded:    doc.LastEmbedded,
+		GraphEdges:      doc.GraphEdges,
 	}
 	meta := model.DecodeMetadata(rec.Metadata)
 	model.HydrateRecordFromMetadata(&rec, meta)
+	if len(rec.EmbeddingMatrix) == 0 {
+		rec.EmbeddingMatrix = float32Matrix(doc.EmbeddingMat)
+	}
 	if rec.Space == "" {
 		rec.Space = doc.Space
 	}
@@ -283,6 +292,24 @@ func float64Embedding(vec []float32) []float64 {
 	return out
 }
 
+func float64Matrix(matrix [][]float32) [][]float64 {
+	if len(matrix) == 0 {
+		return nil
+	}
+	out := make([][]float64, len(matrix))
+	for i, row := range matrix {
+		if len(row) == 0 {
+			continue
+		}
+		converted := make([]float64, len(row))
+		for j, val := range row {
+			converted[j] = float64(val)
+		}
+		out[i] = converted
+	}
+	return out
+}
+
 func float32Embedding(vec []float64) []float32 {
 	if len(vec) == 0 {
 		return nil
@@ -290,6 +317,24 @@ func float32Embedding(vec []float64) []float32 {
 	out := make([]float32, len(vec))
 	for i, v := range vec {
 		out[i] = float32(v)
+	}
+	return out
+}
+
+func float32Matrix(matrix [][]float64) [][]float32 {
+	if len(matrix) == 0 {
+		return nil
+	}
+	out := make([][]float32, 0, len(matrix))
+	for _, row := range matrix {
+		if len(row) == 0 {
+			continue
+		}
+		converted := make([]float32, len(row))
+		for i, val := range row {
+			converted[i] = float32(val)
+		}
+		out = append(out, converted)
 	}
 	return out
 }

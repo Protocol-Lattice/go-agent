@@ -29,18 +29,26 @@ func (s *InMemoryStore) StoreMemory(_ context.Context, sessionID, content string
 	}
 	now := time.Now().UTC()
 	importance, source, summary, lastEmbedded, metadataJSON := model.NormalizeMetadata(metadata, now)
+	meta := model.DecodeMetadata(metadataJSON)
+	space := model.StringFromAny(meta["space"])
+	if space == "" {
+		space = sessionID
+	}
 	s.nextID++
 	record := model.MemoryRecord{
-		ID:           s.nextID,
-		SessionID:    sessionID,
-		Content:      content,
-		Metadata:     metadataJSON,
-		Embedding:    append([]float32(nil), embedding...),
-		Importance:   importance,
-		Source:       source,
-		Summary:      summary,
-		CreatedAt:    now,
-		LastEmbedded: lastEmbedded,
+		ID:              s.nextID,
+		SessionID:       sessionID,
+		Space:           space,
+		Content:         content,
+		Metadata:        metadataJSON,
+		Embedding:       append([]float32(nil), embedding...),
+		Importance:      importance,
+		Source:          source,
+		Summary:         summary,
+		CreatedAt:       now,
+		LastEmbedded:    lastEmbedded,
+		GraphEdges:      model.ValidGraphEdges(meta),
+		EmbeddingMatrix: model.ValidEmbeddingMatrix(meta),
 	}
 	s.records[record.ID] = record
 	return nil
@@ -58,7 +66,7 @@ func (s *InMemoryStore) SearchMemory(_ context.Context, queryEmbedding []float32
 	}
 	scoredRecords := make([]scored, 0, len(s.records))
 	for _, rec := range s.records {
-		score := model.CosineSimilarity(queryEmbedding, rec.Embedding)
+		score := model.MaxCosineSimilarity(queryEmbedding, rec)
 		rec.Score = score
 		scoredRecords = append(scoredRecords, scored{rec: rec, score: score})
 	}
