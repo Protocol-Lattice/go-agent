@@ -21,7 +21,9 @@ require (
 	cloud.google.com/go/auth/oauth2adapt v0.2.8 // indirect
 	cloud.google.com/go/compute/metadata v0.9.0 // indirect
 	cloud.google.com/go/longrunning v0.5.7 // indirect
+	github.com/anush008/fastembed-go v1.0.0 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
+	github.com/emirpasic/gods v1.18.1 // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
@@ -39,6 +41,7 @@ require (
 	github.com/klauspost/compress v1.13.6 // indirect
 	github.com/machinebox/graphql v0.2.2 // indirect
 	github.com/mark3labs/mcp-go v0.34.0 // indirect
+	github.com/mitchellh/colorstring v0.0.0-20190213212951-d06e56a500db // indirect
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/modern-go/reflect2 v1.0.2 // indirect
 	github.com/montanaflynn/stats v0.0.0-20171201202039-1bf9dbcd8cbe // indirect
@@ -61,8 +64,13 @@ require (
 	github.com/pion/webrtc/v3 v3.3.5 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
+	github.com/rivo/uniseg v0.4.6 // indirect
+	github.com/schollz/progressbar/v2 v2.15.0 // indirect
+	github.com/schollz/progressbar/v3 v3.14.1 // indirect
 	github.com/spf13/cast v1.7.1 // indirect
 	github.com/stretchr/testify v1.10.0 // indirect
+	github.com/sugarme/regexpset v0.0.0-20200920021344-4d4ec8eaf93c // indirect
+	github.com/sugarme/tokenizer v0.2.3-0.20230829214935-448e79b1ed65 // indirect
 	github.com/tidwall/gjson v1.18.0 // indirect
 	github.com/tidwall/match v1.1.1 // indirect
 	github.com/tidwall/pretty v1.2.1 // indirect
@@ -71,6 +79,7 @@ require (
 	github.com/xdg-go/pbkdf2 v1.0.0 // indirect
 	github.com/xdg-go/scram v1.1.2 // indirect
 	github.com/xdg-go/stringprep v1.0.4 // indirect
+	github.com/yalue/onnxruntime_go v1.7.0 // indirect
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
 	github.com/youmark/pkcs8 v0.0.0-20181117223130-1be2e3e5546d // indirect
 	go.opentelemetry.io/auto/sdk v1.1.0 // indirect
@@ -84,6 +93,7 @@ require (
 	golang.org/x/oauth2 v0.31.0 // indirect
 	golang.org/x/sync v0.17.0 // indirect
 	golang.org/x/sys v0.36.0 // indirect
+	golang.org/x/term v0.35.0 // indirect
 	golang.org/x/text v0.29.0 // indirect
 	golang.org/x/time v0.13.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20250707201910-8d1bb00bc6a7 // indirect

@@ -371,41 +371,59 @@ func parseToolArguments(raw string) map[string]any {
 	}
 	return map[string]any{"input": raw}
 }
-
 func (a *Agent) storeMemory(sessionID, role, content string, extra map[string]string) {
-	if strings.TrimSpace(content) == "" {
+	if a == nil || strings.TrimSpace(content) == "" {
 		return
 	}
 
-	meta := map[string]string{"role": role}
-	for k, v := range extra {
-		if strings.TrimSpace(k) == "" || strings.TrimSpace(v) == "" {
-			continue
-		}
-		meta[k] = v
+	// Build metadata safely.
+	meta := map[string]string{}
+	if rs := strings.TrimSpace(role); rs != "" {
+		meta["role"] = rs
 	}
-	a.mu.Lock()
-	if a.Shared != nil {
-		a.Shared.AddShortLocal(content, meta)
-		for _, space := range a.Shared.Spaces() {
-			if err := a.Shared.AddShortTo(space, content, meta); err != nil {
-				continue
+	if extra != nil {
+		for k, v := range extra {
+			ks, vs := strings.TrimSpace(k), strings.TrimSpace(v)
+			if ks != "" && vs != "" {
+				meta[ks] = vs
 			}
 		}
-		a.mu.Unlock()
-		return
 	}
+
+	// Snapshot pointers without holding the lock during external calls.
+	a.mu.Lock()
+	shared := a.Shared
+	mem := a.memory
 	a.mu.Unlock()
 
-	metaBytes, _ := json.Marshal(meta)
-	embedding, err := a.memory.Embedder.Embed(context.Background(), content)
-	if err != nil {
-		return
+	// 1) Best-effort write to shared spaces (doesn't require embedder).
+	if shared != nil {
+		shared.AddShortLocal(content, meta)
+		for _, space := range shared.Spaces() {
+			_ = shared.AddShortTo(space, content, meta) // ignore per-space errors
+		}
 	}
 
+	// 2) Write to session memory if available.
+	if mem == nil || mem.Embedder == nil {
+		return // nothing else to do; avoid panic
+	}
+
+	// Compute embedding with a small timeout to avoid hanging the call.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	embedding, err := mem.Embedder.Embed(ctx, content)
+	if err != nil {
+		return // silent drop on embed failure; consider logging if desired
+	}
+
+	metaBytes, _ := json.Marshal(meta)
+
+	// Append to short-term memory under lock.
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.memory.AddShortTerm(sessionID, content, string(metaBytes), embedding)
+	mem.AddShortTerm(sessionID, content, string(metaBytes), embedding)
 }
 
 func (a *Agent) lookupTool(name string) (Tool, ToolSpec, bool) {
