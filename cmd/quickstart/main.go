@@ -1,3 +1,20 @@
+// main.go — guided swarm quickstart wiring ADK agents into the CLI.
+//
+// Examples:
+//
+//   export GOOGLE_API_KEY=...
+//   go run ./cmd/quickstart \
+//       --participants "researcher:cli:researcher,planner:cli:planner" \
+//       --shared-spaces "team:demo" \
+//       --qdrant-url http://localhost:6333 \
+//       --qdrant-collection adk_memories
+//
+//   export QDRANT_API_KEY=...
+//   go run ./cmd/quickstart \
+//       --model gemini-2.5-flash \
+//       --shared-spaces "product:beta" \
+//       --qdrant-url https://YOUR-QDRANT:6333 \
+//       --qdrant-collection swarm_memories
 package main
 
 import (

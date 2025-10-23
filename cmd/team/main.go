@@ -1,3 +1,21 @@
+// main.go — multi-agent swarm orchestrator with shared memory spaces.
+//
+// Examples:
+//
+//   export GOOGLE_API_KEY=...
+//   go run ./cmd/team \
+//       --agents "alice=agent:alice,bob=agent:bob" \
+//       --shared-spaces "team:design,team:research" \
+//       --qdrant-url http://localhost:6333 \
+//       --qdrant-collection adk_memories
+//
+//   export QDRANT_API_KEY=...
+//   go run ./cmd/team \
+//       --model gemini-2.5-flash \
+//       --agents "pm=agent:pm,researcher=agent:res" \
+//       --shared-spaces "product:beta" \
+//       --qdrant-url https://YOUR-QDRANT:6333 \
+//       --qdrant-collection swarm_memories
 package main
 
 import (
