@@ -96,16 +96,6 @@ export DATABASE_URL="postgres://admin:admin@localhost:5432/ragdb?sslmode=disable
 export ADK_EMBED_PROVIDER="gemini"
 ```
 
-### Run the Demo
-```bash
-go run ./cmd/demo
-```
-
-You will be dropped into an interactive shell that demonstrates:
-- Structured tool invocation (calculator, clock, echo).
-- Delegation to specialist sub-agents.
-- Memory persistence across turns (backed by PostgreSQL if configured).
-
 ## Configuring Providers
 The modular kit lets you declare models, memory, and tools with a few options:
 
