@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -23,6 +24,18 @@ func (m *stubModel) Generate(ctx context.Context, prompt string) (any, error) {
 		return nil, m.err
 	}
 	return m.response + " | " + prompt, nil
+}
+
+type fileEchoModel struct {
+	response string
+}
+
+func (m *fileEchoModel) Generate(ctx context.Context, prompt string) (any, error) {
+	return m.response, nil
+}
+
+func (m *fileEchoModel) GenerateWithFiles(ctx context.Context, prompt string, files []models.File) (any, error) {
+	return m.response, nil
 }
 
 type stubTool struct {
@@ -270,5 +283,148 @@ func TestAgentPropagatesCustomDirectoryErrors(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatalf("expected duplicate registration error from custom directory")
+	}
+}
+
+func TestGenerateWithFilesStoresTextAttachments(t *testing.T) {
+	ctx := context.Background()
+	bank := memory.NewMemoryBankWithStore(memory.NewInMemoryStore())
+	mem := memory.NewSessionMemory(bank, 8).WithEmbedder(memory.DummyEmbedder{})
+
+	agent, err := New(Options{Model: &fileEchoModel{response: "ok"}, Memory: mem})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+
+	files := []models.File{{Name: "notes.txt", MIME: "text/plain", Data: []byte("alpha beta")}}
+	if _, err := agent.GenerateWithFiles(ctx, "session", "summarize the attachment", files); err != nil {
+		t.Fatalf("GenerateWithFiles returned error: %v", err)
+	}
+
+	records, err := agent.SessionMemory().RetrieveContext(ctx, "session", "", 5)
+	if err != nil {
+		t.Fatalf("RetrieveContext returned error: %v", err)
+	}
+
+	found := false
+	for _, rec := range records {
+		if metadataRole(rec.Metadata) != "attachment" {
+			continue
+		}
+		if !strings.Contains(rec.Content, "Attachment notes.txt") {
+			t.Fatalf("expected attachment name in memory, got %q", rec.Content)
+		}
+		if !strings.Contains(rec.Content, "alpha beta") {
+			t.Fatalf("expected attachment content in memory, got %q", rec.Content)
+		}
+		payload := map[string]any{}
+		if err := json.Unmarshal([]byte(rec.Metadata), &payload); err != nil {
+			t.Fatalf("unmarshal metadata: %v", err)
+		}
+		if got := payload["filename"]; got != "notes.txt" {
+			t.Fatalf("expected filename metadata, got %v", got)
+		}
+		if got := payload["text"]; got != "true" {
+			t.Fatalf("expected text flag true, got %v", got)
+		}
+		wantB64 := base64.StdEncoding.EncodeToString([]byte("alpha beta"))
+		if got := payload["data_base64"]; got != wantB64 {
+			t.Fatalf("expected base64 payload, got %v", got)
+		}
+		found = true
+	}
+	if !found {
+		t.Fatalf("expected attachment memory to be stored")
+	}
+}
+
+func TestGenerateWithFilesStoresNonTextAttachments(t *testing.T) {
+	ctx := context.Background()
+	bank := memory.NewMemoryBankWithStore(memory.NewInMemoryStore())
+	mem := memory.NewSessionMemory(bank, 8).WithEmbedder(memory.DummyEmbedder{})
+
+	agent, err := New(Options{Model: &fileEchoModel{response: "ok"}, Memory: mem})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+
+	files := []models.File{{Name: "diagram.png", MIME: "image/png", Data: []byte{0x89, 0x50, 0x4E, 0x47}}}
+	if _, err := agent.GenerateWithFiles(ctx, "session", "summarize the attachment", files); err != nil {
+		t.Fatalf("GenerateWithFiles returned error: %v", err)
+	}
+
+	records, err := agent.SessionMemory().RetrieveContext(ctx, "session", "", 5)
+	if err != nil {
+		t.Fatalf("RetrieveContext returned error: %v", err)
+	}
+
+	found := false
+	for _, rec := range records {
+		if metadataRole(rec.Metadata) != "attachment" {
+			continue
+		}
+		if !strings.Contains(rec.Content, "non-text content") {
+			t.Fatalf("expected placeholder for non-text attachment, got %q", rec.Content)
+		}
+		payload := map[string]any{}
+		if err := json.Unmarshal([]byte(rec.Metadata), &payload); err != nil {
+			t.Fatalf("unmarshal metadata: %v", err)
+		}
+		if got := payload["text"]; got != "false" {
+			t.Fatalf("expected text flag false, got %v", got)
+		}
+		if got := payload["mime"]; got != "image/png" {
+			t.Fatalf("expected mime metadata, got %v", got)
+		}
+		wantB64 := base64.StdEncoding.EncodeToString([]byte{0x89, 0x50, 0x4E, 0x47})
+		if got := payload["data_base64"]; got != wantB64 {
+			t.Fatalf("expected base64 metadata, got %v", got)
+		}
+		found = true
+	}
+	if !found {
+		t.Fatalf("expected attachment memory to be stored for non-text file")
+	}
+}
+
+func TestRetrieveAttachmentFilesReturnsBinaryData(t *testing.T) {
+	ctx := context.Background()
+	bank := memory.NewMemoryBankWithStore(memory.NewInMemoryStore())
+	mem := memory.NewSessionMemory(bank, 8).WithEmbedder(memory.DummyEmbedder{})
+
+	agent, err := New(Options{Model: &fileEchoModel{response: "ok"}, Memory: mem})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+
+	files := []models.File{
+		{Name: "diagram.png", MIME: "image/png", Data: []byte{0x89, 0x50, 0x4E, 0x47}},
+		{Name: "clip.mp4", MIME: "video/mp4", Data: []byte{0x00, 0x01, 0x02}},
+	}
+
+	if _, err := agent.GenerateWithFiles(ctx, "session", "describe media", files); err != nil {
+		t.Fatalf("GenerateWithFiles returned error: %v", err)
+	}
+
+	retrieved, err := agent.RetrieveAttachmentFiles(ctx, "session", 10)
+	if err != nil {
+		t.Fatalf("RetrieveAttachmentFiles returned error: %v", err)
+	}
+
+	if len(retrieved) != len(files) {
+		t.Fatalf("expected %d attachments, got %d", len(files), len(retrieved))
+	}
+
+	for i, file := range retrieved {
+		want := files[i]
+		if file.Name != want.Name {
+			t.Fatalf("attachment %d: expected name %q, got %q", i, want.Name, file.Name)
+		}
+		if file.MIME != want.MIME {
+			t.Fatalf("attachment %d: expected MIME %q, got %q", i, want.MIME, file.MIME)
+		}
+		if string(file.Data) != string(want.Data) {
+			t.Fatalf("attachment %d: expected data %v, got %v", i, want.Data, file.Data)
+		}
 	}
 }

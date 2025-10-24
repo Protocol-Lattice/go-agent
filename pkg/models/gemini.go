@@ -58,9 +58,7 @@ func (g *GeminiLLM) GenerateWithFiles(ctx context.Context, prompt string, files 
 	// Build normalized copies (never pass raw f.MIME to Gemini)
 	norm := make([]File, 0, len(files))
 	for _, f := range files {
-		origMIME := f.MIME
 		normalizedMIME := normalizeMIME(f.Name, f.MIME)
-		fmt.Fprintf(os.Stderr, "DEBUG normalizeMIME: file=%s, input=%q, output=%q\n", f.Name, origMIME, normalizedMIME)
 		norm = append(norm, File{
 			Name: f.Name,
 			MIME: normalizedMIME,
@@ -83,27 +81,20 @@ func (g *GeminiLLM) GenerateWithFiles(ctx context.Context, prompt string, files 
 			continue
 		}
 		sanitized := sanitizeForGemini(f.MIME)
-		fmt.Fprintf(os.Stderr, "DEBUG sanitizeForGemini: file=%s, input=%q, output=%q\n", f.Name, f.MIME, sanitized)
 
 		if sanitized == "" {
-			fmt.Fprintf(os.Stderr, "DEBUG: Skipping file %s (unsupported MIME)\n", f.Name)
 			continue // skip unsupported/unknown
 		}
-
-		fmt.Fprintf(os.Stderr, "DEBUG: Attaching file %s with MIME %q\n", f.Name, sanitized)
 
 		if strings.HasPrefix(sanitized, "image/") {
 			// ImageData expects just the format (e.g., "png") not "image/png"
 			// The SDK prepends "image/" automatically
 			format := strings.TrimPrefix(sanitized, "image/")
-			fmt.Fprintf(os.Stderr, "DEBUG: Using ImageData with format=%q\n", format)
 			parts = append(parts, genai.ImageData(format, f.Data))
 		} else if strings.HasPrefix(sanitized, "video/") {
 			parts = append(parts, genai.Blob{MIMEType: sanitized, Data: f.Data})
 		}
 	}
-
-	fmt.Fprintf(os.Stderr, "DEBUG: Calling Gemini API with %d parts\n", len(parts))
 
 	resp, err := model.GenerateContent(ctx, parts...)
 	if err != nil {

@@ -2,12 +2,15 @@ package agent
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Raezil/go-agent-development-kit/pkg/memory"
 	"github.com/Raezil/go-agent-development-kit/pkg/models"
@@ -143,7 +146,16 @@ func (a *Agent) Generate(ctx context.Context, sessionID, userInput string) (stri
 		return "", err
 	}
 
-	completion, err := a.model.Generate(ctx, prompt)
+	// Rehydrate any session attachments from memory and pass them along.
+	files, _ := a.RetrieveAttachmentFiles(ctx, sessionID, a.contextLimit)
+
+	var completion any
+	if len(files) > 0 {
+		// Ensure the prompt already lists them for model awareness.
+		completion, err = a.model.GenerateWithFiles(ctx, prompt, files)
+	} else {
+		completion, err = a.model.Generate(ctx, prompt)
+	}
 	if err != nil {
 		return "", err
 	}
@@ -161,27 +173,36 @@ func (a *Agent) Flush(ctx context.Context, sessionID string) error {
 func (a *Agent) buildPrompt(ctx context.Context, sessionID, userInput string) (string, error) {
 	queryType := classifyQuery(userInput)
 
+	var records []memory.MemoryRecord
+	var err error
+
 	switch queryType {
 	case QueryMath:
-		return fmt.Sprintf("%s\n\nCurrent user message:\n%s\n\nCompose the best possible assistant reply.\n",
-			a.systemPrompt, strings.TrimSpace(userInput)), nil
-
+		// math: no heavy retrieve
 	case QueryShortFactoid:
-		records, err := a.retrieveContext(ctx, sessionID, userInput, min(a.contextLimit/2, 3))
+		records, err = a.retrieveContext(ctx, sessionID, userInput, min(a.contextLimit/2, 3))
 		if err != nil {
 			return "", fmt.Errorf("retrieve context: %w", err)
 		}
-		return a.buildFullPrompt(userInput, records), nil
-
 	case QueryComplex:
-		records, err := a.retrieveContext(ctx, sessionID, userInput, a.contextLimit)
+		records, err = a.retrieveContext(ctx, sessionID, userInput, a.contextLimit)
 		if err != nil {
 			return "", fmt.Errorf("retrieve context: %w", err)
 		}
-		return a.buildFullPrompt(userInput, records), nil
+	default:
+		// fallthrough; empty records ok
 	}
 
-	return "", nil
+	// Base prompt (system + tools + memory + user msg)
+	prompt := a.buildFullPrompt(userInput, records)
+
+	// Include any previously uploaded files that we can rehydrate from memory.
+	// This informs the model what's being sent via GenerateWithFiles (if any).
+	if files, _ := a.RetrieveAttachmentFiles(ctx, sessionID, a.contextLimit); len(files) > 0 {
+		prompt += a.buildAttachmentPrompt("Session attachments (rehydrated)", files)
+	}
+
+	return prompt, nil
 }
 
 func (a *Agent) buildFullPrompt(userInput string, records []memory.MemoryRecord) string {
@@ -406,6 +427,152 @@ func (a *Agent) storeMemory(sessionID, role, content string, extra map[string]st
 	mem.AddShortTerm(sessionID, content, string(metaBytes), embedding)
 }
 
+func (a *Agent) storeAttachmentMemories(sessionID string, files []models.File) {
+	for i, file := range files {
+		name := strings.TrimSpace(file.Name)
+		if name == "" {
+			name = fmt.Sprintf("file_%d", i+1)
+		}
+		mime := strings.TrimSpace(file.MIME)
+		content := buildAttachmentMemoryContent(name, mime, file.Data)
+		extra := map[string]string{
+			"source":   "file_upload",
+			"filename": name,
+		}
+		if mime != "" {
+			extra["mime"] = mime
+		}
+		if size := len(file.Data); size > 0 {
+			extra["size_bytes"] = strconv.Itoa(size)
+		}
+		if len(file.Data) > 0 {
+			extra["data_base64"] = base64.StdEncoding.EncodeToString(file.Data)
+		}
+		if isTextAttachment(mime, file.Data) {
+			extra["text"] = "true"
+		} else {
+			extra["text"] = "false"
+		}
+		a.storeMemory(sessionID, "attachment", content, extra)
+	}
+}
+
+// RetrieveAttachmentFiles returns attachment files stored for the session.
+// It reconstructs the original bytes from base64-encoded metadata, making it
+// suitable for binary assets such as images and videos.
+func (a *Agent) RetrieveAttachmentFiles(ctx context.Context, sessionID string, limit int) ([]models.File, error) {
+	if a == nil || a.memory == nil {
+		return nil, nil
+	}
+	if limit <= 0 {
+		limit = a.contextLimit
+		if limit <= 0 {
+			limit = 8
+		}
+	}
+
+	records, err := a.memory.RetrieveContext(ctx, sessionID, "", limit)
+	if err != nil {
+		return nil, err
+	}
+
+	var attachments []models.File
+	for _, record := range records {
+		if metadataRole(record.Metadata) != "attachment" {
+			continue
+		}
+		file, ok := attachmentFromRecord(record)
+		if !ok {
+			continue
+		}
+		attachments = append(attachments, file)
+	}
+
+	return attachments, nil
+}
+
+func attachmentFromRecord(record memory.MemoryRecord) (models.File, bool) {
+	if strings.TrimSpace(record.Metadata) == "" {
+		return models.File{}, false
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(record.Metadata), &payload); err != nil {
+		return models.File{}, false
+	}
+
+	name, _ := payload["filename"].(string)
+	mime, _ := payload["mime"].(string)
+	dataB64, _ := payload["data_base64"].(string)
+	if name == "" {
+		name = "attachment"
+	}
+
+	var data []byte
+	if dataB64 != "" {
+		raw, err := base64.StdEncoding.DecodeString(dataB64)
+		if err != nil {
+			return models.File{}, false
+		}
+		data = raw
+	} else {
+		data = extractTextAttachment(record.Content)
+	}
+
+	return models.File{Name: name, MIME: mime, Data: data}, true
+}
+
+func extractTextAttachment(content string) []byte {
+	idx := strings.Index(content, ":\n")
+	if idx == -1 {
+		return nil
+	}
+	return []byte(content[idx+2:])
+}
+
+func isTextAttachment(mime string, data []byte) bool {
+	mt := strings.ToLower(strings.TrimSpace(mime))
+	switch {
+	case strings.HasPrefix(mt, "text/"):
+		return true
+	case mt == "application/json",
+		mt == "application/xml",
+		mt == "application/x-yaml",
+		mt == "application/yaml",
+		mt == "text/markdown",
+		mt == "text/x-markdown":
+		return true
+	}
+	if len(data) == 0 {
+		return true
+	}
+	return utf8.Valid(data)
+}
+
+func buildAttachmentMemoryContent(name, mime string, data []byte) string {
+	display := strings.TrimSpace(name)
+	if display == "" {
+		display = "attachment"
+	}
+	descriptor := display
+	if m := strings.TrimSpace(mime); m != "" {
+		descriptor = fmt.Sprintf("%s (%s)", display, m)
+	}
+	if len(data) == 0 {
+		return fmt.Sprintf("Attachment %s [empty file]", descriptor)
+	}
+	if isTextAttachment(mime, data) {
+		var sb strings.Builder
+		sb.Grow(len(data) + len(descriptor) + 32)
+		sb.WriteString("Attachment ")
+		sb.WriteString(descriptor)
+		sb.WriteString(":\n")
+		sb.Write(data)
+		return sb.String()
+	}
+	return fmt.Sprintf("Attachment %s [%d bytes of non-text content]", descriptor, len(data))
+}
+
 func (a *Agent) lookupTool(name string) (Tool, ToolSpec, bool) {
 	if a.toolCatalog == nil {
 		return nil, ToolSpec{}, false
@@ -513,30 +680,106 @@ func (a *Agent) GenerateWithFiles(
 	userInput string,
 	files []models.File,
 ) (string, error) {
-	// Validate input: at least some content must be provided.
 	if strings.TrimSpace(userInput) == "" && len(files) == 0 {
 		return "", errors.New("both user input and files are empty")
 	}
 
-	// Store the user message in short-term memory for conversational continuity.
 	if strings.TrimSpace(userInput) != "" {
 		a.storeMemory(sessionID, "user", userInput, nil)
 	}
 
-	// Build the base prompt using existing memory/context/tooling.
+	// Build base prompt (includes memory and any previously stored attachments).
 	prompt, err := a.buildPrompt(ctx, sessionID, userInput)
 	if err != nil {
 		return "", err
 	}
 
-	// Ask the provider to render a file-aware prompt (inline text, reference non-text).
-	completion, err := a.model.GenerateWithFiles(ctx, prompt, files)
+	// Persist this-turn files into session memory (so they’re discoverable later).
+	if len(files) > 0 {
+		a.storeAttachmentMemories(sessionID, files)
+		// Make it explicit to the model which files arrive with this call.
+		prompt += a.buildAttachmentPrompt("Files provided for this turn", files)
+	}
+
+	// Also rehydrate prior session files (avoid duplication by simple name+size check).
+	existing, _ := a.RetrieveAttachmentFiles(ctx, sessionID, a.contextLimit)
+	// naive de-dupe: if both lists are present, keep both but that’s fine; model can handle.
+	if len(existing) > 0 {
+		prompt += a.buildAttachmentPrompt("Session attachments (rehydrated)", existing)
+	}
+
+	completion, err := a.model.GenerateWithFiles(ctx, prompt, append(existing, files...))
 	if err != nil {
 		return "", err
 	}
 
-	// Persist assistant reply and return it.
 	response := fmt.Sprint(completion)
 	a.storeMemory(sessionID, "assistant", response, nil)
 	return response, nil
+}
+
+// buildAttachmentPrompt renders a compact, token-conscious list of files.
+// It never inlines non-text bytes. For text files, it shows a short preview.
+func (a *Agent) buildAttachmentPrompt(title string, files []models.File) string {
+	if len(files) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteString("\n\n")
+	sb.WriteString(title)
+	sb.WriteString(":\n")
+	for i, f := range files {
+		name := strings.TrimSpace(f.Name)
+		if name == "" {
+			name = fmt.Sprintf("attachment_%d", i+1)
+		}
+		mime := strings.TrimSpace(f.MIME)
+		if mime == "" {
+			mime = "application/octet-stream"
+		}
+		size := humanSize(len(f.Data))
+		sb.WriteString(fmt.Sprintf("- %s (%s, %s)", name, mime, size))
+		if isTextAttachment(mime, f.Data) && len(f.Data) > 0 {
+			sb.WriteString("\n  preview:\n  ")
+			sb.WriteString(escapePromptContent(previewText(mime, f.Data)))
+		}
+		sb.WriteString("\n")
+	}
+	return sb.String()
+}
+
+func humanSize(n int) string {
+	const (
+		KB = 1024
+		MB = 1024 * KB
+		GB = 1024 * MB
+	)
+	switch {
+	case n >= GB:
+		return fmt.Sprintf("%.2f GB", float64(n)/float64(GB))
+	case n >= MB:
+		return fmt.Sprintf("%.2f MB", float64(n)/float64(MB))
+	case n >= KB:
+		return fmt.Sprintf("%.2f KB", float64(n)/float64(KB))
+	default:
+		return fmt.Sprintf("%d B", n)
+	}
+}
+
+// previewText returns a short snippet from text attachments (max ~1KB) to save tokens.
+func previewText(_ string, data []byte) string {
+	const maxPreview = 1024
+	txt := string(data)
+	return truncate(txt, maxPreview)
+}
+
+func truncate(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	// Try to cut on a boundary to avoid mid-rune issues for safety.
+	if max > 3 {
+		return s[:max-3] + "..."
+	}
+	return s[:max]
 }
