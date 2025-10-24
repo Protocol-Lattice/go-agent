@@ -45,12 +45,22 @@ func (ps *PostgresStore) StoreMemory(ctx context.Context, sessionID, content str
 	importance, source, summary, lastEmbedded, metadataJSON := model.NormalizeMetadata(metadata, time.Now().UTC())
 	meta := model.DecodeMetadata(metadataJSON)
 	matrix := model.ValidEmbeddingMatrix(meta)
+	storedEmbedding := append([]float32(nil), embedding...)
+	if len(storedEmbedding) == 0 {
+		for _, vec := range matrix {
+			if len(vec) == 0 {
+				continue
+			}
+			storedEmbedding = append([]float32(nil), vec...)
+			break
+		}
+	}
 	query := `
                 INSERT INTO memory_bank (session_id, content, metadata, embedding, importance, source, summary, last_embedded, embedding_matrix)
                 VALUES ($1, $2, $3::jsonb, $4::vector, $5, $6, $7, $8, $9::jsonb)
                 RETURNING id;
         `
-	jsonEmbed, _ := json.Marshal(embedding)
+	jsonEmbed, _ := json.Marshal(storedEmbedding)
 	var matrixJSON []byte
 	if len(matrix) > 0 {
 		matrixJSON, _ = json.Marshal(matrix)
@@ -65,7 +75,7 @@ func (ps *PostgresStore) StoreMemory(ctx context.Context, sessionID, content str
 		Space:           model.StringFromAny(meta["space"]),
 		Content:         content,
 		Metadata:        metadataJSON,
-		Embedding:       embedding,
+		Embedding:       storedEmbedding,
 		Importance:      importance,
 		Source:          source,
 		Summary:         summary,

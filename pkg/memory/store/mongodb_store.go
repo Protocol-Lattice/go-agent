@@ -66,6 +66,16 @@ func (ms *MongoStore) StoreMemory(ctx context.Context, sessionID, content string
 	}
 	edges := model.ValidGraphEdges(meta)
 	matrix := model.ValidEmbeddingMatrix(meta)
+	storedEmbedding := append([]float32(nil), embedding...)
+	if len(storedEmbedding) == 0 {
+		for _, vec := range matrix {
+			if len(vec) == 0 {
+				continue
+			}
+			storedEmbedding = append([]float32(nil), vec...)
+			break
+		}
+	}
 
 	id, err := ms.nextID(ctx)
 	if err != nil {
@@ -78,7 +88,7 @@ func (ms *MongoStore) StoreMemory(ctx context.Context, sessionID, content string
 		"space":         space,
 		"content":       content,
 		"metadata":      metadataJSON,
-		"embedding":     float64Embedding(embedding),
+		"embedding":     float64Embedding(storedEmbedding),
 		"importance":    importance,
 		"source":        source,
 		"summary":       summary,
