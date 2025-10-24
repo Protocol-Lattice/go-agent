@@ -46,47 +46,61 @@ go mod download
 package main
 
 import (
-    "context"
-    "log"
-    
-    "github.com/Raezil/lattice-agent/pkg/adk"
-    "github.com/Raezil/lattice-agent/pkg/adk/modules"
-    "github.com/Raezil/lattice-agent/pkg/models"
-    "github.com/Raezil/lattice-agent/pkg/tools"
+	"context"
+	"flag"
+	"log"
+
+	"github.com/Raezil/lattice-agent/pkg/adk"
+	adkmodules "github.com/Raezil/lattice-agent/pkg/adk/modules"
+	"github.com/Raezil/lattice-agent/pkg/agent"
+	"github.com/Raezil/lattice-agent/pkg/subagents"
+
+	"github.com/Raezil/lattice-agent/pkg/memory"
+	"github.com/Raezil/lattice-agent/pkg/memory/engine"
+	"github.com/Raezil/lattice-agent/pkg/models"
+	"github.com/Raezil/lattice-agent/pkg/tools"
 )
 
 func main() {
-    ctx := context.Background()
-    
-    // Create an agent with modular components
-    adkAgent, err := adk.New(ctx,
-        adk.WithModules(
-            modules.NewModelModule("coordinator", 
-                modules.StaticModelProvider(models.NewGeminiLLM())),
-            modules.InMemoryMemoryModule(8),
-            modules.NewToolModule("default-tools", 
-                modules.StaticToolProvider([]agent.Tool{
-                    &tools.EchoTool{},
-                    &tools.CalculatorTool{},
-                }, nil)),
-        ),
-    )
-    if err != nil {
-        log.Fatal(err)
-    }
-    
-    agent, err := adkAgent.BuildAgent(ctx)
-    if err != nil {
-        log.Fatal(err)
-    }
-    
-    // Use the agent
-    resp, err := agent.Generate(ctx, "SessionID", line)
-    if err != nil {
-        log.Fatal(err)
-    }
-    
-    log.Println(response)
+	qdrantURL := flag.String("qdrant-url", "http://localhost:6333", "Qdrant base URL")
+	qdrantCollection := flag.String("qdrant-collection", "adk_memories", "Qdrant collection name")
+	flag.Parse()
+	ctx := context.Background()
+
+	// --- Shared runtime
+	researcherModel, err := models.NewGeminiLLM(ctx, "gemini-2.5-pro", "Research summary:")
+	if err != nil {
+		log.Fatalf("create researcher model: %v", err)
+	}
+	memOpts := engine.DefaultOptions()
+
+	adkAgent, err := adk.New(ctx,
+		adk.WithDefaultSystemPrompt("You orchestrate a helpful assistant team."),
+		adk.WithSubAgents(subagents.NewResearcher(researcherModel)),
+		adk.WithModules(
+			adkmodules.NewModelModule("gemini-model", func(_ context.Context) (models.Agent, error) {
+				return models.NewGeminiLLM(ctx, "gemini-2.5-pro", "Swarm orchestration:")
+			}),
+			adkmodules.InQdrantMemory(100000, *qdrantURL, *qdrantCollection, memory.AutoEmbedder(), &memOpts),
+			adkmodules.NewToolModule("essentials", adkmodules.StaticToolProvider([]agent.Tool{&tools.EchoTool{}}, nil)),
+		),
+	)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	agent, err := adkAgent.BuildAgent(ctx)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// Use the agent
+	resp, err := agent.Generate(ctx, "SessionID", "What is pgvector")
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	log.Println(resp)
 }
 ```
 
