@@ -235,3 +235,12 @@ func combinePromptWithFiles(base string, files []File) string {
 	b.WriteString("\nATTACHMENTS CONTEXT — END\n---\n")
 	return b.String()
 }
+
+// isImageOrVideoMIME checks if the MIME type is an image or video
+func isImageOrVideoMIME(m string) bool {
+	m = strings.ToLower(strings.TrimSpace(m))
+	if m == "" {
+		return false
+	}
+	return strings.HasPrefix(m, "image/") || strings.HasPrefix(m, "video/")
+}

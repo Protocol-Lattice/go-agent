@@ -77,15 +77,6 @@ func (o *OllamaLLM) Generate(ctx context.Context, prompt string) (any, error) {
 	}, nil
 }
 
-// isImageOrVideoMIME checks if the MIME type is an image or video
-func isImageOrVideoMIME(m string) bool {
-	m = strings.ToLower(strings.TrimSpace(m))
-	if m == "" {
-		return false
-	}
-	return strings.HasPrefix(m, "image/") || strings.HasPrefix(m, "video/")
-}
-
 func (o *OllamaLLM) GenerateWithFiles(ctx context.Context, prompt string, files []File) (any, error) {
 	fullPrompt := prompt
 	if o.PromptPrefix != "" {
