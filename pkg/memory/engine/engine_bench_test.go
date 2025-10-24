@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	embedpkg "github.com/Raezil/go-agent-development-kit/pkg/memory/embed"
-	storepkg "github.com/Raezil/go-agent-development-kit/pkg/memory/store"
+	embedpkg "github.com/Raezil/lattice-agent/pkg/memory/embed"
+	storepkg "github.com/Raezil/lattice-agent/pkg/memory/store"
 )
 
 func BenchmarkEngineRetrieve(b *testing.B) {

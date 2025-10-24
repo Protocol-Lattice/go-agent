@@ -10,7 +10,7 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 
-	"github.com/Raezil/go-agent-development-kit/pkg/memory/model"
+	"github.com/Raezil/lattice-agent/pkg/memory/model"
 )
 
 type MongoStore struct {

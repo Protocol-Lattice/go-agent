@@ -3,7 +3,7 @@ package modules
 import (
 	"context"
 
-	"github.com/Raezil/go-agent-development-kit/pkg/adk"
+	"github.com/Raezil/lattice-agent/pkg/adk"
 )
 
 // ToolModule registers a tool provider with the kit.

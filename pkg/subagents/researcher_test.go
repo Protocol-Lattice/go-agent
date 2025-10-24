@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Raezil/go-agent-development-kit/pkg/models"
+	"github.com/Raezil/lattice-agent/pkg/models"
 )
 
 type fakeModel struct {

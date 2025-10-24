@@ -33,13 +33,13 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/Raezil/go-agent-development-kit/pkg/adk"
-	"github.com/Raezil/go-agent-development-kit/pkg/adk/modules"
-	"github.com/Raezil/go-agent-development-kit/pkg/agent"
-	"github.com/Raezil/go-agent-development-kit/pkg/memory"
-	"github.com/Raezil/go-agent-development-kit/pkg/memory/store"
-	"github.com/Raezil/go-agent-development-kit/pkg/models"
-	"github.com/Raezil/go-agent-development-kit/pkg/tools"
+	"github.com/Raezil/lattice-agent/pkg/adk"
+	"github.com/Raezil/lattice-agent/pkg/adk/modules"
+	"github.com/Raezil/lattice-agent/pkg/agent"
+	"github.com/Raezil/lattice-agent/pkg/memory"
+	"github.com/Raezil/lattice-agent/pkg/memory/store"
+	"github.com/Raezil/lattice-agent/pkg/models"
+	"github.com/Raezil/lattice-agent/pkg/tools"
 )
 
 var (

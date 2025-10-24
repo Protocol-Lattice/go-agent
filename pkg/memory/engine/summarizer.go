@@ -4,7 +4,7 @@ import (
 	"context"
 	"strings"
 
-	"github.com/Raezil/go-agent-development-kit/pkg/memory/model"
+	"github.com/Raezil/lattice-agent/pkg/memory/model"
 )
 
 // Summarizer abstracts cluster summarization backends (LLMs or heuristics).

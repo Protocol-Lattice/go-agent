@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/Raezil/go-agent-development-kit/pkg/adk"
+	"github.com/Raezil/lattice-agent/pkg/adk"
 )
 
 // ModelModule wires a model provider into the kit.

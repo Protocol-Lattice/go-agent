@@ -1,4 +1,4 @@
-module github.com/Raezil/go-agent-development-kit
+module github.com/Raezil/lattice-agent
 
 go 1.25.0
 

@@ -1,18 +1,18 @@
 # Go Agent Development Kit
 
 [![Go Version](https://img.shields.io/badge/Go-1.25-00ADD8?logo=go&logoColor=white)](https://go.dev/dl/)
-[![CI Status](https://github.com/Raezil/go-agent-development-kit/actions/workflows/go.yml/badge.svg)](https://github.com/Raezil/go-agent-development-kit/actions/workflows/go.yml)
-[![Go Reference](https://pkg.go.dev/badge/github.com/Raezil/go-agent-development-kit.svg)](https://pkg.go.dev/github.com/Raezil/go-agent-development-kit)
-[![Go Report Card](https://goreportcard.com/badge/github.com/Raezil/go-agent-development-kit)](https://goreportcard.com/report/github.com/Raezil/go-agent-development-kit)
+[![CI Status](https://github.com/Raezil/lattice-agent/actions/workflows/go.yml/badge.svg)](https://github.com/Raezil/lattice-agent/actions/workflows/go.yml)
+[![Go Reference](https://pkg.go.dev/badge/github.com/Raezil/lattice-agent.svg)](https://pkg.go.dev/github.com/Raezil/lattice-agent)
+[![Go Report Card](https://goreportcard.com/badge/github.com/Raezil/lattice-agent)](https://goreportcard.com/report/github.com/Raezil/lattice-agent)
 
-Build production-ready AI agents in Go with a batteries-included toolkit. GO-ADK wraps language
+Build production-ready AI agents in Go with a batteries-included toolkit. Lattice-Agent wraps language
 models, tool execution, retrieval-augmented memory, and multi-agent coordination behind pragmatic
 interfaces so you can focus on domain logic instead of orchestration plumbing.
 
 ---
 
 ## Table of Contents
-1. [Why GO-ADK?](#why-go-adk)
+1. [Why lattice-agent?](#why-lattice-agent)
 2. [Feature Highlights](#feature-highlights)
 3. [Package Tour](#package-tour)
 4. [Quick Start](#quick-start)
@@ -26,7 +26,7 @@ interfaces so you can focus on domain logic instead of orchestration plumbing.
 
 ---
 
-## Why GO-ADK?
+## Why lattice-agent?
 Modern agents demand more than a single model call—they need deterministic session orchestration,
 reusable tool adapters, rich memory, and safe extensibility. GO-ADK delivers:
 
@@ -76,7 +76,7 @@ pkg/
 
 ### Install
 ```bash
-git clone https://github.com/Raezil/go-agent-development-kit.git
+git clone https://github.com/Raezil/lattice-agent.git
 cd go-agent-development-kit
 go mod download
 ```

@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/Raezil/go-agent-development-kit/pkg/memory/model"
+	"github.com/Raezil/lattice-agent/pkg/memory/model"
 )
 
 // VectorStore defines the contract for long-term memory backends.

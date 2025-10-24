@@ -15,9 +15,9 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/Raezil/go-agent-development-kit/pkg/memory/embed"
-	"github.com/Raezil/go-agent-development-kit/pkg/memory/model"
-	"github.com/Raezil/go-agent-development-kit/pkg/memory/store"
+	"github.com/Raezil/lattice-agent/pkg/memory/embed"
+	"github.com/Raezil/lattice-agent/pkg/memory/model"
+	"github.com/Raezil/lattice-agent/pkg/memory/store"
 )
 
 // Engine coordinates scoring, clustering, pruning and retrieval of memories.

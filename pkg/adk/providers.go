@@ -3,9 +3,9 @@ package adk
 import (
 	"context"
 
-	"github.com/Raezil/go-agent-development-kit/pkg/agent"
-	"github.com/Raezil/go-agent-development-kit/pkg/memory"
-	"github.com/Raezil/go-agent-development-kit/pkg/models"
+	"github.com/Raezil/lattice-agent/pkg/agent"
+	"github.com/Raezil/lattice-agent/pkg/memory"
+	"github.com/Raezil/lattice-agent/pkg/models"
 )
 
 // ModelProvider constructs a language model used by the coordinator agent.

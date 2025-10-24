@@ -8,7 +8,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/Raezil/go-agent-development-kit/pkg/memory/model"
+	"github.com/Raezil/lattice-agent/pkg/memory/model"
 )
 
 // SharedSession layers on top of SessionMemory to let multiple agents

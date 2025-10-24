@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Raezil/go-agent-development-kit/pkg/memory/model"
+	"github.com/Raezil/lattice-agent/pkg/memory/model"
 )
 
 // InMemoryStore implements VectorStore for tests and lightweight deployments.

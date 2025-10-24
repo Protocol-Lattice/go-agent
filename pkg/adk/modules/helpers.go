@@ -5,10 +5,10 @@ import (
 	"log"
 	"os"
 
-	kit "github.com/Raezil/go-agent-development-kit/pkg/adk"
-	"github.com/Raezil/go-agent-development-kit/pkg/agent"
-	"github.com/Raezil/go-agent-development-kit/pkg/memory"
-	"github.com/Raezil/go-agent-development-kit/pkg/models"
+	kit "github.com/Raezil/lattice-agent/pkg/adk"
+	"github.com/Raezil/lattice-agent/pkg/agent"
+	"github.com/Raezil/lattice-agent/pkg/memory"
+	"github.com/Raezil/lattice-agent/pkg/models"
 )
 
 // StaticModelProvider returns a provider that always yields the supplied model.

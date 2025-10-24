@@ -6,8 +6,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/Raezil/go-agent-development-kit/pkg/agent"
-	"github.com/Raezil/go-agent-development-kit/pkg/memory"
+	"github.com/Raezil/lattice-agent/pkg/agent"
+	"github.com/Raezil/lattice-agent/pkg/memory"
 	"github.com/universal-tool-calling-protocol/go-utcp"
 	"github.com/universal-tool-calling-protocol/go-utcp/src/tools"
 	"github.com/universal-tool-calling-protocol/go-utcp/src/transports"

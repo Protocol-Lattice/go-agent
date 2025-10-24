@@ -3,7 +3,7 @@ package swarm
 import (
 	"context"
 
-	"github.com/Raezil/go-agent-development-kit/pkg/memory"
+	"github.com/Raezil/lattice-agent/pkg/memory"
 )
 
 type Swarm struct {

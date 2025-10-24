@@ -2,19 +2,19 @@
 //
 // Examples:
 //
-//   export GOOGLE_API_KEY=...
-//   go run ./cmd/quickstart \
-//       --participants "researcher:cli:researcher,planner:cli:planner" \
-//       --shared-spaces "team:demo" \
-//       --qdrant-url http://localhost:6333 \
-//       --qdrant-collection adk_memories
+//	export GOOGLE_API_KEY=...
+//	go run ./cmd/quickstart \
+//	    --participants "researcher:cli:researcher,planner:cli:planner" \
+//	    --shared-spaces "team:demo" \
+//	    --qdrant-url http://localhost:6333 \
+//	    --qdrant-collection adk_memories
 //
-//   export QDRANT_API_KEY=...
-//   go run ./cmd/quickstart \
-//       --model gemini-2.5-flash \
-//       --shared-spaces "product:beta" \
-//       --qdrant-url https://YOUR-QDRANT:6333 \
-//       --qdrant-collection swarm_memories
+//	export QDRANT_API_KEY=...
+//	go run ./cmd/quickstart \
+//	    --model gemini-2.5-flash \
+//	    --shared-spaces "product:beta" \
+//	    --qdrant-url https://YOUR-QDRANT:6333 \
+//	    --qdrant-collection swarm_memories
 package main
 
 import (
@@ -27,17 +27,17 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/Raezil/go-agent-development-kit/pkg/adk"
-	adkmodules "github.com/Raezil/go-agent-development-kit/pkg/adk/modules"
-	"github.com/Raezil/go-agent-development-kit/pkg/agent"
-	"github.com/Raezil/go-agent-development-kit/pkg/helpers"
-	"github.com/Raezil/go-agent-development-kit/pkg/memory"
-	"github.com/Raezil/go-agent-development-kit/pkg/memory/engine"
-	"github.com/Raezil/go-agent-development-kit/pkg/models"
-	"github.com/Raezil/go-agent-development-kit/pkg/subagents"
-	"github.com/Raezil/go-agent-development-kit/pkg/tools"
+	"github.com/Raezil/lattice-agent/pkg/adk"
+	adkmodules "github.com/Raezil/lattice-agent/pkg/adk/modules"
+	"github.com/Raezil/lattice-agent/pkg/agent"
+	"github.com/Raezil/lattice-agent/pkg/helpers"
+	"github.com/Raezil/lattice-agent/pkg/memory"
+	"github.com/Raezil/lattice-agent/pkg/memory/engine"
+	"github.com/Raezil/lattice-agent/pkg/models"
+	"github.com/Raezil/lattice-agent/pkg/subagents"
+	"github.com/Raezil/lattice-agent/pkg/tools"
 
-	"github.com/Raezil/go-agent-development-kit/pkg/swarm"
+	"github.com/Raezil/lattice-agent/pkg/swarm"
 )
 
 // ---- Adapter: concrete ADK *agent.Agent -> swarm.ConversationAgent ----

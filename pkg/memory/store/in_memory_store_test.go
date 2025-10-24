@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/Raezil/go-agent-development-kit/pkg/memory/model"
+	"github.com/Raezil/lattice-agent/pkg/memory/model"
 )
 
 func TestInMemoryStoreUsesMatrixVectorWhenEmbeddingMissing(t *testing.T) {
