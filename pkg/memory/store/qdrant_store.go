@@ -247,6 +247,17 @@ func (qs *QdrantStore) StoreMemory(ctx context.Context, sessionID, content strin
 	if space == "" {
 		space = sessionID
 	}
+	matrix := model.ValidEmbeddingMatrix(metaMap)
+	storedEmbedding := append([]float32(nil), embedding...)
+	if len(storedEmbedding) == 0 {
+		for _, vec := range matrix {
+			if len(vec) == 0 {
+				continue
+			}
+			storedEmbedding = append([]float32(nil), vec...)
+			break
+		}
+	}
 	payload := map[string]any{
 		"session_id":    sessionID,
 		"content":       content,
@@ -265,14 +276,14 @@ func (qs *QdrantStore) StoreMemory(ctx context.Context, sessionID, content strin
 	} else {
 		payload["graph_edges"] = edges
 	}
-	if matrix := model.ValidEmbeddingMatrix(metaMap); len(matrix) > 0 {
+	if len(matrix) > 0 {
 		payload[model.EmbeddingMatrixKey] = matrix
 	}
 	pointID := qs.generateID()
 	req := map[string]any{
 		"points": []map[string]any{{
 			"id":      pointID,
-			"vector":  embedding,
+			"vector":  storedEmbedding,
 			"payload": payload,
 		}},
 	}

@@ -34,6 +34,17 @@ func (s *InMemoryStore) StoreMemory(_ context.Context, sessionID, content string
 	if space == "" {
 		space = sessionID
 	}
+	matrix := model.ValidEmbeddingMatrix(meta)
+	storedEmbedding := append([]float32(nil), embedding...)
+	if len(storedEmbedding) == 0 {
+		for _, vec := range matrix {
+			if len(vec) == 0 {
+				continue
+			}
+			storedEmbedding = append([]float32(nil), vec...)
+			break
+		}
+	}
 	s.nextID++
 	record := model.MemoryRecord{
 		ID:              s.nextID,
@@ -41,14 +52,14 @@ func (s *InMemoryStore) StoreMemory(_ context.Context, sessionID, content string
 		Space:           space,
 		Content:         content,
 		Metadata:        metadataJSON,
-		Embedding:       append([]float32(nil), embedding...),
+		Embedding:       storedEmbedding,
 		Importance:      importance,
 		Source:          source,
 		Summary:         summary,
 		CreatedAt:       now,
 		LastEmbedded:    lastEmbedded,
 		GraphEdges:      model.ValidGraphEdges(meta),
-		EmbeddingMatrix: model.ValidEmbeddingMatrix(meta),
+		EmbeddingMatrix: matrix,
 	}
 	s.records[record.ID] = record
 	return nil
