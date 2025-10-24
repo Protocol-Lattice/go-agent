@@ -1,159 +1,314 @@
-# Lattice - Agent Development Kit
+# Lattice
+
+> A batteries-included Agent Development Kit for Go
 
 [![Go Version](https://img.shields.io/badge/Go-1.25-00ADD8?logo=go&logoColor=white)](https://go.dev/dl/)
 [![CI Status](https://github.com/Raezil/lattice-agent/actions/workflows/go.yml/badge.svg)](https://github.com/Raezil/lattice-agent/actions/workflows/go.yml)
 [![Go Reference](https://pkg.go.dev/badge/github.com/Raezil/lattice-agent.svg)](https://pkg.go.dev/github.com/Raezil/lattice-agent)
 [![Go Report Card](https://goreportcard.com/badge/github.com/Raezil/lattice-agent)](https://goreportcard.com/report/github.com/Raezil/lattice-agent)
 
-Lattice is a batteries-included Agent Development Kit (ADK) for Go. It wraps LLMs, portable tool calling (UTCP-ready), retrieval-augmented memory, and multi-agent coordination behind clean, testable interfaces—so you can focus on domain logic instead of orchestration plumbing.
+**Lattice** helps you build AI agents in Go with clean abstractions for LLMs, tool calling, retrieval-augmented memory, and multi-agent coordination. Focus on your domain logic while Lattice handles the orchestration plumbing.
 
----
+## Why Lattice?
 
-## Table of Contents
-1. [Why lattice-agent?](#why-lattice-agent)
-2. [Feature Highlights](#feature-highlights)
-3. [Package Tour](#package-tour)
-4. [Quick Start](#quick-start)
-5. [Configuring Providers](#configuring-providers)
-6. [Memory Engine](#memory-engine)
-7. [Shared Spaces (Swarm)](#shared-spaces-swarm)
-8. [Development Workflow](#development-workflow)
-9. [Troubleshooting](#troubleshooting)
-10. [Contributing](#contributing)
-11. [License](#license)
+Building production AI agents requires more than just LLM calls. You need:
 
----
+- **Pluggable LLM providers** that swap without rewriting logic
+- **Tool calling** that works across different model APIs
+- **Memory systems** that remember context across conversations
+- **Multi-agent coordination** for complex workflows
+- **Testing infrastructure** that doesn't hit external APIs
 
-## Why lattice-agent?
+Lattice provides all of this with idiomatic Go interfaces and minimal dependencies.
 
-Why “Lattice”? Agents write and read knowledge across a graph of nodes and a matrix of vectors. Lattice gives that grid structure a practical runtime.
+## Features
 
-## Feature Highlights
-- **Modular agent kit**: `pkg/adk` exposes a module system for assembling deployments with declarative
-  options.
-- **Coordinator & specialists**: `pkg/agent` hosts the core runtime. `pkg/subagents` shows how to wire
-  persona-specific specialists through a `ToolCatalog` and `SubAgentDirectory`.
-- **Tooling ecosystem**: implement the `agent.Tool` interface and register tooling under `pkg/tools` to
-  make it available to every agent automatically.
-- **Retrieval-augmented memory**: `pkg/memory` layers importance scoring, weighted retrieval, MMR, and
-  pruning over pluggable vector stores (PostgreSQL + pgvector, Qdrant, in-memory).
-- **Model abstraction**: `pkg/models` provides adapters for Gemini 2.5 Pro and dummy/offline models.
-  Anthropic, Ollama, and future providers can plug in via the same interface.
-- **Universal Tool Calling Protocol (UTCP)**: first-class UTCP support for portable tool invocation.
-- **Command-line demos**: `cmd/demo` illustrates tool usage, delegation, and memory persistence from
-  the terminal.
-
-## Package Tour
-```
-cmd/
-├── demo              # Interactive CLI showcasing tools, delegation, and memory
-├── quickstart        # Minimal sample wired through the high-level kit
-└── team              # Multi-agent coordination examples
-pkg/
-├── adk               # Modular Agent Development Kit and module interfaces
-├── agent             # Coordinator runtime, routing, and delegation logic
-├── memory            # Memory engine, vector-store adapters, pruning strategies
-├── models            # Gemini, Ollama, Anthropic, and dummy model adapters
-├── subagents         # Specialist personas built on top of the runtime
-└── tools             # Built-in tools (echo, calculator, time, etc.)
-```
+- 🧩 **Modular Architecture** – Compose agents from reusable modules with declarative configuration
+- 🤖 **Multi-Agent Support** – Coordinate specialist agents through a shared catalog and delegation system
+- 🔧 **Rich Tooling** – Implement the `Tool` interface once, use everywhere automatically
+- 🧠 **Smart Memory** – RAG-powered memory with importance scoring, MMR retrieval, and automatic pruning
+- 🔌 **Model Agnostic** – Adapters for Gemini, Anthropic, Ollama, or bring your own
+- 📡 **UTCP Ready** – First-class Universal Tool Calling Protocol support
+- 🎯 **Production Ready** – Online-safe migrations, connection pooling, and comprehensive testing
 
 ## Quick Start
-### Prerequisites
-- **Go** 1.22 or newer (1.25 recommended)
-- **PostgreSQL** 15+ with the [`pgvector`](https://github.com/pgvector/pgvector) extension (optional
-  for local experimentation, required for long-term memory persistence)
-- **Gemini API key** exported as `GOOGLE_API_KEY` or `GEMINI_API_KEY`
 
-### Install
+### Installation
+
 ```bash
 git clone https://github.com/Raezil/lattice-agent.git
 cd lattice-agent
 go mod download
 ```
 
-### Configure Environment
-Set up API keys and database connectivity as needed:
+### Basic Usage
 
-| Variable | Description |
-| --- | --- |
-| `GOOGLE_API_KEY` / `GEMINI_API_KEY` | Credentials for Gemini models. |
-| `DATABASE_URL` | PostgreSQL DSN (e.g. `postgres://admin:admin@localhost:5432/ragdb?sslmode=disable`). |
-| `ADK_EMBED_PROVIDER` | Optional embedding provider override (defaults to Gemini for the demo). |
+```go
+package main
+
+import (
+    "context"
+    "log"
+    
+    "github.com/Raezil/lattice-agent/pkg/adk"
+    "github.com/Raezil/lattice-agent/pkg/adk/modules"
+    "github.com/Raezil/lattice-agent/pkg/models"
+    "github.com/Raezil/lattice-agent/pkg/tools"
+)
+
+func main() {
+    ctx := context.Background()
+    
+    // Create an agent with modular components
+    adkAgent, err := adk.New(ctx,
+        adk.WithModules(
+            modules.NewModelModule("coordinator", 
+                modules.StaticModelProvider(models.NewGeminiLLM())),
+            modules.InMemoryMemoryModule(8),
+            modules.NewToolModule("default-tools", 
+                modules.StaticToolProvider([]agent.Tool{
+                    &tools.EchoTool{},
+                    &tools.CalculatorTool{},
+                }, nil)),
+        ),
+    )
+    if err != nil {
+        log.Fatal(err)
+    }
+    
+    agent, err := adkAgent.BuildAgent(ctx)
+    if err != nil {
+        log.Fatal(err)
+    }
+    
+    // Use the agent
+    response, err := agent.Process(ctx, "What is 42 * 37?")
+    if err != nil {
+        log.Fatal(err)
+    }
+    
+    log.Println(response)
+}
+```
+
+### Running Examples
 
 ```bash
-export GOOGLE_API_KEY="<your-gemini-api-key>"
-export DATABASE_URL="postgres://admin:admin@localhost:5432/ragdb?sslmode=disable"
+# Interactive CLI demo
+go run cmd/demo/main.go
+
+# Multi-agent coordination
+go run cmd/team/main.go
+
+# Quick start example
+go run cmd/quickstart/main.go
+```
+
+## Project Structure
+
+```
+lattice-agent/
+├── cmd/
+│   ├── demo/          # Interactive CLI with tools, delegation, and memory
+│   ├── quickstart/    # Minimal getting-started example
+│   └── team/          # Multi-agent coordination demos
+├── pkg/
+│   ├── adk/           # Agent Development Kit and module system
+│   ├── agent/         # Core coordinator, routing, and delegation
+│   ├── memory/        # Memory engine and vector store adapters
+│   ├── models/        # LLM provider adapters (Gemini, Ollama, Anthropic)
+│   ├── subagents/     # Pre-built specialist agent personas
+│   └── tools/         # Built-in tools (echo, calculator, time, etc.)
+└── docs/              # Additional documentation
+```
+
+## Configuration
+
+### Environment Variables
+
+| Variable | Description | Required |
+|----------|-------------|----------|
+| `GOOGLE_API_KEY` | Gemini API credentials | For Gemini models |
+| `GEMINI_API_KEY` | Alternative to `GOOGLE_API_KEY` | For Gemini models |
+| `DATABASE_URL` | PostgreSQL connection string | For persistent memory |
+| `ADK_EMBED_PROVIDER` | Embedding provider override | No (defaults to Gemini) |
+
+### Example Configuration
+
+```bash
+export GOOGLE_API_KEY="your-api-key-here"
+export DATABASE_URL="postgres://user:pass@localhost:5432/lattice?sslmode=disable"
 export ADK_EMBED_PROVIDER="gemini"
 ```
 
-## Configuring Providers
-The modular kit lets you declare models, memory, and tools with a few options:
+## Core Concepts
+
+### Memory Engine
+
+Lattice includes a sophisticated memory system with retrieval-augmented generation (RAG):
 
 ```go
-adkAgent, err := adk.New(ctx,
-    kit.WithModules(
-        modules.NewModelModule("coordinator", modules.StaticModelProvider(models.NewDummyLLM("Coordinator:"))),
-        modules.InMemoryMemoryModule(8),
-        modules.NewToolModule("default-tools", modules.StaticToolProvider([]agent.Tool{&tools.EchoTool{}}, nil)),
-    ),
-)
-if err != nil {
-    log.Fatal(err)
-}
-agent, err := adkAgent.BuildAgent(ctx)
-```
-
-Providers can register models, memory engines, tool catalogs, sub-agents, and even the runtime. Combine
-them with `kit.WithAgentOptions` to share defaults (system prompts, UTCP clients, etc.) across builds.
-
-## Memory Engine
-`pkg/memory` offers an `Engine` that composes retrieval heuristics, clustering, and pruning atop any
-`VectorStore` implementation.
-
-```go
-store := memory.NewInMemoryStore() // or postgres/qdrant implementation
+store := memory.NewInMemoryStore() // or PostgreSQL/Qdrant
 engine := memory.NewEngine(store, memory.Options{}).
-    WithEmbedder(memory.DummyEmbedder{})
+    WithEmbedder(yourEmbedder)
 
-sessionMemory := memory.NewSessionMemory(memory.NewMemoryBankWithStore(store), 8).
-    WithEngine(engine)
+sessionMemory := memory.NewSessionMemory(
+    memory.NewMemoryBankWithStore(store), 
+    8, // context window size
+).WithEngine(engine)
 ```
 
-Schema migrations rely on online-safe `ALTER TABLE ... IF NOT EXISTS` statements to avoid downtime.
+Features:
+- **Importance Scoring** – Automatically weights memories by relevance
+- **MMR Retrieval** – Maximal Marginal Relevance for diverse results
+- **Auto-Pruning** – Removes stale or low-value memories
+- **Multiple Backends** – In-memory, PostgreSQL+pgvector, or Qdrant
 
-## Shared Spaces (Swarm)
-Coordinate multiple agents that **share memory across named spaces** (e.g. `team:core`, `team:project-x`).
-Swarm builds on `memory.SharedSession` to read and write memories visible to everyone in the same space.
+### Tool System
 
-Use it when:
-- Cooperating agents (e.g. *alpha*, *beta*, *researcher*) need to see each other’s latest notes.
-- You want shared RAG context from a team space while keeping local short-term memory.
-- You need explicit access control—grant read/write permissions per space and per session ID.
+Create custom tools by implementing a simple interface:
 
-## Development Workflow
-1. Update Go code or modules.
-2. Format using `gofmt` (or your editor tooling).
-3. Run the test suite:
-   ```bash
-   go test ./...
-   ```
-4. Update documentation and examples when adding new tools, models, or memory backends.
+```go
+type CustomTool struct{}
+
+func (t *CustomTool) Name() string { return "custom_tool" }
+func (t *CustomTool) Description() string { return "Does something useful" }
+func (t *CustomTool) Execute(ctx context.Context, args map[string]any) (any, error) {
+    // Your tool logic here
+    return result, nil
+}
+```
+
+Register tools with the module system and they're automatically available to all agents.
+
+### Multi-Agent Coordination
+
+Use **Shared Spaces** to coordinate multiple agents with shared memory:
+
+```go
+// Agents alpha, beta, and researcher share the "team:core" space
+swarm := swarm.New(
+    swarm.WithSpace("team:core"),
+    swarm.WithAgents(alpha, beta, researcher),
+)
+
+// All agents can read/write shared context
+response, err := swarm.Coordinate(ctx, "Analyze market trends")
+```
+
+Perfect for:
+- Team-based workflows where agents need shared context
+- Complex tasks requiring specialist coordination
+- Projects with explicit access control requirements
+
+## Development
+
+### Running Tests
+
+```bash
+# Run all tests
+go test ./...
+
+# Run with coverage
+go test -cover ./...
+
+# Run specific package tests
+go test ./pkg/memory/...
+```
+
+### Code Style
+
+We follow standard Go conventions:
+- Use `gofmt` for formatting
+- Follow [Effective Go](https://golang.org/doc/effective_go.html) guidelines
+- Add tests for new features
+- Update documentation when adding capabilities
+
+### Adding New Components
+
+**New LLM Provider:**
+1. Implement the `models.LLM` interface in `pkg/models/`
+2. Add provider-specific configuration
+3. Update documentation and examples
+
+**New Tool:**
+1. Implement `agent.Tool` interface in `pkg/tools/`
+2. Register with the tool module system
+3. Add tests and usage examples
+
+**New Memory Backend:**
+1. Implement `memory.VectorStore` interface
+2. Add migration scripts if needed
+3. Update configuration documentation
+
+## Prerequisites
+
+- **Go** 1.22+ (1.25 recommended)
+- **PostgreSQL** 15+ with `pgvector` extension (optional, for persistent memory)
+- **API Keys** for your chosen LLM provider
+
+### PostgreSQL Setup (Optional)
+
+For persistent memory with vector search:
+
+```sql
+CREATE EXTENSION IF NOT EXISTS vector;
+```
+
+The memory module handles schema migrations automatically.
 
 ## Troubleshooting
-- **Missing pgvector extension** – Ensure `CREATE EXTENSION vector;` runs before connecting; otherwise
-  the Postgres-backed memory store cannot create vector columns.
-- **API key issues** – Confirm `GOOGLE_API_KEY` or `GEMINI_API_KEY` is set in the same shell where you
-  run the demo.
-- **Tool discovery** – Check that tool names are unique when registering them in catalogs/directories.
-- **Deterministic tests** – Use the dummy model adapter for repeatable orchestration logic in unit tests.
+
+### Common Issues
+
+**Missing pgvector extension**
+```
+ERROR: type "vector" does not exist
+```
+Solution: Run `CREATE EXTENSION vector;` in your PostgreSQL database.
+
+**API key errors**
+```
+ERROR: authentication failed
+```
+Solution: Verify your API key is correctly set in the environment where you run the application.
+
+**Tool not found**
+```
+ERROR: tool "xyz" not registered
+```
+Solution: Ensure tool names are unique and properly registered in your tool catalog.
+
+### Getting Help
+
+- Check existing [GitHub Issues](https://github.com/Raezil/lattice-agent/issues)
+- Review the [examples](./cmd/) for common patterns
+- Join discussions in [GitHub Discussions](https://github.com/Raezil/lattice-agent/discussions)
 
 ## Contributing
-Issues and pull requests are welcome! Please update the README and examples when contributing new
-models, tools, or memory backends so the community benefits from your additions.
+
+We welcome contributions! Here's how to get started:
+
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/amazing-feature`)
+3. Make your changes with tests
+4. Update documentation
+5. Submit a pull request
+
+Please ensure:
+- Tests pass (`go test ./...`)
+- Code is formatted (`gofmt`)
+- Documentation is updated
+- Commit messages are clear
 
 ## License
+
 This project is licensed under the [Apache 2.0 License](./LICENSE).
 
-## 🙏 Acknowledgments
-- Google’s [Agent Development Kit (Python)](https://github.com/google/adk-python) for foundational ideas.
+## Acknowledgments
+
+- Inspired by Google's [Agent Development Kit (Python)](https://github.com/google/adk-python)
+
+---
+
+**Star us on GitHub** if you find Lattice useful! ⭐
