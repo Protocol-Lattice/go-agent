@@ -82,7 +82,7 @@ func main() {
     }
     
     // Use the agent
-    response, err := agent.Process(ctx, "What is 42 * 37?")
+    resp, err := agent.Generate(ctx, "SessionID", line)
     if err != nil {
         log.Fatal(err)
     }
