@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Raezil/go-agent-development-kit/pkg/memory"
 	"github.com/Raezil/go-agent-development-kit/pkg/models"
@@ -406,6 +408,76 @@ func (a *Agent) storeMemory(sessionID, role, content string, extra map[string]st
 	mem.AddShortTerm(sessionID, content, string(metaBytes), embedding)
 }
 
+func (a *Agent) storeAttachmentMemories(sessionID string, files []models.File) {
+	for i, file := range files {
+		name := strings.TrimSpace(file.Name)
+		if name == "" {
+			name = fmt.Sprintf("file_%d", i+1)
+		}
+		mime := strings.TrimSpace(file.MIME)
+		content := buildAttachmentMemoryContent(name, mime, file.Data)
+		extra := map[string]string{
+			"source":   "file_upload",
+			"filename": name,
+		}
+		if mime != "" {
+			extra["mime"] = mime
+		}
+		if size := len(file.Data); size > 0 {
+			extra["size_bytes"] = strconv.Itoa(size)
+		}
+		if isTextAttachment(mime, file.Data) {
+			extra["text"] = "true"
+		} else {
+			extra["text"] = "false"
+		}
+		a.storeMemory(sessionID, "attachment", content, extra)
+	}
+}
+
+func isTextAttachment(mime string, data []byte) bool {
+	mt := strings.ToLower(strings.TrimSpace(mime))
+	switch {
+	case strings.HasPrefix(mt, "text/"):
+		return true
+	case mt == "application/json",
+		mt == "application/xml",
+		mt == "application/x-yaml",
+		mt == "application/yaml",
+		mt == "text/markdown",
+		mt == "text/x-markdown":
+		return true
+	}
+	if len(data) == 0 {
+		return true
+	}
+	return utf8.Valid(data)
+}
+
+func buildAttachmentMemoryContent(name, mime string, data []byte) string {
+	display := strings.TrimSpace(name)
+	if display == "" {
+		display = "attachment"
+	}
+	descriptor := display
+	if m := strings.TrimSpace(mime); m != "" {
+		descriptor = fmt.Sprintf("%s (%s)", display, m)
+	}
+	if len(data) == 0 {
+		return fmt.Sprintf("Attachment %s [empty file]", descriptor)
+	}
+	if isTextAttachment(mime, data) {
+		var sb strings.Builder
+		sb.Grow(len(data) + len(descriptor) + 32)
+		sb.WriteString("Attachment ")
+		sb.WriteString(descriptor)
+		sb.WriteString(":\n")
+		sb.Write(data)
+		return sb.String()
+	}
+	return fmt.Sprintf("Attachment %s [%d bytes of non-text content]", descriptor, len(data))
+}
+
 func (a *Agent) lookupTool(name string) (Tool, ToolSpec, bool) {
 	if a.toolCatalog == nil {
 		return nil, ToolSpec{}, false
@@ -527,6 +599,10 @@ func (a *Agent) GenerateWithFiles(
 	prompt, err := a.buildPrompt(ctx, sessionID, userInput)
 	if err != nil {
 		return "", err
+	}
+
+	if len(files) > 0 {
+		a.storeAttachmentMemories(sessionID, files)
 	}
 
 	// Ask the provider to render a file-aware prompt (inline text, reference non-text).
