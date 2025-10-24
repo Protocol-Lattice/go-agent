@@ -68,7 +68,7 @@ pkg/
 ### Install
 ```bash
 git clone https://github.com/Raezil/lattice-agent.git
-cd go-agent-development-kit
+cd lattice-agent
 go mod download
 ```
 
