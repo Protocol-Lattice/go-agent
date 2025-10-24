@@ -11,49 +11,106 @@ import (
 	"google.golang.org/api/option"
 )
 
-// ---------------------------- Google Gemini ----------------------------------
-
 type GeminiLLM struct {
 	Client       *genai.Client
 	Model        string
 	PromptPrefix string
 }
 
-func NewGeminiLLM(ctx context.Context, model, promptPrefix string) (*GeminiLLM, error) {
-	apiKey := os.Getenv("GOOGLE_API_KEY")
-	if apiKey == "" {
-		apiKey = os.Getenv("GEMINI_API_KEY")
+func NewGeminiLLM(ctx context.Context, model string, promptPrefix string) (Agent, error) {
+	key := os.Getenv("GOOGLE_API_KEY")
+	if key == "" {
+		key = os.Getenv("GEMINI_API_KEY")
 	}
-	if apiKey == "" {
-		return nil, errors.New("missing GOOGLE_API_KEY or GEMINI_API_KEY")
+	if key == "" {
+		return nil, errors.New("gemini: missing GOOGLE_API_KEY/GEMINI_API_KEY")
 	}
-	client, err := genai.NewClient(ctx, option.WithAPIKey(apiKey))
+	cl, err := genai.NewClient(ctx, option.WithAPIKey(key))
 	if err != nil {
-		return nil, fmt.Errorf("gemini init: %w", err)
+		return nil, err
 	}
-	return &GeminiLLM{Client: client, Model: model, PromptPrefix: promptPrefix}, nil
+	return &GeminiLLM{Client: cl, Model: model, PromptPrefix: promptPrefix}, nil
 }
 
 func (g *GeminiLLM) Generate(ctx context.Context, prompt string) (any, error) {
 	model := g.Client.GenerativeModel(g.Model)
-
-	fullPrompt := prompt
-	if prefix := strings.TrimSpace(g.PromptPrefix); prefix != "" {
-		fullPrompt = fmt.Sprintf("%s %s", prefix, prompt)
+	full := prompt
+	if g.PromptPrefix != "" {
+		full = g.PromptPrefix + "\n\n" + prompt
 	}
-
-	resp, err := model.GenerateContent(ctx, genai.Text(fullPrompt))
+	resp, err := model.GenerateContent(ctx, genai.Text(full))
 	if err != nil {
 		return nil, fmt.Errorf("gemini generate: %w", err)
 	}
 	if len(resp.Candidates) == 0 || resp.Candidates[0].Content == nil || len(resp.Candidates[0].Content.Parts) == 0 {
 		return nil, errors.New("gemini: empty response")
 	}
-
 	return resp.Candidates[0].Content.Parts[0], nil
 }
 
+// NEW: pass images/videos as parts so Gemini can read them.
+// Falls back to text-only if there are no binary attachments.
+// gemini.go (inside package models)
+
 func (g *GeminiLLM) GenerateWithFiles(ctx context.Context, prompt string, files []File) (any, error) {
-	combined := combinePromptWithFiles(prompt, files)
-	return g.Generate(ctx, combined)
+	model := g.Client.GenerativeModel(g.Model)
+
+	// Build normalized copies (never pass raw f.MIME to Gemini)
+	norm := make([]File, 0, len(files))
+	for _, f := range files {
+		origMIME := f.MIME
+		normalizedMIME := normalizeMIME(f.Name, f.MIME)
+		fmt.Fprintf(os.Stderr, "DEBUG normalizeMIME: file=%s, input=%q, output=%q\n", f.Name, origMIME, normalizedMIME)
+		norm = append(norm, File{
+			Name: f.Name,
+			MIME: normalizedMIME,
+			Data: f.Data,
+		})
+	}
+
+	// Text context always present
+	text := combinePromptWithFiles(prompt, norm)
+
+	var parts []genai.Part
+	if p := strings.TrimSpace(g.PromptPrefix); p != "" {
+		parts = append(parts, genai.Text(p))
+	}
+	parts = append(parts, genai.Text(text))
+
+	// Attach only if MIME is sanitized for Gemini
+	for _, f := range norm {
+		if len(f.Data) == 0 {
+			continue
+		}
+		sanitized := sanitizeForGemini(f.MIME)
+		fmt.Fprintf(os.Stderr, "DEBUG sanitizeForGemini: file=%s, input=%q, output=%q\n", f.Name, f.MIME, sanitized)
+
+		if sanitized == "" {
+			fmt.Fprintf(os.Stderr, "DEBUG: Skipping file %s (unsupported MIME)\n", f.Name)
+			continue // skip unsupported/unknown
+		}
+
+		fmt.Fprintf(os.Stderr, "DEBUG: Attaching file %s with MIME %q\n", f.Name, sanitized)
+
+		if strings.HasPrefix(sanitized, "image/") {
+			// ImageData expects just the format (e.g., "png") not "image/png"
+			// The SDK prepends "image/" automatically
+			format := strings.TrimPrefix(sanitized, "image/")
+			fmt.Fprintf(os.Stderr, "DEBUG: Using ImageData with format=%q\n", format)
+			parts = append(parts, genai.ImageData(format, f.Data))
+		} else if strings.HasPrefix(sanitized, "video/") {
+			parts = append(parts, genai.Blob{MIMEType: sanitized, Data: f.Data})
+		}
+	}
+
+	fmt.Fprintf(os.Stderr, "DEBUG: Calling Gemini API with %d parts\n", len(parts))
+
+	resp, err := model.GenerateContent(ctx, parts...)
+	if err != nil {
+		return nil, fmt.Errorf("gemini generateWithFiles: %w", err)
+	}
+	if len(resp.Candidates) == 0 || resp.Candidates[0].Content == nil || len(resp.Candidates[0].Content.Parts) == 0 {
+		return nil, errors.New("gemini: empty response")
+	}
+	return resp.Candidates[0].Content.Parts[0], nil
 }
