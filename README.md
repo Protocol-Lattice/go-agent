@@ -5,9 +5,7 @@
 [![Go Reference](https://pkg.go.dev/badge/github.com/Raezil/lattice-agent.svg)](https://pkg.go.dev/github.com/Raezil/lattice-agent)
 [![Go Report Card](https://goreportcard.com/badge/github.com/Raezil/lattice-agent)](https://goreportcard.com/report/github.com/Raezil/lattice-agent)
 
-Build production-ready AI agents in Go with a batteries-included toolkit. Lattice-Agent wraps language
-models, tool execution, retrieval-augmented memory, and multi-agent coordination behind pragmatic
-interfaces so you can focus on domain logic instead of orchestration plumbing.
+Lattice is a batteries-included Agent Development Kit (ADK) for Go. It wraps LLMs, portable tool calling (UTCP-ready), retrieval-augmented memory, and multi-agent coordination behind clean, testable interfaces—so you can focus on domain logic instead of orchestration plumbing.
 
 ---
 
@@ -27,15 +25,8 @@ interfaces so you can focus on domain logic instead of orchestration plumbing.
 ---
 
 ## Why lattice-agent?
-Modern agents demand more than a single model call—they need deterministic session orchestration,
-reusable tool adapters, rich memory, and safe extensibility. GO-ADK delivers:
 
-- **Composable runtime** – stitch together models, tools, sub-agents, and memory with minimal glue.
-- **Opinionated defaults** – sensible conventions that stay out of the way when you customise.
-- **Production-ready patterns** – test-friendly abstractions, UTCP support, and pluggable storage.
-
-Whether you are experimenting locally or embedding agents into an existing service, GO-ADK provides a
-consistent foundation.
+Why “Lattice”? Agents write and read knowledge across a graph of nodes and a matrix of vectors. Lattice gives that grid structure a practical runtime.
 
 ## Feature Highlights
 - **Modular agent kit**: `pkg/adk` exposes a module system for assembling deployments with declarative
