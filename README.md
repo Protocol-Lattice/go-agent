@@ -29,7 +29,6 @@ Lattice provides all of this with idiomatic Go interfaces and minimal dependenci
 - 🧠 **Smart Memory** – RAG-powered memory with importance scoring, MMR retrieval, and automatic pruning
 - 🔌 **Model Agnostic** – Adapters for Gemini, Anthropic, Ollama, or bring your own
 - 📡 **UTCP Ready** – First-class Universal Tool Calling Protocol support
-- 🎯 **Production Ready** – Online-safe migrations, connection pooling, and comprehensive testing
 
 ## Quick Start
 
