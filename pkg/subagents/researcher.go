@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/Raezil/go-agent-development-kit/pkg/agent"
-	"github.com/Raezil/go-agent-development-kit/pkg/models"
+	"github.com/Raezil/lattice-agent/pkg/agent"
+	"github.com/Raezil/lattice-agent/pkg/models"
 )
 
 // Researcher is a lightweight sub-agent that focuses on synthesizing background information.

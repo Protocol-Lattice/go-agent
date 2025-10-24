@@ -14,7 +14,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/Raezil/go-agent-development-kit/pkg/memory/model"
+	"github.com/Raezil/lattice-agent/pkg/memory/model"
 )
 
 // PostgresStore implements VectorStore using Postgres + pgvector.

@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/Raezil/go-agent-development-kit/pkg/agent"
+	"github.com/Raezil/lattice-agent/pkg/agent"
 )
 
 // CalculatorTool evaluates basic arithmetic expressions in the form "a op b".

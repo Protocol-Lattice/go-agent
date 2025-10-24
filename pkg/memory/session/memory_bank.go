@@ -6,10 +6,10 @@ import (
 	"io"
 	"sync"
 
-	"github.com/Raezil/go-agent-development-kit/pkg/memory/embed"
-	memengine "github.com/Raezil/go-agent-development-kit/pkg/memory/engine"
-	"github.com/Raezil/go-agent-development-kit/pkg/memory/model"
-	"github.com/Raezil/go-agent-development-kit/pkg/memory/store"
+	"github.com/Raezil/lattice-agent/pkg/memory/embed"
+	memengine "github.com/Raezil/lattice-agent/pkg/memory/engine"
+	"github.com/Raezil/lattice-agent/pkg/memory/model"
+	"github.com/Raezil/lattice-agent/pkg/memory/store"
 )
 
 // MemoryBank is a thin wrapper around a VectorStore implementation.

@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Raezil/go-agent-development-kit/pkg/agent"
+	"github.com/Raezil/lattice-agent/pkg/agent"
 )
 
 func TestEchoTool(t *testing.T) {

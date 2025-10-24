@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/Raezil/go-agent-development-kit/pkg/memory"
+	"github.com/Raezil/lattice-agent/pkg/memory"
 )
 
 // ---- Exported, narrow interfaces for testability & cross-package impls ----

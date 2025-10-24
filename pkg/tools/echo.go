@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/Raezil/go-agent-development-kit/pkg/agent"
+	"github.com/Raezil/lattice-agent/pkg/agent"
 )
 
 // EchoTool repeats the provided input. Useful for testing tool wiring.

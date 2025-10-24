@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/Raezil/go-agent-development-kit/pkg/adk"
+	"github.com/Raezil/lattice-agent/pkg/adk"
 )
 
 // MemoryModule registers a session memory provider with the kit.

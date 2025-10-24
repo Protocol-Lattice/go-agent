@@ -3,7 +3,7 @@ package adk
 import (
 	"context"
 
-	"github.com/Raezil/go-agent-development-kit/pkg/agent"
+	"github.com/Raezil/lattice-agent/pkg/agent"
 	"github.com/universal-tool-calling-protocol/go-utcp"
 )
 

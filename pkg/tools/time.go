@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/Raezil/go-agent-development-kit/pkg/agent"
+	"github.com/Raezil/lattice-agent/pkg/agent"
 )
 
 // TimeTool reports the current UTC time in RFC3339 format.

@@ -1,11 +1,11 @@
 package memory
 
 import (
-	embedpkg "github.com/Raezil/go-agent-development-kit/pkg/memory/embed"
-	memengine "github.com/Raezil/go-agent-development-kit/pkg/memory/engine"
-	"github.com/Raezil/go-agent-development-kit/pkg/memory/model"
-	sessionpkg "github.com/Raezil/go-agent-development-kit/pkg/memory/session"
-	storepkg "github.com/Raezil/go-agent-development-kit/pkg/memory/store"
+	embedpkg "github.com/Raezil/lattice-agent/pkg/memory/embed"
+	memengine "github.com/Raezil/lattice-agent/pkg/memory/engine"
+	"github.com/Raezil/lattice-agent/pkg/memory/model"
+	sessionpkg "github.com/Raezil/lattice-agent/pkg/memory/session"
+	storepkg "github.com/Raezil/lattice-agent/pkg/memory/store"
 )
 
 // Type aliases preserving the original public API.

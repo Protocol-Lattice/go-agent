@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Raezil/go-agent-development-kit/pkg/memory"
-	"github.com/Raezil/go-agent-development-kit/pkg/models"
+	"github.com/Raezil/lattice-agent/pkg/memory"
+	"github.com/Raezil/lattice-agent/pkg/models"
 )
 
 type stubModel struct {
