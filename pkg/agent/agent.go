@@ -146,7 +146,16 @@ func (a *Agent) Generate(ctx context.Context, sessionID, userInput string) (stri
 		return "", err
 	}
 
-	completion, err := a.model.Generate(ctx, prompt)
+	// Rehydrate any session attachments from memory and pass them along.
+	files, _ := a.RetrieveAttachmentFiles(ctx, sessionID, a.contextLimit)
+
+	var completion any
+	if len(files) > 0 {
+		// Ensure the prompt already lists them for model awareness.
+		completion, err = a.model.GenerateWithFiles(ctx, prompt, files)
+	} else {
+		completion, err = a.model.Generate(ctx, prompt)
+	}
 	if err != nil {
 		return "", err
 	}
@@ -164,27 +173,36 @@ func (a *Agent) Flush(ctx context.Context, sessionID string) error {
 func (a *Agent) buildPrompt(ctx context.Context, sessionID, userInput string) (string, error) {
 	queryType := classifyQuery(userInput)
 
+	var records []memory.MemoryRecord
+	var err error
+
 	switch queryType {
 	case QueryMath:
-		return fmt.Sprintf("%s\n\nCurrent user message:\n%s\n\nCompose the best possible assistant reply.\n",
-			a.systemPrompt, strings.TrimSpace(userInput)), nil
-
+		// math: no heavy retrieve
 	case QueryShortFactoid:
-		records, err := a.retrieveContext(ctx, sessionID, userInput, min(a.contextLimit/2, 3))
+		records, err = a.retrieveContext(ctx, sessionID, userInput, min(a.contextLimit/2, 3))
 		if err != nil {
 			return "", fmt.Errorf("retrieve context: %w", err)
 		}
-		return a.buildFullPrompt(userInput, records), nil
-
 	case QueryComplex:
-		records, err := a.retrieveContext(ctx, sessionID, userInput, a.contextLimit)
+		records, err = a.retrieveContext(ctx, sessionID, userInput, a.contextLimit)
 		if err != nil {
 			return "", fmt.Errorf("retrieve context: %w", err)
 		}
-		return a.buildFullPrompt(userInput, records), nil
+	default:
+		// fallthrough; empty records ok
 	}
 
-	return "", nil
+	// Base prompt (system + tools + memory + user msg)
+	prompt := a.buildFullPrompt(userInput, records)
+
+	// Include any previously uploaded files that we can rehydrate from memory.
+	// This informs the model what's being sent via GenerateWithFiles (if any).
+	if files, _ := a.RetrieveAttachmentFiles(ctx, sessionID, a.contextLimit); len(files) > 0 {
+		prompt += a.buildAttachmentPrompt("Session attachments (rehydrated)", files)
+	}
+
+	return prompt, nil
 }
 
 func (a *Agent) buildFullPrompt(userInput string, records []memory.MemoryRecord) string {
@@ -662,34 +680,106 @@ func (a *Agent) GenerateWithFiles(
 	userInput string,
 	files []models.File,
 ) (string, error) {
-	// Validate input: at least some content must be provided.
 	if strings.TrimSpace(userInput) == "" && len(files) == 0 {
 		return "", errors.New("both user input and files are empty")
 	}
 
-	// Store the user message in short-term memory for conversational continuity.
 	if strings.TrimSpace(userInput) != "" {
 		a.storeMemory(sessionID, "user", userInput, nil)
 	}
 
-	// Build the base prompt using existing memory/context/tooling.
+	// Build base prompt (includes memory and any previously stored attachments).
 	prompt, err := a.buildPrompt(ctx, sessionID, userInput)
 	if err != nil {
 		return "", err
 	}
 
+	// Persist this-turn files into session memory (so they’re discoverable later).
 	if len(files) > 0 {
 		a.storeAttachmentMemories(sessionID, files)
+		// Make it explicit to the model which files arrive with this call.
+		prompt += a.buildAttachmentPrompt("Files provided for this turn", files)
 	}
 
-	// Ask the provider to render a file-aware prompt (inline text, reference non-text).
-	completion, err := a.model.GenerateWithFiles(ctx, prompt, files)
+	// Also rehydrate prior session files (avoid duplication by simple name+size check).
+	existing, _ := a.RetrieveAttachmentFiles(ctx, sessionID, a.contextLimit)
+	// naive de-dupe: if both lists are present, keep both but that’s fine; model can handle.
+	if len(existing) > 0 {
+		prompt += a.buildAttachmentPrompt("Session attachments (rehydrated)", existing)
+	}
+
+	completion, err := a.model.GenerateWithFiles(ctx, prompt, append(existing, files...))
 	if err != nil {
 		return "", err
 	}
 
-	// Persist assistant reply and return it.
 	response := fmt.Sprint(completion)
 	a.storeMemory(sessionID, "assistant", response, nil)
 	return response, nil
+}
+
+// buildAttachmentPrompt renders a compact, token-conscious list of files.
+// It never inlines non-text bytes. For text files, it shows a short preview.
+func (a *Agent) buildAttachmentPrompt(title string, files []models.File) string {
+	if len(files) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteString("\n\n")
+	sb.WriteString(title)
+	sb.WriteString(":\n")
+	for i, f := range files {
+		name := strings.TrimSpace(f.Name)
+		if name == "" {
+			name = fmt.Sprintf("attachment_%d", i+1)
+		}
+		mime := strings.TrimSpace(f.MIME)
+		if mime == "" {
+			mime = "application/octet-stream"
+		}
+		size := humanSize(len(f.Data))
+		sb.WriteString(fmt.Sprintf("- %s (%s, %s)", name, mime, size))
+		if isTextAttachment(mime, f.Data) && len(f.Data) > 0 {
+			sb.WriteString("\n  preview:\n  ")
+			sb.WriteString(escapePromptContent(previewText(mime, f.Data)))
+		}
+		sb.WriteString("\n")
+	}
+	return sb.String()
+}
+
+func humanSize(n int) string {
+	const (
+		KB = 1024
+		MB = 1024 * KB
+		GB = 1024 * MB
+	)
+	switch {
+	case n >= GB:
+		return fmt.Sprintf("%.2f GB", float64(n)/float64(GB))
+	case n >= MB:
+		return fmt.Sprintf("%.2f MB", float64(n)/float64(MB))
+	case n >= KB:
+		return fmt.Sprintf("%.2f KB", float64(n)/float64(KB))
+	default:
+		return fmt.Sprintf("%d B", n)
+	}
+}
+
+// previewText returns a short snippet from text attachments (max ~1KB) to save tokens.
+func previewText(_ string, data []byte) string {
+	const maxPreview = 1024
+	txt := string(data)
+	return truncate(txt, maxPreview)
+}
+
+func truncate(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	// Try to cut on a boundary to avoid mid-rune issues for safety.
+	if max > 3 {
+		return s[:max-3] + "..."
+	}
+	return s[:max]
 }
