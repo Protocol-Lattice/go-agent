@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -426,6 +427,9 @@ func (a *Agent) storeAttachmentMemories(sessionID string, files []models.File) {
 		if size := len(file.Data); size > 0 {
 			extra["size_bytes"] = strconv.Itoa(size)
 		}
+		if len(file.Data) > 0 {
+			extra["data_base64"] = base64.StdEncoding.EncodeToString(file.Data)
+		}
 		if isTextAttachment(mime, file.Data) {
 			extra["text"] = "true"
 		} else {
@@ -433,6 +437,79 @@ func (a *Agent) storeAttachmentMemories(sessionID string, files []models.File) {
 		}
 		a.storeMemory(sessionID, "attachment", content, extra)
 	}
+}
+
+// RetrieveAttachmentFiles returns attachment files stored for the session.
+// It reconstructs the original bytes from base64-encoded metadata, making it
+// suitable for binary assets such as images and videos.
+func (a *Agent) RetrieveAttachmentFiles(ctx context.Context, sessionID string, limit int) ([]models.File, error) {
+	if a == nil || a.memory == nil {
+		return nil, nil
+	}
+	if limit <= 0 {
+		limit = a.contextLimit
+		if limit <= 0 {
+			limit = 8
+		}
+	}
+
+	records, err := a.memory.RetrieveContext(ctx, sessionID, "", limit)
+	if err != nil {
+		return nil, err
+	}
+
+	var attachments []models.File
+	for _, record := range records {
+		if metadataRole(record.Metadata) != "attachment" {
+			continue
+		}
+		file, ok := attachmentFromRecord(record)
+		if !ok {
+			continue
+		}
+		attachments = append(attachments, file)
+	}
+
+	return attachments, nil
+}
+
+func attachmentFromRecord(record memory.MemoryRecord) (models.File, bool) {
+	if strings.TrimSpace(record.Metadata) == "" {
+		return models.File{}, false
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(record.Metadata), &payload); err != nil {
+		return models.File{}, false
+	}
+
+	name, _ := payload["filename"].(string)
+	mime, _ := payload["mime"].(string)
+	dataB64, _ := payload["data_base64"].(string)
+	if name == "" {
+		name = "attachment"
+	}
+
+	var data []byte
+	if dataB64 != "" {
+		raw, err := base64.StdEncoding.DecodeString(dataB64)
+		if err != nil {
+			return models.File{}, false
+		}
+		data = raw
+	} else {
+		data = extractTextAttachment(record.Content)
+	}
+
+	return models.File{Name: name, MIME: mime, Data: data}, true
+}
+
+func extractTextAttachment(content string) []byte {
+	idx := strings.Index(content, ":\n")
+	if idx == -1 {
+		return nil
+	}
+	return []byte(content[idx+2:])
 }
 
 func isTextAttachment(mime string, data []byte) bool {
