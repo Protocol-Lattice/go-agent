@@ -1,6 +1,6 @@
 
 <p align="center">
-<img width="512" height="512" alt="lattice-agent-logo-with-text-transparent" src="https://github.com/user-attachments/assets/996e115e-277e-428b-9a0a-097571ddd36d" />
+<img width="128" height="128" alt="svgviewer-png-output" src="https://github.com/user-attachments/assets/0c2baa9e-0bcf-4387-b2cf-43bca3e27b45" />
 </p>
 
 
