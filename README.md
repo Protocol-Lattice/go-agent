@@ -1,7 +1,10 @@
-<img width="1024" height="1024" alt="ChatGPT Image 25 paź 2025 o 11_47_33" src="https://github.com/user-attachments/assets/6da26d46-a389-4199-9a02-eb98b6d5b038" />
+
+<p align="center">
+<img width="512" height="512" alt="lattice-agent-logo-with-text-transparent" src="https://github.com/user-attachments/assets/996e115e-277e-428b-9a0a-097571ddd36d" />
+</p>
 
 
-# Lattice
+
 
 > A batteries-included Agent Development Kit for Go
 
