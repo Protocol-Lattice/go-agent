@@ -190,6 +190,31 @@ func main() {
     </div>
   </section>
 
+  <!-- Why -->
+  <section id="why" class="mx-auto max-w-5xl px-4 sm:px-6 py-16">
+    <div class="text-center max-w-2xl mx-auto">
+      <h2 class="text-3xl font-extrabold tracking-tight" data-i18n="why.title">Dlaczego Lattice-Agent?</h2>
+      <p class="mt-3 text-zinc-600 dark:text-zinc-300" data-i18n="why.lead">
+        AI w produkcji potrzebuje szybkości, niezawodności i prostoty. Lattice-Agent pozwala zespołom budować agentów w Go — z pamięcią grafową, multi-wektorową i współdzieloną przestrzenią swarm. Bez zbędnego bloatu.
+      </p>
+    </div>
+    <div class="mt-8 grid md:grid-cols-3 gap-6">
+      <div class="border border-zinc-200 dark:border-zinc-800 rounded-2xl p-5 shadow-sm">
+        <h3 class="font-semibold mb-2" data-i18n="why.item1.title">Wydajność</h3>
+        <p class="text-sm text-zinc-600 dark:text-zinc-300" data-i18n="why.item1.desc">Go zapewnia natywną współbieżność i niskie zużycie zasobów — idealne dla agentów w realnych systemach.</p>
+      </div>
+      <div class="border border-zinc-200 dark:border-zinc-800 rounded-2xl p-5 shadow-sm">
+        <h3 class="font-semibold mb-2" data-i18n="why.item2.title">Skalowalność</h3>
+        <p class="text-sm text-zinc-600 dark:text-zinc-300" data-i18n="why.item2.desc">Wbudowana obsługa swarm pozwala agentom współpracować i dzielić pamięć w czasie rzeczywistym.</p>
+      </div>
+      <div class="border border-zinc-200 dark:border-zinc-800 rounded-2xl p-5 shadow-sm">
+        <h3 class="font-semibold mb-2" data-i18n="why.item3.title">Prostota</h3>
+        <p class="text-sm text-zinc-600 dark:text-zinc-300" data-i18n="why.item3.desc">Czyste API, minimalne zależności i jeden interfejs dla wszystkich dostawców LLM i narzędzi.</p>
+      </div>
+    </div>
+  </section>
+
+
   <!-- FAQ -->
   <section id="faq" class="mx-auto max-w-5xl px-4 sm:px-6 pb-20">
     <div class="text-center max-w-2xl mx-auto">
@@ -298,7 +323,16 @@ func main() {
         "faq.a4": "Małe PR-y, testy i dokumentacja. Standard library first, czysty kod, minimalne zależności.",
         "footer.brand": "Lattice-Agent • Apache-2.0",
         "footer.meta": "Go • UTCP • RAG",
-        "btn.copy": "Kopiuj"
+        "btn.copy": "Kopiuj",
+        "why.title": "Dlaczego Lattice-Agent?",
+"why.lead": "AI w produkcji potrzebuje szybkości, niezawodności i prostoty. Lattice-Agent pozwala zespołom budować agentów w Go — z pamięcią grafową, multi-wektorową i współdzieloną przestrzenią swarm. Bez zbędnego bloatu.",
+"why.item1.title": "Wydajność",
+"why.item1.desc": "Go zapewnia natywną współbieżność i niskie zużycie zasobów — idealne dla agentów w realnych systemach.",
+"why.item2.title": "Skalowalność",
+"why.item2.desc": "Wbudowana obsługa swarm pozwala agentom współpracować i dzielić pamięć w czasie rzeczywistym.",
+"why.item3.title": "Prostota",
+"why.item3.desc": "Czyste API, minimalne zależności i jeden interfejs dla wszystkich dostawców LLM i narzędzi.",
+
       },
       en: {
         brand: "Lattice-Agent",
@@ -343,7 +377,15 @@ func main() {
         "faq.a4": "Small PRs, tests, and docs. Standard library first, clean code, minimal dependencies.",
         "footer.brand": "Lattice-Agent • Apache-2.0",
         "footer.meta": "Go • UTCP • RAG",
-        "btn.copy": "Copy"
+        "btn.copy": "Copy",
+        "why.title": "Why Lattice-Agent?",
+"why.lead": "Production AI needs speed, reliability, and simplicity. Lattice-Agent lets teams build agents in Go — with graph, multi-vector, and shared swarm memory. No bloat.",
+"why.item1.title": "Performance",
+"why.item1.desc": "Go brings native concurrency and low resource usage — perfect for real-world agent systems.",
+"why.item2.title": "Scalability",
+"why.item2.desc": "Built-in swarm support lets agents collaborate and share memory in real time.",
+"why.item3.title": "Simplicity",
+"why.item3.desc": "A clean API, minimal dependencies, and one interface for all LLM providers and tools.",
       }
     };
 
