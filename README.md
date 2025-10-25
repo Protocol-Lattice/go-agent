@@ -225,18 +225,7 @@ Register tools with the module system and they're automatically available to all
 
 ### Multi-Agent Coordination
 
-Use **Shared Spaces** to coordinate multiple agents with shared memory:
-
-```go
-// Agents alpha, beta, and researcher share the "team:core" space
-swarm := swarm.New(
-    swarm.WithSpace("team:core"),
-    swarm.WithAgents(alpha, beta, researcher),
-)
-
-// All agents can read/write shared context
-response, err := swarm.Coordinate(ctx, "Analyze market trends")
-```
+Use **Shared Spaces** to coordinate multiple agents with shared memory
 
 Perfect for:
 - Team-based workflows where agents need shared context
