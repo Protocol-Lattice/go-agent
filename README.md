@@ -177,7 +177,7 @@ Features:
 - **Importance Scoring** – Automatically weights memories by relevance
 - **MMR Retrieval** – Maximal Marginal Relevance for diverse results
 - **Auto-Pruning** – Removes stale or low-value memories
-- **Multiple Backends** – In-memory, PostgreSQL+pgvector,mongodb or Qdrant
+- **Multiple Backends** – In-memory, PostgreSQL+pgvector,mongodb, neo4j or Qdrant
 
 ### Tool System
 
