@@ -36,6 +36,7 @@ type (
 	InMemoryStore           = storepkg.InMemoryStore
 	PostgresStore           = storepkg.PostgresStore
 	QdrantStore             = storepkg.QdrantStore
+	Neo4jStore              = storepkg.Neo4jStore
 	Distance                = storepkg.Distance
 	CreateCollectionRequest = storepkg.CreateCollectionRequest
 
@@ -75,4 +76,5 @@ var (
 	NewInMemoryStore = storepkg.NewInMemoryStore
 	NewPostgresStore = storepkg.NewPostgresStore
 	NewQdrantStore   = storepkg.NewQdrantStore
+	NewNeo4jStore    = storepkg.NewNeo4jStore
 )
