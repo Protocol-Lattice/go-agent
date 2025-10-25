@@ -1,22 +1,26 @@
 <!doctype html>
-<html lang="en">
+<html lang="pl" class="scroll-smooth">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Lattice‑Agent — Go Agents with Graph + Multi‑Vector Memory</title>
-  <meta name="description" content="Lattice‑Agent is a batteries‑included Go framework for intelligent agents: clean LLM adapters, UTCP‑native tools, RAG memory, and multi‑agent orchestration." />
+  <title>Lattice-Agent — Go Agents with Graph + Multi-Vector Memory</title>
+  <meta name="description" content="Lattice-Agent to framework w Go do budowy agentów: czyste adaptery LLM, narzędzia UTCP, pamięć RAG i orkiestracja multi-agentowa." />
+  <meta name="theme-color" content="#0a0a0a" media="(prefers-color-scheme: dark)">
+  <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
   <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = { theme: { extend: {} }, darkMode: ['class', '[data-theme="dark"]'] }
+  </script>
   <style>
-    /* minimal code highlighting feel */
-    pre code { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; }
+    pre code{font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;}
+    .fade-in{ animation: fade .5s ease-out both } @keyframes fade{from{opacity:0; transform:translateY(4px)}to{opacity:1; transform:none}}
   </style>
 </head>
-<body class="min-h-screen bg-white text-zinc-900">
+<body class="min-h-screen bg-white text-zinc-900 dark:bg-zinc-950 dark:text-zinc-100">
   <!-- Navbar -->
-  <header class="sticky top-0 z-40 backdrop-blur bg-white/70 border-b border-zinc-200">
-    <div class="mx-auto max-w-7xl px-6 py-3 flex items-center justify-between">
+  <header class="sticky top-0 z-40 backdrop-blur bg-white/70 dark:bg-zinc-950/70 border-b border-zinc-200 dark:border-zinc-800">
+    <div class="mx-auto max-w-7xl px-4 sm:px-6 py-3 flex items-center justify-between">
       <div class="flex items-center gap-3">
-        <!-- Inline SVG Logo -->
         <svg class="w-7 h-7" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" aria-label="Lattice-Agent logo">
           <g fill="none" stroke="currentColor" stroke-width="2">
             <circle cx="10" cy="10" r="4" />
@@ -31,46 +35,52 @@
             <path d="M10 10L32 32L54 10M10 32L32 10L54 32M10 54L32 32L54 54" />
           </g>
         </svg>
-        <span class="font-semibold tracking-tight">Lattice‑Agent</span>
+        <span class="font-semibold tracking-tight" data-i18n="brand">Lattice-Agent</span>
       </div>
+      <nav class="hidden md:flex items-center gap-6 text-sm">
+        <a class="hover:opacity-80" href="#features" data-i18n="nav.features">Funkcje</a>
+        <a class="hover:opacity-80" href="#quickstart" data-i18n="nav.quickstart">QuickStart</a>
+        <a class="hover:opacity-80" href="#agent" data-i18n="nav.agent">Agent</a>
+        <a class="hover:opacity-80" href="#faq" data-i18n="nav.faq">FAQ</a>
+      </nav>
       <div class="flex items-center gap-2">
-        <a class="inline-flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-zinc-100" href="https://github.com/Raezil/lattice-agent" target="_blank" rel="noreferrer">
-          <span class="i">GitHub</span>
-        </a>
-        <a class="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-zinc-900 text-white hover:opacity-90" href="#quickstart">
-          Get Started
-          <span aria-hidden>→</span>
-        </a>
+        <button id="themeToggle" class="inline-flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-900" aria-label="Toggle theme">
+          <span id="themeIcon" aria-hidden>🌙</span><span class="hidden sm:inline" data-i18n="nav.theme">Motyw</span>
+        </button>
+        <button id="langToggle" class="inline-flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-900" aria-label="Switch language">
+          <span class="hidden sm:inline" id="langLabel">PL</span> 🌐
+        </button>
+        <a class="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-zinc-900 text-white hover:opacity-90 dark:bg-white dark:text-zinc-900" href="https://github.com/Raezil/lattice-agent" target="_blank" rel="noreferrer" data-i18n="nav.github">GitHub</a>
       </div>
     </div>
   </header>
 
   <!-- Hero -->
-  <section class="mx-auto max-w-7xl px-6 py-20">
+  <section class="mx-auto max-w-7xl px-4 sm:px-6 py-16 sm:py-20">
     <div class="grid md:grid-cols-2 gap-10 items-center">
-      <div>
+      <div class="fade-in">
         <h1 class="text-4xl md:text-6xl font-black tracking-tight">
-          Build Go Agents with
-          <span class="block bg-gradient-to-r from-blue-500 via-indigo-500 to-fuchsia-500 bg-clip-text text-transparent">Graph + Multi‑Vector Memory</span>
+          <span data-i18n="hero.h1a">Buduj agentów w Go z</span>
+          <span class="block bg-gradient-to-r from-blue-500 via-indigo-500 to-fuchsia-500 bg-clip-text text-transparent" data-i18n="hero.h1b">pamięcią grafową i multi-wektorową</span>
         </h1>
-        <p class="mt-6 text-lg text-zinc-600 max-w-prose">
-          Lattice‑Agent is a batteries‑included framework for intelligent systems in Go: clean LLM adapters, UTCP‑native tool calling, retrieval‑augmented memory, and multi‑agent orchestration.
+        <p class="mt-6 text-lg text-zinc-600 dark:text-zinc-300 max-w-prose" data-i18n="hero.lead">
+          Czyste adaptery LLM, natywne narzędzia UTCP, pamięć RAG i orkiestracja multi-agentowa. Skup się na logice domenowej, a my ogarniemy „plumbing”.
         </p>
-        <div class="mt-8 flex flex-wrap items-center gap-3">
-          <a class="px-4 py-2 rounded-lg bg-zinc-900 text-white hover:opacity-90" href="#quickstart">Quickstart</a>
-          <a class="px-4 py-2 rounded-lg border border-zinc-300 hover:bg-zinc-50" href="https://github.com/Raezil/lattice-agent" target="_blank" rel="noreferrer">Star on GitHub</a>
+        <div class="mt-8 flex flex-wrap items-center justify-center md:justify-start gap-3">
+          <a class="px-4 py-2 rounded-lg bg-zinc-900 text-white hover:opacity-90 dark:bg-white dark:text-zinc-900" href="#quickstart" data-i18n="hero.cta1">QuickStart</a>
+          <a class="px-4 py-2 rounded-lg border border-zinc-300 hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-900" href="#faq" data-i18n="hero.cta2">FAQ</a>
         </div>
-        <div class="mt-6 text-xs text-zinc-500">Apache‑2.0 • Go 1.22+ • UTCP‑ready</div>
+        <div class="mt-6 text-xs text-zinc-500 dark:text-zinc-400" data-i18n="hero.meta">Apache-2.0 • Go 1.22+ • UTCP-ready</div>
       </div>
-      <div class="relative">
-        <div class="border border-zinc-200 shadow-xl rounded-2xl">
-          <div class="px-6 pt-5 pb-0 text-sm font-semibold">demo: shared memory & tools</div>
+      <div class="relative fade-in">
+        <div class="border border-zinc-200 dark:border-zinc-800 shadow-xl rounded-2xl">
+          <div class="px-6 pt-5 pb-0 text-sm font-semibold" data-i18n="hero.demo">demo CLI</div>
           <div class="p-6">
             <div class="relative">
-              <pre class="rounded-2xl bg-zinc-900 text-zinc-100 p-6 overflow-x-auto text-sm shadow-xl border border-zinc-800"><code>lattice&gt; /tool echo "hello"
+<pre class="rounded-2xl bg-zinc-900 text-zinc-100 p-6 overflow-x-auto text-sm shadow-xl border border-zinc-800"><code id="demoCode">lattice&gt; /tool echo "hello"
 lattice&gt; /calc 2*(3+4)
 lattice&gt; summarize recent notes in team:core</code></pre>
-              <button class="copy-btn absolute top-3 right-3 px-3 py-1.5 text-sm rounded-lg bg-zinc-700 text-white" data-copy="lattice&gt; /tool echo &quot;hello&quot;\nlattice&gt; /calc 2*(3+4)\nlattice&gt; summarize recent notes in team:core">Copy</button>
+              <button class="copy-btn absolute top-3 right-3 px-3 py-1.5 text-sm rounded-lg bg-zinc-700 text-white" data-target="demoCode" aria-label="Copy" data-i18n="btn.copy">Kopiuj</button>
             </div>
           </div>
         </div>
@@ -79,160 +89,149 @@ lattice&gt; summarize recent notes in team:core</code></pre>
   </section>
 
   <!-- Features -->
-  <section class="mx-auto max-w-7xl px-6 py-8">
+  <section id="features" class="mx-auto max-w-7xl px-4 sm:px-6 py-8">
     <div class="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
-      <div class="border border-zinc-200 rounded-2xl p-5 shadow-sm">
-        <h3 class="font-semibold mb-2">Graph‑aware Memory</h3>
-        <p class="text-sm text-zinc-600">Store and retrieve across a lattice of nodes and edges. Neighborhood expansion + importance scores keep context focused and relevant.</p>
+      <div class="border border-zinc-200 dark:border-zinc-800 rounded-2xl p-5 shadow-sm">
+        <h3 class="font-semibold mb-2" data-i18n="feat.1.title">Pamięć grafowa</h3>
+        <p class="text-sm text-zinc-600 dark:text-zinc-300" data-i18n="feat.1.desc">Sąsiedztwo, ważność, zanikanie — kontekst trafia w sedno.</p>
       </div>
-      <div class="border border-zinc-200 rounded-2xl p-5 shadow-sm">
-        <h3 class="font-semibold mb-2">Multi‑Vector (Matrix) Embeddings</h3>
-        <p class="text-sm text-zinc-600">Attach multiple vectors per memory and fuse with RRF / weighted schemes for stronger recall under diverse queries.</p>
+      <div class="border border-zinc-200 dark:border-zinc-800 rounded-2xl p-5 shadow-sm">
+        <h3 class="font-semibold mb-2" data-i18n="feat.2.title">Multi-wektor (macierz)</h3>
+        <p class="text-sm text-zinc-600 dark:text-zinc-300" data-i18n="feat.2.desc">Wiele wektorów na rekord + fuzja RRF/weighted = lepszy recall.</p>
       </div>
-      <div class="border border-zinc-200 rounded-2xl p-5 shadow-sm">
-        <h3 class="font-semibold mb-2">UTCP‑Native Tooling</h3>
-        <p class="text-sm text-zinc-600">Portable, provider‑agnostic tool calls. Implement once, invoke anywhere—local or remote.</p>
+      <div class="border border-zinc-200 dark:border-zinc-800 rounded-2xl p-5 shadow-sm">
+        <h3 class="font-semibold mb-2" data-i18n="feat.3.title">Narzędzia UTCP</h3>
+        <p class="text-sm text-zinc-600 dark:text-zinc-300" data-i18n="feat.3.desc">Jedno API, wielu dostawców i trybów uruchomienia.</p>
       </div>
-      <div class="border border-zinc-200 rounded-2xl p-5 shadow-sm">
-        <h3 class="font-semibold mb-2">Clean LLM Adapters</h3>
-        <p class="text-sm text-zinc-600">Start with Gemini 2.5 Pro and add Anthropic or Ollama using the same interface.</p>
+      <div class="border border-zinc-200 dark:border-zinc-800 rounded-2xl p-5 shadow-sm">
+        <h3 class="font-semibold mb-2" data-i18n="feat.4.title">Czyste adaptery LLM</h3>
+        <p class="text-sm text-zinc-600 dark:text-zinc-300" data-i18n="feat.4.desc">Gemini, Anthropic, OpenAI, Ollama — jeden interfejs.</p>
       </div>
-      <div class="border border-zinc-200 rounded-2xl p-5 shadow-sm">
-        <h3 class="font-semibold mb-2">Pluggable Stores</h3>
-        <p class="text-sm text-zinc-600">In‑memory for dev; production via PostgreSQL + pgvector or Qdrant (adapters under <code>pkg/memory</code>).</p>
+      <div class="border border-zinc-200 dark:border-zinc-800 rounded-2xl p-5 shadow-sm">
+        <h3 class="font-semibold mb-2" data-i18n="feat.5.title">Wymienne magazyny</h3>
+        <p class="text-sm text-zinc-600 dark:text-zinc-300" data-i18n="feat.5.desc">In-memory na start; produkcja: PostgreSQL+pgvector lub Qdrant.</p>
       </div>
-      <div class="border border-zinc-200 rounded-2xl p-5 shadow-sm">
-        <h3 class="font-semibold mb-2">Swarm & Shared Spaces</h3>
-        <p class="text-sm text-zinc-600">Coordinate specialists that read and write to common team spaces while keeping per‑session short‑term memory.</p>
-      </div>
-      <div class="border border-zinc-200 rounded-2xl p-5 shadow-sm">
-        <h3 class="font-semibold mb-2">Pragmatic Reliability</h3>
-        <p class="text-sm text-zinc-600">MMR, deduplication, TTLs, and online‑safe migrations (<code>ALTER TABLE IF NOT EXISTS</code>) to keep systems stable.</p>
-      </div>
-      <div class="border border-zinc-200 rounded-2xl p-5 shadow-sm">
-        <h3 class="font-semibold mb-2">DX that Scales</h3>
-        <p class="text-sm text-zinc-600">Small, composable modules; sensible defaults; examples in <code>cmd/</code>; clear interfaces to test.</p>
-      </div>
-      <div class="border border-zinc-200 rounded-2xl p-5 shadow-sm">
-        <h3 class="font-semibold mb-2">Readable by Design</h3>
-        <p class="text-sm text-zinc-600">Idiomatic Go, docs in the repo, and minimal abstractions: what you see is what runs.</p>
+      <div class="border border-zinc-200 dark:border-zinc-800 rounded-2xl p-5 shadow-sm">
+        <h3 class="font-semibold mb-2" data-i18n="feat.6.title">Swarm & spaces</h3>
+        <p class="text-sm text-zinc-600 dark:text-zinc-300" data-i18n="feat.6.desc">Specjaliści współdzielący przestrzenie zespołów i sesji.</p>
       </div>
     </div>
   </section>
 
-  <!-- Quickstart -->
-  <section id="quickstart" class="mx-auto max-w-7xl px-6 py-16">
-    <div class="grid lg:grid-cols-2 gap-10 items-start">
-      <div>
-        <h2 class="text-2xl md:text-3xl font-extrabold tracking-tight">Quickstart</h2>
-        <p class="mt-3 text-zinc-600">Get up and running in minutes. Clone the repo, install deps, export your API key, and run the demo.</p>
-        <div class="mt-6 relative">
-          <pre class="rounded-2xl bg-zinc-900 text-zinc-100 p-6 overflow-x-auto text-sm shadow-xl border border-zinc-800"><code>git clone https://github.com/Raezil/lattice-agent.git
+  <!-- QuickStart -->
+  <section id="quickstart" class="mx-auto max-w-5xl px-4 sm:px-6 py-16">
+    <div class="text-center max-w-2xl mx-auto">
+      <h2 class="text-3xl font-extrabold tracking-tight" data-i18n="qs.title">QuickStart</h2>
+      <p class="mt-3 text-zinc-600 dark:text-zinc-300" data-i18n="qs.lead">Szybki start: klon, deps, klucz API, demo.</p>
+    </div>
+    <div class="mt-8 relative max-w-3xl mx-auto">
+<pre class="rounded-2xl bg-zinc-900 text-zinc-100 p-6 overflow-x-auto text-sm shadow-xl border border-zinc-800"><code id="qsCode">git clone https://github.com/Raezil/lattice-agent.git
 cd lattice-agent
 go mod download
 
-# optional persistence
+# opcjonalna trwałość
 echo "CREATE EXTENSION IF NOT EXISTS vector;" | psql postgres
 
 # env
 echo 'export GEMINI_API_KEY=YOUR_KEY' >> ~/.bashrc
 source ~/.bashrc
 
-# run a demo
+# demo
 go run ./cmd/quickstart</code></pre>
-          <button class="copy-btn absolute top-3 right-3 px-3 py-1.5 text-sm rounded-lg bg-zinc-700 text-white" data-copy="git clone https://github.com/Raezil/lattice-agent.git\ncd lattice-agent\ngo mod download\n\n# optional persistence\necho 'CREATE EXTENSION IF NOT EXISTS vector;' | psql postgres\n\n# env\necho 'export GEMINI_API_KEY=YOUR_KEY' >> ~/.bashrc\nsource ~/.bashrc\n\n# run a demo\ngo run ./cmd/quickstart">Copy</button>
-        </div>
-      </div>
-      <div>
-        <h3 class="text-xl font-bold mb-3">Hello World Agent</h3>
-        <div class="relative">
-          <pre class="rounded-2xl bg-zinc-900 text-zinc-100 p-6 overflow-x-auto text-sm shadow-xl border border-zinc-800"><code>package main
-package main
-
-import (
-	"context"
-	"flag"
-	"log"
-
-	"github.com/Raezil/lattice-agent/pkg/adk"
-	adkmodules "github.com/Raezil/lattice-agent/pkg/adk/modules"
-	"github.com/Raezil/lattice-agent/pkg/agent"
-	"github.com/Raezil/lattice-agent/pkg/subagents"
-
-	"github.com/Raezil/lattice-agent/pkg/memory"
-	"github.com/Raezil/lattice-agent/pkg/memory/engine"
-	"github.com/Raezil/lattice-agent/pkg/models"
-	"github.com/Raezil/lattice-agent/pkg/tools"
-)
-
-func main() {
-	qdrantURL := flag.String("qdrant-url", "http://localhost:6333", "Qdrant base URL")
-	qdrantCollection := flag.String("qdrant-collection", "adk_memories", "Qdrant collection name")
-	flag.Parse()
-	ctx := context.Background()
-
-	// --- Shared runtime
-	researcherModel, err := models.NewGeminiLLM(ctx, "gemini-2.5-pro", "Research summary:")
-	if err != nil {
-		log.Fatalf("create researcher model: %v", err)
-	}
-	memOpts := engine.DefaultOptions()
-
-	adkAgent, err := adk.New(ctx,
-		adk.WithDefaultSystemPrompt("You orchestrate a helpful assistant team."),
-		adk.WithSubAgents(subagents.NewResearcher(researcherModel)),
-		adk.WithModules(
-			adkmodules.NewModelModule("gemini-model", func(_ context.Context) (models.Agent, error) {
-				return models.NewGeminiLLM(ctx, "gemini-2.5-pro", "Swarm orchestration:")
-			}),
-			adkmodules.InQdrantMemory(100000, *qdrantURL, *qdrantCollection, memory.AutoEmbedder(), &memOpts),
-			adkmodules.NewToolModule("essentials", adkmodules.StaticToolProvider([]agent.Tool{&tools.EchoTool{}}, nil)),
-		),
-	)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	agent, err := adkAgent.BuildAgent(ctx)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	// Use the agent
-	resp, err := agent.Generate(ctx, "SessionID", "What is pgvector")
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	log.Println(resp)
-}
-</code></pre>
-          <button class="copy-btn absolute top-3 right-3 px-3 py-1.5 text-sm rounded-lg bg-zinc-700 text-white" data-copy="package main\nimport (\n  \"context\"\n  \"log\"\n  \"github.com/Raezil/lattice-agent/pkg/adk\"\n  \"github.com/Raezil/lattice-agent/pkg/adk/modules\"\n  \"github.com/Raezil/lattice-agent/pkg/models\"\n  \"github.com/Raezil/lattice-agent/pkg/tools\"\n)\nfunc main(){\n  ctx := context.Background()\n  kit, err := adk.New(ctx,\n    adk.WithModules(\n      modules.NewModelModule(\"coordinator\",\n        modules.StaticModelProvider(models.NewGeminiLLM(ctx, \"gemini-2.5-pro\", \"Swarm orchestration\"))),\n      modules.InMemoryMemoryModule(8),\n      modules.NewToolModule(\"default-tools\",\n        modules.StaticToolProvider([]tools.Tool{&tools.EchoTool{}, &tools.CalculatorTool{}}, nil)),\n    ),\n  )\n  if err != nil { log.Fatal(err) }\n  agent, err := kit.BuildAgent(ctx)\n  if err != nil { log.Fatal(err) }\n  resp, err := agent.Generate(ctx, \"Plan a 3-step research workflow\")\n  if err != nil { log.Fatal(err) }\n  log.Println(resp)\n}">Copy</button>
-        </div>
-      </div>
+      <button class="copy-btn absolute top-3 right-3 px-3 py-1.5 text-sm rounded-lg bg-zinc-700 text-white" data-target="qsCode" aria-label="Copy" data-i18n="btn.copy">Kopiuj</button>
     </div>
   </section>
 
-  <!-- CTA -->
-  <section class="mx-auto max-w-7xl px-6 pb-20">
-    <div class="border border-zinc-200 rounded-2xl">
-      <div class="p-8 md:p-10 flex flex-col md:flex-row items-center justify-between gap-6">
-        <div>
-          <h3 class="text-xl md:text-2xl font-bold">Ready to build your lattice?</h3>
-          <p class="text-sm text-zinc-600 mt-1">Explore the code, open issues, and ship your first agent.</p>
-        </div>
-        <div class="flex gap-3">
-          <a class="px-4 py-2 rounded-lg bg-zinc-900 text-white hover:opacity-90" href="https://github.com/Raezil/lattice-agent" target="_blank" rel="noreferrer">View on GitHub</a>
-          <a class="px-4 py-2 rounded-lg border border-zinc-300 hover:bg-zinc-50" href="#quickstart">Get Started →</a>
-        </div>
-      </div>
+  <!-- Agent (below QuickStart & centered) -->
+  <section id="agent" class="mx-auto max-w-5xl px-4 sm:px-6 py-12">
+    <div class="text-center max-w-2xl mx-auto">
+      <h3 class="text-2xl font-bold" data-i18n="agent.title">Agent</h3>
+      <p class="mt-2 text-sm text-zinc-600 dark:text-zinc-300" data-i18n="agent.lead">Minimalny przykład uruchomienia agenta i wygenerowania odpowiedzi.</p>
+    </div>
+    <div class="mt-6 relative max-w-3xl mx-auto">
+<pre class="rounded-2xl bg-zinc-900 text-zinc-100 p-6 overflow-x-auto text-sm shadow-xl border border-zinc-800"><code id="goCode">package main
+
+import (
+  "context"
+  "log"
+
+  "github.com/Raezil/lattice-agent/pkg/adk"
+  adkmodules "github.com/Raezil/lattice-agent/pkg/adk/modules"
+  "github.com/Raezil/lattice-agent/pkg/models"
+  "github.com/Raezil/lattice-agent/pkg/tools"
+)
+
+func main() {
+  ctx := context.Background()
+
+  kit, err := adk.New(ctx,
+    adk.WithModules(
+      adkmodules.NewModelModule("coordinator", func(_ context.Context) (models.Agent, error) {
+        return models.NewGeminiLLM(ctx, "gemini-2.5-pro", "Swarm orchestration:")
+      }),
+      adkmodules.InMemoryMemoryModule(64),
+      adkmodules.NewToolModule("default-tools",
+        adkmodules.StaticToolProvider([]tools.Tool{
+          &tools.EchoTool{},
+          &tools.CalculatorTool{},
+        }, nil)),
+    ),
+  )
+  if err != nil { log.Fatal(err) }
+
+  a, err := kit.BuildAgent(ctx)
+  if err != nil { log.Fatal(err) }
+
+  resp, err := a.Generate(ctx, "session-1", "Co to jest pgvector? Odpowiedz w 2 linijkach.")
+  if err != nil { log.Fatal(err) }
+  log.Println(resp)
+}</code></pre>
+      <button class="copy-btn absolute top-3 right-3 px-3 py-1.5 text-sm rounded-lg bg-zinc-700 text-white" data-target="goCode" aria-label="Copy" data-i18n="btn.copy">Kopiuj</button>
+    </div>
+  </section>
+
+  <!-- FAQ -->
+  <section id="faq" class="mx-auto max-w-5xl px-4 sm:px-6 pb-20">
+    <div class="text-center max-w-2xl mx-auto">
+      <h2 class="text-3xl font-extrabold tracking-tight" data-i18n="faq.title">FAQ</h2>
+      <p class="mt-2 text-sm text-zinc-600 dark:text-zinc-300" data-i18n="faq.lead">Najczęstsze pytania o Lattice-Agent.</p>
+    </div>
+    <div class="mt-6 grid md:grid-cols-2 gap-6">
+      <details class="group border border-zinc-200 dark:border-zinc-800 rounded-2xl p-5">
+        <summary class="cursor-pointer font-semibold list-none flex items-center justify-between">
+          <span data-i18n="faq.q1">Jak działa pamięć multi-wektorowa?</span>
+          <span aria-hidden class="transition-transform group-open:rotate-180">▾</span>
+        </summary>
+        <p class="mt-3 text-sm text-zinc-600 dark:text-zinc-300" data-i18n="faq.a1">Każdy rekord przechowuje macierz wektorów (np. tytuł, treść, encje). Wyniki łączone są przez fuzję (RRF/weighted), a sąsiedztwo grafu rozszerza kontekst.</p>
+      </details>
+      <details class="group border border-zinc-200 dark:border-zinc-800 rounded-2xl p-5">
+        <summary class="cursor-pointer font-semibold list-none flex items-center justify-between">
+          <span data-i18n="faq.q2">Jakie magazyny są wspierane?</span>
+          <span aria-hidden class="transition-transform group-open:rotate-180">▾</span>
+        </summary>
+        <p class="mt-3 text-sm text-zinc-600 dark:text-zinc-300" data-i18n="faq.a2">Dev: in-memory. Prod: PostgreSQL+pgvector lub Qdrant. Adaptery w <code>pkg/memory</code>.</p>
+      </details>
+      <details class="group border border-zinc-200 dark:border-zinc-800 rounded-2xl p-5">
+        <summary class="cursor-pointer font-semibold list-none flex items-center justify-between">
+          <span data-i18n="faq.q3">Czy muszę używać Gemini?</span>
+          <span aria-hidden class="transition-transform group-open:rotate-180">▾</span>
+        </summary>
+        <p class="mt-3 text-sm text-zinc-600 dark:text-zinc-300" data-i18n="faq.a3">Nie. Interfejs LLM jest plug-and-play (Anthropic, OpenAI, Ollama, własne modele).</p>
+      </details>
+      <details class="group border border-zinc-200 dark:border-zinc-800 rounded-2xl p-5">
+        <summary class="cursor-pointer font-semibold list-none flex items-center justify-between">
+          <span data-i18n="faq.q4">Jak kontrybuować?</span>
+          <span aria-hidden class="transition-transform group-open:rotate-180">▾</span>
+        </summary>
+        <p class="mt-3 text-sm text-zinc-600 dark:text-zinc-300" data-i18n="faq.a4">Małe PR-y, testy i dokumentacja. Standard library first, czysty kod, minimalne zależności.</p>
+      </details>
     </div>
   </section>
 
   <!-- Footer -->
-  <footer class="border-t border-zinc-200 py-10">
-    <div class="mx-auto max-w-7xl px-6 flex flex-col md:flex-row items-center justify-between gap-4">
-      <div class="flex items-center gap-3 text-sm text-zinc-500">
+  <footer class="border-t border-zinc-200 dark:border-zinc-800 py-10">
+    <div class="mx-auto max-w-7xl px-4 sm:px-6 flex flex-col md:flex-row items-center justify-between gap-4">
+      <div class="flex items-center gap-3 text-sm text-zinc-500 dark:text-zinc-400">
         <svg class="w-5 h-5" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
           <g fill="none" stroke="currentColor" stroke-width="2">
             <circle cx="10" cy="10" r="4" />
@@ -247,25 +246,281 @@ func main() {
             <path d="M10 10L32 32L54 10M10 32L32 10L54 32M10 54L32 32L54 54" />
           </g>
         </svg>
-        <span>Lattice‑Agent • Apache‑2.0</span>
+        <span data-i18n="footer.brand">Lattice-Agent • Apache-2.0</span>
       </div>
-      <div class="text-xs text-zinc-500">Built with Go • UTCP‑native • RAG‑ready</div>
+      <div class="text-xs text-zinc-500 dark:text-zinc-400">&copy; <span id="year"></span> • <span data-i18n="footer.meta">Go • UTCP • RAG</span></div>
     </div>
   </footer>
 
   <script>
+    // i18n dictionary
+    const I18N = {
+      pl: {
+        brand: "Lattice-Agent",
+        "nav.features": "Funkcje",
+        "nav.quickstart": "QuickStart",
+        "nav.agent": "Agent",
+        "nav.faq": "FAQ",
+        "nav.theme": "Motyw",
+        "nav.github": "GitHub",
+        "hero.h1a": "Buduj agentów w Go z",
+        "hero.h1b": "pamięcią grafową i multi-wektorową",
+        "hero.lead": "Czyste adaptery LLM, natywne narzędzia UTCP, pamięć RAG i orkiestracja multi-agentowa. Skup się na logice domenowej, a my ogarniemy „plumbing”.",
+        "hero.cta1": "QuickStart",
+        "hero.cta2": "FAQ",
+        "hero.meta": "Apache-2.0 • Go 1.22+ • UTCP-ready",
+        "hero.demo": "demo CLI",
+        "feat.1.title": "Pamięć grafowa",
+        "feat.1.desc": "Sąsiedztwo, ważność, zanikanie — kontekst trafia w sedno.",
+        "feat.2.title": "Multi-wektor (macierz)",
+        "feat.2.desc": "Wiele wektorów na rekord + fuzja RRF/weighted = lepszy recall.",
+        "feat.3.title": "Narzędzia UTCP",
+        "feat.3.desc": "Jedno API, wielu dostawców i trybów uruchomienia.",
+        "feat.4.title": "Czyste adaptery LLM",
+        "feat.4.desc": "Gemini, Anthropic, OpenAI, Ollama — jeden interfejs.",
+        "feat.5.title": "Wymienne magazyny",
+        "feat.5.desc": "In-memory na start; produkcja: PostgreSQL+pgvector lub Qdrant.",
+        "feat.6.title": "Swarm & spaces",
+        "feat.6.desc": "Specjaliści współdzielący przestrzenie zespołów i sesji.",
+        "qs.title": "QuickStart",
+        "qs.lead": "Szybki start: klon, deps, klucz API, demo.",
+        "agent.title": "Agent",
+        "agent.lead": "Minimalny przykład uruchomienia agenta i wygenerowania odpowiedzi.",
+        "faq.title": "FAQ",
+        "faq.lead": "Najczęstsze pytania o Lattice-Agent.",
+        "faq.q1": "Jak działa pamięć multi-wektorowa?",
+        "faq.a1": "Każdy rekord przechowuje macierz wektorów (np. tytuł, treść, encje). Wyniki łączone są przez fuzję (RRF/weighted), a sąsiedztwo grafu rozszerza kontekst.",
+        "faq.q2": "Jakie magazyny są wspierane?",
+        "faq.a2": "Dev: in-memory. Prod: PostgreSQL+pgvector lub Qdrant. Adaptery w <code>pkg/memory</code>.",
+        "faq.q3": "Czy muszę używać Gemini?",
+        "faq.a3": "Nie. Interfejs LLM jest plug-and-play (Anthropic, OpenAI, Ollama, własne modele).",
+        "faq.q4": "Jak kontrybuować?",
+        "faq.a4": "Małe PR-y, testy i dokumentacja. Standard library first, czysty kod, minimalne zależności.",
+        "footer.brand": "Lattice-Agent • Apache-2.0",
+        "footer.meta": "Go • UTCP • RAG",
+        "btn.copy": "Kopiuj"
+      },
+      en: {
+        brand: "Lattice-Agent",
+        "nav.features": "Features",
+        "nav.quickstart": "QuickStart",
+        "nav.agent": "Agent",
+        "nav.faq": "FAQ",
+        "nav.theme": "Theme",
+        "nav.github": "GitHub",
+        "hero.h1a": "Build agents in Go with",
+        "hero.h1b": "graph-aware, multi-vector memory",
+        "hero.lead": "Clean LLM adapters, UTCP-native tools, RAG memory, and multi-agent orchestration. Focus on your domain logic while we handle the plumbing.",
+        "hero.cta1": "QuickStart",
+        "hero.cta2": "FAQ",
+        "hero.meta": "Apache-2.0 • Go 1.22+ • UTCP-ready",
+        "hero.demo": "CLI demo",
+        "feat.1.title": "Graph-aware memory",
+        "feat.1.desc": "Neighborhoods, importance, decay — context that stays on target.",
+        "feat.2.title": "Multi-vector (matrix)",
+        "feat.2.desc": "Multiple vectors per record + RRF/weighted fusion for stronger recall.",
+        "feat.3.title": "UTCP tools",
+        "feat.3.desc": "One API, many providers and deployment modes.",
+        "feat.4.title": "Clean LLM adapters",
+        "feat.4.desc": "Gemini, Anthropic, OpenAI, Ollama — one interface.",
+        "feat.5.title": "Pluggable stores",
+        "feat.5.desc": "Start in-memory; production with PostgreSQL+pgvector or Qdrant.",
+        "feat.6.title": "Swarm & spaces",
+        "feat.6.desc": "Specialists collaborating in shared team/session spaces.",
+        "qs.title": "QuickStart",
+        "qs.lead": "Clone the repo, install deps, set your API key, run the demo.",
+        "agent.title": "Agent",
+        "agent.lead": "A minimal example that builds an agent and generates a response.",
+        "faq.title": "FAQ",
+        "faq.lead": "Common questions about Lattice-Agent.",
+        "faq.q1": "How does multi-vector memory work?",
+        "faq.a1": "Each record stores a matrix of vectors (e.g., title, body, entities). Results are fused (RRF/weighted), and graph neighborhoods expand context.",
+        "faq.q2": "What stores are supported?",
+        "faq.a2": "Dev: in-memory. Prod: PostgreSQL+pgvector or Qdrant. Adapters live under <code>pkg/memory</code>.",
+        "faq.q3": "Do I have to use Gemini?",
+        "faq.a3": "No. The LLM interface is plug-and-play (Anthropic, OpenAI, Ollama, custom models).",
+        "faq.q4": "How can I contribute?",
+        "faq.a4": "Small PRs, tests, and docs. Standard library first, clean code, minimal dependencies.",
+        "footer.brand": "Lattice-Agent • Apache-2.0",
+        "footer.meta": "Go • UTCP • RAG",
+        "btn.copy": "Copy"
+      }
+    };
+
+    // Apply translations to any element with [data-i18n]
+    function applyI18n(lang) {
+      const dict = I18N[lang] || I18N.pl;
+      document.documentElement.lang = lang;
+      for (const el of document.querySelectorAll('[data-i18n]')) {
+        const key = el.getAttribute('data-i18n');
+        if (!key) continue;
+        const val = dict[key];
+        if (val !== undefined) {
+          // Allow simple inline HTML (e.g., code tags in FAQ answers)
+          if (val.includes('<code>')) el.innerHTML = val;
+          else el.textContent = val;
+        }
+      }
+      // Update code blocks that differ by language (QuickStart comments + Agent prompt sentence)
+      const qs = document.getElementById('qsCode');
+      const go = document.getElementById('goCode');
+      if (qs) {
+        qs.textContent = lang === 'en'
+          ? `git clone https://github.com/Raezil/lattice-agent.git
+cd lattice-agent
+go mod download
+
+# optional persistence
+echo "CREATE EXTENSION IF NOT EXISTS vector;" | psql postgres
+
+# env
+echo 'export GEMINI_API_KEY=YOUR_KEY' >> ~/.bashrc
+source ~/.bashrc
+
+# demo
+go run ./cmd/quickstart`
+          : `git clone https://github.com/Raezil/lattice-agent.git
+cd lattice-agent
+go mod download
+
+# opcjonalna trwałość
+echo "CREATE EXTENSION IF NOT EXISTS vector;" | psql postgres
+
+# env
+echo 'export GEMINI_API_KEY=YOUR_KEY' >> ~/.bashrc
+source ~/.bashrc
+
+# demo
+go run ./cmd/quickstart`;
+      }
+      if (go) {
+        go.textContent = lang === 'en'
+          ? `package main
+
+import (
+  "context"
+  "log"
+
+  "github.com/Raezil/lattice-agent/pkg/adk"
+  adkmodules "github.com/Raezil/lattice-agent/pkg/adk/modules"
+  "github.com/Raezil/lattice-agent/pkg/models"
+  "github.com/Raezil/lattice-agent/pkg/tools"
+)
+
+func main() {
+  ctx := context.Background()
+
+  kit, err := adk.New(ctx,
+    adk.WithModules(
+      adkmodules.NewModelModule("coordinator", func(_ context.Context) (models.Agent, error) {
+        return models.NewGeminiLLM(ctx, "gemini-2.5-pro", "Swarm orchestration:")
+      }),
+      adkmodules.InMemoryMemoryModule(64),
+      adkmodules.NewToolModule("default-tools",
+        adkmodules.StaticToolProvider([]tools.Tool{
+          &tools.EchoTool{},
+          &tools.CalculatorTool{},
+        }, nil)),
+    ),
+  )
+  if err != nil { log.Fatal(err) }
+
+  a, err := kit.BuildAgent(ctx)
+  if err != nil { log.Fatal(err) }
+
+  resp, err := a.Generate(ctx, "session-1", "What is pgvector? Answer in 2 lines.")
+  if err != nil { log.Fatal(err) }
+  log.Println(resp)
+}`
+          : `package main
+
+import (
+  "context"
+  "log"
+
+  "github.com/Raezil/lattice-agent/pkg/adk"
+  adkmodules "github.com/Raezil/lattice-agent/pkg/adk/modules"
+  "github.com/Raezil/lattice-agent/pkg/models"
+  "github.com/Raezil/lattice-agent/pkg/tools"
+)
+
+func main() {
+  ctx := context.Background()
+
+  kit, err := adk.New(ctx,
+    adk.WithModules(
+      adkmodules.NewModelModule("coordinator", func(_ context.Context) (models.Agent, error) {
+        return models.NewGeminiLLM(ctx, "gemini-2.5-pro", "Swarm orchestration:")
+      }),
+      adkmodules.InMemoryMemoryModule(64),
+      adkmodules.NewToolModule("default-tools",
+        adkmodules.StaticToolProvider([]tools.Tool{
+          &tools.EchoTool{},
+          &tools.CalculatorTool{},
+        }, nil)),
+    ),
+  )
+  if err != nil { log.Fatal(err) }
+
+  a, err := kit.BuildAgent(ctx)
+  if err != nil { log.Fatal(err) }
+
+  resp, err := a.Generate(ctx, "session-1", "Co to jest pgvector? Odpowiedz w 2 linijkach.")
+  if err != nil { log.Fatal(err) }
+  log.Println(resp)
+}`;
+      }
+
+      // Update copy buttons text
+      for (const el of document.querySelectorAll('.copy-btn')) {
+        el.textContent = dict["btn.copy"];
+      }
+
+      // Update language toggle label
+      const lbl = document.getElementById('langLabel');
+      if (lbl) lbl.textContent = lang.toUpperCase();
+    }
+
+    // Year
+    document.getElementById('year').textContent = new Date().getFullYear();
+
+    // Theme toggle
+    const root = document.documentElement;
+    const themeBtn = document.getElementById('themeToggle');
+    const themeIcon = document.getElementById('themeIcon');
+    const themeStored = localStorage.getItem('lattice-theme');
+    if (themeStored === 'dark' || (!themeStored && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+      root.classList.add('dark'); root.setAttribute('data-theme','dark'); themeIcon.textContent = '☀️';
+    }
+    themeBtn.addEventListener('click', () => {
+      const isDark = root.classList.toggle('dark');
+      root.setAttribute('data-theme', isDark ? 'dark' : 'light');
+      localStorage.setItem('lattice-theme', isDark ? 'dark' : 'light');
+      themeIcon.textContent = isDark ? '☀️' : '🌙';
+    });
+
+    // Language toggle (persist)
+    const langBtn = document.getElementById('langToggle');
+    const savedLang = localStorage.getItem('lattice-lang') || 'pl';
+    applyI18n(savedLang);
+    langBtn.addEventListener('click', () => {
+      const current = document.documentElement.lang || 'pl';
+      const next = current === 'pl' ? 'en' : 'pl';
+      localStorage.setItem('lattice-lang', next);
+      applyI18n(next);
+    });
+
     // Copy buttons
-    document.addEventListener('click', function(e){
-      const btn = e.target.closest('.copy-btn');
-      if(!btn) return;
-      const text = btn.getAttribute('data-copy') || '';
-      navigator.clipboard.writeText(text).then(() => {
-        const original = btn.textContent;
-        btn.textContent = 'Copied!';
-        setTimeout(() => btn.textContent = original, 1500);
-      }).catch(() => {
-        btn.textContent = 'Failed';
-        setTimeout(() => btn.textContent = 'Copy', 1500);
+    document.addEventListener('click', (e) => {
+      const c = e.target.closest('.copy-btn'); if(!c) return;
+      const id = c.getAttribute('data-target'); const el = id && document.getElementById(id);
+      const txt = el ? el.textContent : '';
+      navigator.clipboard.writeText(txt).then(()=>{
+        const t = c.textContent; c.textContent = (document.documentElement.lang === 'en' ? 'Copied!' : 'Skopiowano!');
+        setTimeout(()=> c.textContent = t, 1200);
+      }).catch(()=>{
+        c.textContent = (document.documentElement.lang === 'en' ? 'Error' : 'Błąd');
+        setTimeout(()=> applyI18n(document.documentElement.lang || 'pl'), 1200);
       });
     });
   </script>
