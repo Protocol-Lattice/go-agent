@@ -4,9 +4,10 @@ go 1.25.0
 
 require (
 	github.com/anthropics/anthropic-sdk-go v1.13.0
+	github.com/anush008/fastembed-go v1.0.0
 	github.com/google/generative-ai-go v0.20.1
 	github.com/jackc/pgx/v5 v5.7.6
-	github.com/ledongthuc/pdf v0.0.0-20250511090121-5959a4027728
+	github.com/neo4j/neo4j-go-driver/v5 v5.28.4
 	github.com/ollama/ollama v0.12.5
 	github.com/sashabaranov/go-openai v1.41.2
 	github.com/universal-tool-calling-protocol/go-utcp v1.7.1
@@ -21,7 +22,6 @@ require (
 	cloud.google.com/go/auth/oauth2adapt v0.2.8 // indirect
 	cloud.google.com/go/compute/metadata v0.9.0 // indirect
 	cloud.google.com/go/longrunning v0.5.7 // indirect
-	github.com/anush008/fastembed-go v1.0.0 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/emirpasic/gods v1.18.1 // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect
