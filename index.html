@@ -3,133 +3,271 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>lattice-agent: Build real AI agents in Go</title>
-  <meta name="description" content="lattice-agent – Agent Development Kit for Go with Hybrid RAG + Graph memory, Cognitive Swarm, UTCP tools, and pluggable LLMs." />
-  <!-- TailwindCSS CDN -->
+  <title>Lattice‑Agent — Go Agents with Graph + Multi‑Vector Memory</title>
+  <meta name="description" content="Lattice‑Agent is a batteries‑included Go framework for intelligent agents: clean LLM adapters, UTCP‑native tools, RAG memory, and multi‑agent orchestration." />
   <script src="https://cdn.tailwindcss.com"></script>
-  <!-- Lucide icons -->
-  <script src="https://unpkg.com/lucide@latest"></script>
   <style>
-    .code { background: rgba(0,0,0,.9); color: #fff; border-radius: .75rem; padding: .75rem; overflow: auto; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; font-size: .875rem; }
-    .btn { display:inline-flex; align-items:center; gap:.5rem; border-radius:1rem; padding:.5rem .9rem; border:1px solid rgb(226,232,240); }
-    .btn:hover{ box-shadow: 0 4px 18px rgba(2,6,23,.08); }
-    .chip { display:inline-block; background:#F1F5F9; color:#0F172A; padding:.25rem .6rem; border-radius:999px; font-size:.75rem; }
+    /* minimal code highlighting feel */
+    pre code { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; }
   </style>
 </head>
-<body class="min-h-screen bg-gradient-to-b from-slate-50 to-white text-slate-900">
+<body class="min-h-screen bg-white text-zinc-900">
+  <!-- Navbar -->
+  <header class="sticky top-0 z-40 backdrop-blur bg-white/70 border-b border-zinc-200">
+    <div class="mx-auto max-w-7xl px-6 py-3 flex items-center justify-between">
+      <div class="flex items-center gap-3">
+        <!-- Inline SVG Logo -->
+        <svg class="w-7 h-7" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" aria-label="Lattice-Agent logo">
+          <g fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="10" cy="10" r="4" />
+            <circle cx="32" cy="10" r="4" />
+            <circle cx="54" cy="10" r="4" />
+            <circle cx="10" cy="32" r="4" />
+            <circle cx="32" cy="32" r="4" />
+            <circle cx="54" cy="32" r="4" />
+            <circle cx="10" cy="54" r="4" />
+            <circle cx="32" cy="54" r="4" />
+            <circle cx="54" cy="54" r="4" />
+            <path d="M10 10L32 32L54 10M10 32L32 10L54 32M10 54L32 32L54 54" />
+          </g>
+        </svg>
+        <span class="font-semibold tracking-tight">Lattice‑Agent</span>
+      </div>
+      <div class="flex items-center gap-2">
+        <a class="inline-flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-zinc-100" href="https://github.com/Raezil/lattice-agent" target="_blank" rel="noreferrer">
+          <span class="i">GitHub</span>
+        </a>
+        <a class="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-zinc-900 text-white hover:opacity-90" href="#quickstart">
+          Get Started
+          <span aria-hidden>→</span>
+        </a>
+      </div>
+    </div>
+  </header>
+
   <!-- Hero -->
-  <section class="container mx-auto px-6 py-16">
-    <div class="flex flex-col gap-6 items-start">
-      <span class="chip">Open‑Source • Go</span>
-      <h1 class="text-4xl md:text-6xl font-extrabold tracking-tight">Lattice-Agent: Build real AI agents in Go</h1>
-      <p class="text-lg md:text-xl text-slate-600 max-w-3xl">An open‑source Agent Development Kit with Hybrid RAG + Graph memory, Cognitive Swarm, UTCP tools, and pluggable LLMs. Ship intelligent systems with clarity and control.</p>
-      <div class="flex flex-wrap gap-3">
-        <a class="btn" href="https://github.com/Raezil/lattice-agent" target="_blank" rel="noreferrer"><i data-lucide="git-fork" class="w-4 h-4"></i> View on GitHub</a>
-        <a class="btn" href="https://github.com/Raezil/lattice-agent#readme" target="_blank" rel="noreferrer"><i data-lucide="code" class="w-4 h-4"></i> Read the README</a>
-        <a class="btn" href="https://github.com/Raezil/lattice-agent/tree/main/cmd" target="_blank" rel="noreferrer"><i data-lucide="rocket" class="w-4 h-4"></i> Try the Demos</a>
+  <section class="mx-auto max-w-7xl px-6 py-20">
+    <div class="grid md:grid-cols-2 gap-10 items-center">
+      <div>
+        <h1 class="text-4xl md:text-6xl font-black tracking-tight">
+          Build Go Agents with
+          <span class="block bg-gradient-to-r from-blue-500 via-indigo-500 to-fuchsia-500 bg-clip-text text-transparent">Graph + Multi‑Vector Memory</span>
+        </h1>
+        <p class="mt-6 text-lg text-zinc-600 max-w-prose">
+          Lattice‑Agent is a batteries‑included framework for intelligent systems in Go: clean LLM adapters, UTCP‑native tool calling, retrieval‑augmented memory, and multi‑agent orchestration.
+        </p>
+        <div class="mt-8 flex flex-wrap items-center gap-3">
+          <a class="px-4 py-2 rounded-lg bg-zinc-900 text-white hover:opacity-90" href="#quickstart">Quickstart</a>
+          <a class="px-4 py-2 rounded-lg border border-zinc-300 hover:bg-zinc-50" href="https://github.com/Raezil/lattice-agent" target="_blank" rel="noreferrer">Star on GitHub</a>
+        </div>
+        <div class="mt-6 text-xs text-zinc-500">Apache‑2.0 • Go 1.22+ • UTCP‑ready</div>
+      </div>
+      <div class="relative">
+        <div class="border border-zinc-200 shadow-xl rounded-2xl">
+          <div class="px-6 pt-5 pb-0 text-sm font-semibold">demo: shared memory & tools</div>
+          <div class="p-6">
+            <div class="relative">
+              <pre class="rounded-2xl bg-zinc-900 text-zinc-100 p-6 overflow-x-auto text-sm shadow-xl border border-zinc-800"><code>lattice&gt; /tool echo "hello"
+lattice&gt; /calc 2*(3+4)
+lattice&gt; summarize recent notes in team:core</code></pre>
+              <button class="copy-btn absolute top-3 right-3 px-3 py-1.5 text-sm rounded-lg bg-zinc-700 text-white" data-copy="lattice&gt; /tool echo &quot;hello&quot;\nlattice&gt; /calc 2*(3+4)\nlattice&gt; summarize recent notes in team:core">Copy</button>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   </section>
 
-  <!-- Feature Grid -->
-  <section class="container mx-auto px-6 pb-8">
-    <div class="grid gap-5 md:grid-cols-2 lg:grid-cols-3">
-      <div class="rounded-2xl border border-slate-200 p-5 hover:shadow-md">
-        <span class="chip">Memory Engine</span>
-        <h3 class="mt-2 text-xl font-semibold flex items-center gap-2"><i data-lucide="brain" class="w-5 h-5"></i> Hybrid RAG + Graph Memory</h3>
-        <p class="text-slate-600 mt-1">Structured graph edges + vector search (pgvector / Qdrant / MongoDB) for fast, contextual recall.</p>
+  <!-- Features -->
+  <section class="mx-auto max-w-7xl px-6 py-8">
+    <div class="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
+      <div class="border border-zinc-200 rounded-2xl p-5 shadow-sm">
+        <h3 class="font-semibold mb-2">Graph‑aware Memory</h3>
+        <p class="text-sm text-zinc-600">Store and retrieve across a lattice of nodes and edges. Neighborhood expansion + importance scores keep context focused and relevant.</p>
       </div>
-      <div class="rounded-2xl border border-slate-200 p-5 hover:shadow-md">
-        <span class="chip">Multi‑Agent</span>
-        <h3 class="mt-2 text-xl font-semibold flex items-center gap-2"><i data-lucide="share-2" class="w-5 h-5"></i> Cognitive Swarm</h3>
-        <p class="text-slate-600 mt-1">Coordinate specialized sub‑agents inside shared sessions with role-aware prompts.</p>
+      <div class="border border-zinc-200 rounded-2xl p-5 shadow-sm">
+        <h3 class="font-semibold mb-2">Multi‑Vector (Matrix) Embeddings</h3>
+        <p class="text-sm text-zinc-600">Attach multiple vectors per memory and fuse with RRF / weighted schemes for stronger recall under diverse queries.</p>
       </div>
-      <div class="rounded-2xl border border-slate-200 p-5 hover:shadow-md">
-        <span class="chip">Interop</span>
-        <h3 class="mt-2 text-xl font-semibold flex items-center gap-2"><i data-lucide="network" class="w-5 h-5"></i> UTCP Tooling</h3>
-        <p class="text-slate-600 mt-1">Portable tools over the Universal Tool Calling Protocol. Less glue code, more reuse.</p>
+      <div class="border border-zinc-200 rounded-2xl p-5 shadow-sm">
+        <h3 class="font-semibold mb-2">UTCP‑Native Tooling</h3>
+        <p class="text-sm text-zinc-600">Portable, provider‑agnostic tool calls. Implement once, invoke anywhere—local or remote.</p>
       </div>
-      <div class="rounded-2xl border border-slate-200 p-5 hover:shadow-md">
-        <span class="chip">Models</span>
-        <h3 class="mt-2 text-xl font-semibold flex items-center gap-2"><i data-lucide="cpu" class="w-5 h-5"></i> Pluggable LLMs</h3>
-        <p class="text-slate-600 mt-1">OpenAI, Anthropic, Gemini, Ollama, and custom providers with a clean adapter API.</p>
+      <div class="border border-zinc-200 rounded-2xl p-5 shadow-sm">
+        <h3 class="font-semibold mb-2">Clean LLM Adapters</h3>
+        <p class="text-sm text-zinc-600">Start with Gemini 2.5 Pro and add Anthropic or Ollama using the same interface.</p>
       </div>
-      <div class="rounded-2xl border border-slate-200 p-5 hover:shadow-md">
-        <span class="chip">Ingestion</span>
-        <h3 class="mt-2 text-xl font-semibold flex items-center gap-2"><i data-lucide="upload-cloud" class="w-5 h-5"></i> File Upload → RAG</h3>
-        <p class="text-slate-600 mt-1">Extract, chunk, embed, and upsert documents. Query with context-aware prompts.</p>
+      <div class="border border-zinc-200 rounded-2xl p-5 shadow-sm">
+        <h3 class="font-semibold mb-2">Pluggable Stores</h3>
+        <p class="text-sm text-zinc-600">In‑memory for dev; production via PostgreSQL + pgvector or Qdrant (adapters under <code>pkg/memory</code>).</p>
       </div>
-      <div class="rounded-2xl border border-slate-200 p-5 hover:shadow-md">
-        <span class="chip">Persistence</span>
-        <h3 class="mt-2 text-xl font-semibold flex items-center gap-2"><i data-lucide="database" class="w-5 h-5"></i> Stores You Know</h3>
-        <p class="text-slate-600 mt-1">Postgres/pgvector, Qdrant, and MongoDB vector stores, ready for production.</p>
+      <div class="border border-zinc-200 rounded-2xl p-5 shadow-sm">
+        <h3 class="font-semibold mb-2">Swarm & Shared Spaces</h3>
+        <p class="text-sm text-zinc-600">Coordinate specialists that read and write to common team spaces while keeping per‑session short‑term memory.</p>
+      </div>
+      <div class="border border-zinc-200 rounded-2xl p-5 shadow-sm">
+        <h3 class="font-semibold mb-2">Pragmatic Reliability</h3>
+        <p class="text-sm text-zinc-600">MMR, deduplication, TTLs, and online‑safe migrations (<code>ALTER TABLE IF NOT EXISTS</code>) to keep systems stable.</p>
+      </div>
+      <div class="border border-zinc-200 rounded-2xl p-5 shadow-sm">
+        <h3 class="font-semibold mb-2">DX that Scales</h3>
+        <p class="text-sm text-zinc-600">Small, composable modules; sensible defaults; examples in <code>cmd/</code>; clear interfaces to test.</p>
+      </div>
+      <div class="border border-zinc-200 rounded-2xl p-5 shadow-sm">
+        <h3 class="font-semibold mb-2">Readable by Design</h3>
+        <p class="text-sm text-zinc-600">Idiomatic Go, docs in the repo, and minimal abstractions: what you see is what runs.</p>
       </div>
     </div>
   </section>
 
-  <!-- Install -->
-  <section class="container mx-auto px-6 py-10">
-    <div class="rounded-2xl border border-slate-200 p-5">
-      <div class="flex items-center gap-2 text-base font-semibold"><i data-lucide="code" class="w-4 h-4"></i> Install (Go)</div>
-      <pre id="install-block" class="code mt-3"># Install core module (example)
-go get github.com/Raezil/lattice-agent@latest</pre>
-      <button id="copy-install" class="btn mt-3 text-sm"><i data-lucide="copy" class="w-4 h-4"></i> Copy</button>
-      <span id="copied-msg" class="text-sm text-slate-500 ml-2 hidden">Copied</span>
+  <!-- Quickstart -->
+  <section id="quickstart" class="mx-auto max-w-7xl px-6 py-16">
+    <div class="grid lg:grid-cols-2 gap-10 items-start">
+      <div>
+        <h2 class="text-2xl md:text-3xl font-extrabold tracking-tight">Quickstart</h2>
+        <p class="mt-3 text-zinc-600">Get up and running in minutes. Clone the repo, install deps, export your API key, and run the demo.</p>
+        <div class="mt-6 relative">
+          <pre class="rounded-2xl bg-zinc-900 text-zinc-100 p-6 overflow-x-auto text-sm shadow-xl border border-zinc-800"><code>git clone https://github.com/Raezil/lattice-agent.git
+cd lattice-agent
+go mod download
+
+# optional persistence
+echo "CREATE EXTENSION IF NOT EXISTS vector;" | psql postgres
+
+# env
+echo 'export GEMINI_API_KEY=YOUR_KEY' >> ~/.bashrc
+source ~/.bashrc
+
+# run a demo
+go run ./cmd/quickstart</code></pre>
+          <button class="copy-btn absolute top-3 right-3 px-3 py-1.5 text-sm rounded-lg bg-zinc-700 text-white" data-copy="git clone https://github.com/Raezil/lattice-agent.git\ncd lattice-agent\ngo mod download\n\n# optional persistence\necho 'CREATE EXTENSION IF NOT EXISTS vector;' | psql postgres\n\n# env\necho 'export GEMINI_API_KEY=YOUR_KEY' >> ~/.bashrc\nsource ~/.bashrc\n\n# run a demo\ngo run ./cmd/quickstart">Copy</button>
+        </div>
+      </div>
+      <div>
+        <h3 class="text-xl font-bold mb-3">Hello World Agent</h3>
+        <div class="relative">
+          <pre class="rounded-2xl bg-zinc-900 text-zinc-100 p-6 overflow-x-auto text-sm shadow-xl border border-zinc-800"><code>package main
+package main
+
+import (
+	"context"
+	"flag"
+	"log"
+
+	"github.com/Raezil/lattice-agent/pkg/adk"
+	adkmodules "github.com/Raezil/lattice-agent/pkg/adk/modules"
+	"github.com/Raezil/lattice-agent/pkg/agent"
+	"github.com/Raezil/lattice-agent/pkg/subagents"
+
+	"github.com/Raezil/lattice-agent/pkg/memory"
+	"github.com/Raezil/lattice-agent/pkg/memory/engine"
+	"github.com/Raezil/lattice-agent/pkg/models"
+	"github.com/Raezil/lattice-agent/pkg/tools"
+)
+
+func main() {
+	qdrantURL := flag.String("qdrant-url", "http://localhost:6333", "Qdrant base URL")
+	qdrantCollection := flag.String("qdrant-collection", "adk_memories", "Qdrant collection name")
+	flag.Parse()
+	ctx := context.Background()
+
+	// --- Shared runtime
+	researcherModel, err := models.NewGeminiLLM(ctx, "gemini-2.5-pro", "Research summary:")
+	if err != nil {
+		log.Fatalf("create researcher model: %v", err)
+	}
+	memOpts := engine.DefaultOptions()
+
+	adkAgent, err := adk.New(ctx,
+		adk.WithDefaultSystemPrompt("You orchestrate a helpful assistant team."),
+		adk.WithSubAgents(subagents.NewResearcher(researcherModel)),
+		adk.WithModules(
+			adkmodules.NewModelModule("gemini-model", func(_ context.Context) (models.Agent, error) {
+				return models.NewGeminiLLM(ctx, "gemini-2.5-pro", "Swarm orchestration:")
+			}),
+			adkmodules.InQdrantMemory(100000, *qdrantURL, *qdrantCollection, memory.AutoEmbedder(), &memOpts),
+			adkmodules.NewToolModule("essentials", adkmodules.StaticToolProvider([]agent.Tool{&tools.EchoTool{}}, nil)),
+		),
+	)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	agent, err := adkAgent.BuildAgent(ctx)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// Use the agent
+	resp, err := agent.Generate(ctx, "SessionID", "What is pgvector")
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	log.Println(resp)
+}
+</code></pre>
+          <button class="copy-btn absolute top-3 right-3 px-3 py-1.5 text-sm rounded-lg bg-zinc-700 text-white" data-copy="package main\nimport (\n  \"context\"\n  \"log\"\n  \"github.com/Raezil/lattice-agent/pkg/adk\"\n  \"github.com/Raezil/lattice-agent/pkg/adk/modules\"\n  \"github.com/Raezil/lattice-agent/pkg/models\"\n  \"github.com/Raezil/lattice-agent/pkg/tools\"\n)\nfunc main(){\n  ctx := context.Background()\n  kit, err := adk.New(ctx,\n    adk.WithModules(\n      modules.NewModelModule(\"coordinator\",\n        modules.StaticModelProvider(models.NewGeminiLLM(ctx, \"gemini-2.5-pro\", \"Swarm orchestration\"))),\n      modules.InMemoryMemoryModule(8),\n      modules.NewToolModule(\"default-tools\",\n        modules.StaticToolProvider([]tools.Tool{&tools.EchoTool{}, &tools.CalculatorTool{}}, nil)),\n    ),\n  )\n  if err != nil { log.Fatal(err) }\n  agent, err := kit.BuildAgent(ctx)\n  if err != nil { log.Fatal(err) }\n  resp, err := agent.Generate(ctx, \"Plan a 3-step research workflow\")\n  if err != nil { log.Fatal(err) }\n  log.Println(resp)\n}">Copy</button>
+        </div>
+      </div>
     </div>
   </section>
 
-  <!-- Why Go‑ADK -->
-  <section class="container mx-auto px-6 py-10">
-    <div class="grid md:grid-cols-2 gap-6 items-stretch">
-      <div class="rounded-2xl border border-slate-200 p-6">
-        <div class="flex items-center gap-2 text-lg font-semibold"><i data-lucide="network" class="w-5 h-5"></i> Why Go‑ADK</div>
-        <p class="text-slate-600">Designed for maintainers who care about clarity, performance, and control.</p>
-        <ul class="list-disc pl-5 space-y-2 mt-3 text-slate-700">
-          <li>Deterministic control over prompts, memory, and tool usage.</li>
-          <li>Composable: swap models, stores, or transports without rewrites.</li>
-          <li>Production‑ready patterns: testing, benchmarking, and CI‑friendly.</li>
-          <li>Interoperability via UTCP for portable tool actions.</li>
-        </ul>
-      </div>
-      <div class="rounded-2xl border border-slate-200 p-6">
-        <div class="text-lg font-semibold">Talk to the Maintainer</div>
-        <p class="text-slate-600">Have questions, ideas, or want to collaborate? Open an issue or start a discussion.</p>
-        <div class="flex flex-wrap gap-3 mt-4">
-          <a class="btn" href="https://github.com/Raezil/lattice-agent/issues/new/choose" target="_blank" rel="noreferrer"><i data-lucide="message-square" class="w-4 h-4"></i> Open an Issue</a>
-          <a class="btn" href="https://github.com/Raezil/lattice-agent/discussions" target="_blank" rel="noreferrer">Start a Discussion</a>
+  <!-- CTA -->
+  <section class="mx-auto max-w-7xl px-6 pb-20">
+    <div class="border border-zinc-200 rounded-2xl">
+      <div class="p-8 md:p-10 flex flex-col md:flex-row items-center justify-between gap-6">
+        <div>
+          <h3 class="text-xl md:text-2xl font-bold">Ready to build your lattice?</h3>
+          <p class="text-sm text-zinc-600 mt-1">Explore the code, open issues, and ship your first agent.</p>
+        </div>
+        <div class="flex gap-3">
+          <a class="px-4 py-2 rounded-lg bg-zinc-900 text-white hover:opacity-90" href="https://github.com/Raezil/lattice-agent" target="_blank" rel="noreferrer">View on GitHub</a>
+          <a class="px-4 py-2 rounded-lg border border-zinc-300 hover:bg-zinc-50" href="#quickstart">Get Started →</a>
         </div>
       </div>
     </div>
   </section>
 
   <!-- Footer -->
-  <footer class="container mx-auto px-6 py-12 border-t mt-10">
-    <div class="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
-      <p class="text-sm text-slate-500">MIT Licensed • Built with ❤ by the community</p>
-      <div class="flex items-center gap-3">
-        <a class="text-sm underline" href="https://github.com/Raezil/lattice-agent/stargazers" target="_blank" rel="noreferrer">Stars</a>
-        <a class="text-sm underline" href="https://github.com/Raezil/lattice-agent/actions" target="_blank" rel="noreferrer">CI</a>
-        <a class="text-sm underline" href="https://github.com/Raezil/lattice-agent#-features" target="_blank" rel="noreferrer">Docs</a>
+  <footer class="border-t border-zinc-200 py-10">
+    <div class="mx-auto max-w-7xl px-6 flex flex-col md:flex-row items-center justify-between gap-4">
+      <div class="flex items-center gap-3 text-sm text-zinc-500">
+        <svg class="w-5 h-5" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <g fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="10" cy="10" r="4" />
+            <circle cx="32" cy="10" r="4" />
+            <circle cx="54" cy="10" r="4" />
+            <circle cx="10" cy="32" r="4" />
+            <circle cx="32" cy="32" r="4" />
+            <circle cx="54" cy="32" r="4" />
+            <circle cx="10" cy="54" r="4" />
+            <circle cx="32" cy="54" r="4" />
+            <circle cx="54" cy="54" r="4" />
+            <path d="M10 10L32 32L54 10M10 32L32 10L54 32M10 54L32 32L54 54" />
+          </g>
+        </svg>
+        <span>Lattice‑Agent • Apache‑2.0</span>
       </div>
+      <div class="text-xs text-zinc-500">Built with Go • UTCP‑native • RAG‑ready</div>
     </div>
   </footer>
 
   <script>
-    // activate lucide icons
-    window.addEventListener('DOMContentLoaded', () => { if (window.lucide) { window.lucide.createIcons(); } });
-
-    // copy to clipboard for install block (no frameworks required)
-    const copyBtn = document.getElementById('copy-install');
-    const pre = document.getElementById('install-block');
-    const copied = document.getElementById('copied-msg');
-    if (copyBtn && pre) {
-      copyBtn.addEventListener('click', async () => {
-        try {
-          await navigator.clipboard.writeText(pre.innerText);
-          if (copied) { copied.classList.remove('hidden'); setTimeout(()=>copied.classList.add('hidden'), 1200); }
-        } catch (e) { console.error('Clipboard error', e); }
+    // Copy buttons
+    document.addEventListener('click', function(e){
+      const btn = e.target.closest('.copy-btn');
+      if(!btn) return;
+      const text = btn.getAttribute('data-copy') || '';
+      navigator.clipboard.writeText(text).then(() => {
+        const original = btn.textContent;
+        btn.textContent = 'Copied!';
+        setTimeout(() => btn.textContent = original, 1500);
+      }).catch(() => {
+        btn.textContent = 'Failed';
+        setTimeout(() => btn.textContent = 'Copy', 1500);
       });
-    }
+    });
   </script>
 </body>
 </html>
