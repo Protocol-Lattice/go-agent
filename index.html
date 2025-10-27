@@ -7,77 +7,13 @@
   <meta name="description" content="Lattice-Agent to framework w Go do budowy agentów: czyste adaptery LLM, narzędzia UTCP, pamięć RAG i orkiestracja multi-agentowa." />
   <meta name="theme-color" content="#0a0a0a" media="(prefers-color-scheme: dark)">
   <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 64 64%22><g fill=%22none%22 stroke=%22%23000%22 stroke-width=%224%22><circle cx=%2210%22 cy=%2210%22 r=%226%22/><circle cx=%2232%22 cy=%2210%22 r=%226%22/><circle cx=%2254%22 cy=%2210%22 r=%226%22/><circle cx=%2210%22 cy=%2232%22 r=%226%22/><circle cx=%2232%22 cy=%2232%22 r=%226%22/><circle cx=%2254%22 cy=%2232%22 r=%226%22/><circle cx=%2210%22 cy=%2254%22 r=%226%22/><circle cx=%2232%22 cy=%2254%22 r=%226%22/><circle cx=%2254%22 cy=%2254%22 r=%226%22/><path d=%22M10 10L32 32L54 10M10 32L32 10L54 32M10 54L32 32L54 54%22/></g></svg>">
   <script src="https://cdn.tailwindcss.com"></script>
   <script>
-    tailwind.config = {
-      darkMode: ['class', '[data-theme="dark"]'],
-      theme: {
-        extend: {
-          fontFamily: { mono: ['ui-monospace','SFMono-Regular','Menlo','Monaco','Consolas','Liberation Mono','monospace'] },
-          dropShadow: { glow: '0 0 20px rgba(99,102,241,.35)' },
-          boxShadow: {
-            'xl-soft': '0 20px 60px -20px rgba(0,0,0,.25)',
-            'glow': '0 0 0 1px rgba(255,255,255,.06), 0 20px 60px -20px rgba(99,102,241,.35)'
-          }
-        }
-      }
-    }
+    tailwind.config = { theme: { extend: {} }, darkMode: ['class', '[data-theme="dark"]'] }
   </script>
   <style>
-    :root { --ring: 1; }
     pre code{font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;}
     .fade-in{ animation: fade .5s ease-out both } @keyframes fade{from{opacity:0; transform:translateY(4px)}to{opacity:1; transform:none}}
-    .blob {
-      position:absolute; filter: blur(50px); opacity:.6; mix-blend-mode:plus-lighter;
-      will-change: transform, opacity;
-      animation: float 16s ease-in-out infinite;
-    }
-    @keyframes float { 0%,100%{transform:translateY(0) scale(1)} 50%{transform:translateY(-20px) scale(1.05)}}
-    .glow-border {
-      position: relative; isolation:isolate; border-radius: 1rem;
-      background: radial-gradient(1200px 1200px at var(--mx,50%) var(--my,0%), rgba(99,102,241,.18), transparent 40%);
-    }
-    .glow-border::before {
-      content:""; position:absolute; inset:-1px; border-radius: 1rem;
-      padding:1px;
-      background: conic-gradient(from 180deg at 50% 50%, #8b5cf6, #22d3ee, #3b82f6, #f472b6, #8b5cf6);
-      -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-      -webkit-mask-composite: xor; mask-composite: exclude; opacity:.6;
-    }
-    .glass { background: linear-gradient(180deg, rgba(255,255,255,.6), rgba(255,255,255,.25)); backdrop-filter: blur(12px) saturate(1.2) }
-    .dark .glass { background: linear-gradient(180deg, rgba(24,24,27,.6), rgba(24,24,27,.25)) }
-    .tilt { transition: transform .15s ease-out; transform-style: preserve-3d; }
-    .tilt .tilt-child { transform: translateZ(18px); }
-    .sparkle {
-      position:relative;
-    }
-    .sparkle::after {
-      content:""; position:absolute; inset:-4px; border-radius:.5rem; pointer-events:none;
-      background: radial-gradient(40px 40px at var(--mx,50%) 0%, rgba(255,255,255,.55), transparent 40%);
-      opacity:.15; mix-blend-mode: screen;
-    }
-    .reveal-up { opacity:0; transform: translateY(8px); transition: all .6s cubic-bezier(.2,.8,.2,1); }
-    .reveal-up.show{ opacity:1; transform:none }
-    .btn {
-      position:relative; display:inline-flex; align-items:center; gap:.5rem;
-      padding:.6rem .9rem; border-radius:.75rem; font-weight:600;
-    }
-    .btn-primary {
-      color:white; background:#0a0a0a;
-    }
-    .dark .btn-primary { color:#0a0a0a; background:white }
-    .btn-primary::before {
-      content:""; position:absolute; inset:-1px; border-radius:.8rem;
-      background: linear-gradient(90deg, rgba(59,130,246,.6), rgba(168,85,247,.6), rgba(236,72,153,.6));
-      filter: blur(6px); opacity:.55; z-index:-1; transition:opacity .2s ease;
-    }
-    .btn-primary:hover::before { opacity:.9 }
-    /* Constellation canvas fills parent */
-    #constellation{ display:block; width:100%; height:100% }
-    /* Marquee */
-    .marquee { display:flex; gap:2.5rem; animation: scroll 24s linear infinite; }
-    @keyframes scroll { from{ transform:translateX(0)} to{ transform:translateX(-50%)} }
   </style>
 </head>
 <body class="min-h-screen bg-white text-zinc-900 dark:bg-zinc-950 dark:text-zinc-100">
@@ -85,7 +21,7 @@
   <header class="sticky top-0 z-40 backdrop-blur bg-white/70 dark:bg-zinc-950/70 border-b border-zinc-200 dark:border-zinc-800">
     <div class="mx-auto max-w-7xl px-4 sm:px-6 py-3 flex items-center justify-between">
       <div class="flex items-center gap-3">
-        <svg class="w-7 h-7 drop-shadow-glow" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" aria-label="Lattice-Agent logo">
+        <svg class="w-7 h-7" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" aria-label="Lattice-Agent logo">
           <g fill="none" stroke="currentColor" stroke-width="2">
             <circle cx="10" cy="10" r="4" />
             <circle cx="32" cy="10" r="4" />
@@ -114,76 +50,70 @@
         <button id="langToggle" class="inline-flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-900" aria-label="Switch language">
           <span class="hidden sm:inline" id="langLabel">PL</span> 🌐
         </button>
-        <a class="btn btn-primary" href="https://github.com/Raezil/lattice-agent" target="_blank" rel="noreferrer" data-i18n="nav.github">GitHub</a>
+        <a class="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-zinc-900 text-white hover:opacity-90 dark:bg-white dark:text-zinc-900" href="https://github.com/Raezil/lattice-agent" target="_blank" rel="noreferrer" data-i18n="nav.github">GitHub</a>
       </div>
     </div>
   </header>
 
   <!-- Hero -->
-  <section class="relative mx-auto max-w-7xl px-4 sm:px-6 py-16 sm:py-20">
-    <!-- BACKGROUND VISUALS -->
-    <div class="absolute inset-0 -z-10 overflow-hidden">
-      <!-- Constellation -->
-      <canvas id="constellation" aria-hidden="true"></canvas>
-      <!-- Blobs -->
-      <div class="blob w-[38rem] h-[38rem] rounded-full bg-fuchsia-500/30 dark:bg-fuchsia-400/20 -top-24 -left-24"></div>
-      <div class="blob w-[32rem] h-[32rem] rounded-full bg-sky-400/30 dark:bg-sky-300/20 -bottom-32 -right-20" style="animation-delay:-8s"></div>
-      <div class="blob w-[18rem] h-[18rem] rounded-full bg-indigo-500/25 dark:bg-indigo-400/20 top-1/3 left-1/3" style="animation-delay:-4s"></div>
-    </div>
-
+  <section class="mx-auto max-w-7xl px-4 sm:px-6 py-16 sm:py-20">
     <div class="grid md:grid-cols-2 gap-10 items-center">
       <div class="fade-in">
         <h1 class="text-4xl md:text-6xl font-black tracking-tight">
           <span data-i18n="hero.h1a">Buduj agentów w Go z</span>
-          <span class="block bg-gradient-to-r from-blue-500 via-indigo-500 to-fuchsia-500 bg-clip-text text-transparent sparkle" data-i18n="hero.h1b">pamięcią grafową i multi-wektorową</span>
+          <span class="block bg-gradient-to-r from-blue-500 via-indigo-500 to-fuchsia-500 bg-clip-text text-transparent" data-i18n="hero.h1b">pamięcią grafową i multi-wektorową</span>
         </h1>
         <p class="mt-6 text-lg text-zinc-600 dark:text-zinc-300 max-w-prose" data-i18n="hero.lead">
           Czyste adaptery LLM, natywne narzędzia UTCP, pamięć RAG i orkiestracja multi-agentowa. Skup się na logice domenowej, a my ogarniemy „plumbing”.
         </p>
         <div class="mt-8 flex flex-wrap items-center justify-center md:justify-start gap-3">
-          <a class="btn btn-primary" href="#quickstart" data-i18n="hero.cta1">QuickStart</a>
-          <a class="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-zinc-300 hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-900" href="#faq" data-i18n="hero.cta2">FAQ</a>
+          <a class="px-4 py-2 rounded-lg bg-zinc-900 text-white hover:opacity-90 dark:bg-white dark:text-zinc-900" href="#quickstart" data-i18n="hero.cta1">QuickStart</a>
+          <a class="px-4 py-2 rounded-lg border border-zinc-300 hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-900" href="#faq" data-i18n="hero.cta2">FAQ</a>
           <a class="rounded-lg border border-transparent px-4 py-2 hover:underline" href="https://pkg.go.dev/github.com/Raezil/lattice-agent" target="_blank" rel="noreferrer">pkg.go.dev ↗</a>
+
         </div>
         <div class="mt-6 text-xs text-zinc-500 dark:text-zinc-400" data-i18n="hero.meta">Apache-2.0 • Go 1.22+ • UTCP-ready</div>
       </div>
-      <div class="relative fade-in tilt glow-border">
-        <div class="px-6 pt-5 pb-0 text-sm font-semibold tilt-child" data-i18n="hero.demo">demo CLI</div>
-        <div class="p-6 tilt-child">
-          <div class="relative">
-<pre class="rounded-2xl bg-zinc-900 text-zinc-100 p-6 overflow-x-auto text-sm shadow-xl border border-zinc-800 font-mono"><code id="demoCode">lattice&gt; /tool echo "hello"
+      <div class="relative fade-in">
+        <div class="border border-zinc-200 dark:border-zinc-800 shadow-xl rounded-2xl">
+          <div class="px-6 pt-5 pb-0 text-sm font-semibold" data-i18n="hero.demo">demo CLI</div>
+          <div class="p-6">
+            <div class="relative">
+<pre class="rounded-2xl bg-zinc-900 text-zinc-100 p-6 overflow-x-auto text-sm shadow-xl border border-zinc-800"><code id="demoCode">lattice&gt; /tool echo "hello"
 lattice&gt; /calc 2*(3+4)
 lattice&gt; summarize recent notes in team:core</code></pre>
-            <button class="copy-btn absolute top-3 right-3 px-3 py-1.5 text-sm rounded-lg bg-zinc-700 text-white shadow-glow" data-target="demoCode" aria-label="Copy" data-i18n="btn.copy">Kopiuj</button>
+              <button class="copy-btn absolute top-3 right-3 px-3 py-1.5 text-sm rounded-lg bg-zinc-700 text-white" data-target="demoCode" aria-label="Copy" data-i18n="btn.copy">Kopiuj</button>
+            </div>
           </div>
         </div>
       </div>
     </div>
+  </section>
 
   <!-- Features -->
   <section id="features" class="mx-auto max-w-7xl px-4 sm:px-6 py-8">
     <div class="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
-      <div class="border border-zinc-200 dark:border-zinc-800 rounded-2xl p-5 shadow-sm glow-border reveal-up tilt" data-tilt>
+      <div class="border border-zinc-200 dark:border-zinc-800 rounded-2xl p-5 shadow-sm">
         <h3 class="font-semibold mb-2" data-i18n="feat.1.title">Pamięć grafowa</h3>
         <p class="text-sm text-zinc-600 dark:text-zinc-300" data-i18n="feat.1.desc">Sąsiedztwo, ważność, zanikanie — kontekst trafia w sedno.</p>
       </div>
-      <div class="border border-zinc-200 dark:border-zinc-800 rounded-2xl p-5 shadow-sm glow-border reveal-up tilt" data-tilt>
+      <div class="border border-zinc-200 dark:border-zinc-800 rounded-2xl p-5 shadow-sm">
         <h3 class="font-semibold mb-2" data-i18n="feat.2.title">Multi-wektor (macierz)</h3>
         <p class="text-sm text-zinc-600 dark:text-zinc-300" data-i18n="feat.2.desc">Wiele wektorów na rekord + fuzja RRF/weighted = lepszy recall.</p>
       </div>
-      <div class="border border-zinc-200 dark:border-zinc-800 rounded-2xl p-5 shadow-sm glow-border reveal-up tilt" data-tilt>
+      <div class="border border-zinc-200 dark:border-zinc-800 rounded-2xl p-5 shadow-sm">
         <h3 class="font-semibold mb-2" data-i18n="feat.3.title">Narzędzia UTCP</h3>
         <p class="text-sm text-zinc-600 dark:text-zinc-300" data-i18n="feat.3.desc">Jedno API, wielu dostawców i trybów uruchomienia.</p>
       </div>
-      <div class="border border-zinc-200 dark:border-zinc-800 rounded-2xl p-5 shadow-sm glow-border reveal-up tilt" data-tilt>
+      <div class="border border-zinc-200 dark:border-zinc-800 rounded-2xl p-5 shadow-sm">
         <h3 class="font-semibold mb-2" data-i18n="feat.4.title">Czyste adaptery LLM</h3>
         <p class="text-sm text-zinc-600 dark:text-zinc-300" data-i18n="feat.4.desc">Gemini, Anthropic, OpenAI, Ollama — jeden interfejs.</p>
       </div>
-      <div class="border border-zinc-200 dark:border-zinc-800 rounded-2xl p-5 shadow-sm glow-border reveal-up tilt" data-tilt>
+      <div class="border border-zinc-200 dark:border-zinc-800 rounded-2xl p-5 shadow-sm">
         <h3 class="font-semibold mb-2" data-i18n="feat.5.title">Wymienne magazyny</h3>
         <p class="text-sm text-zinc-600 dark:text-zinc-300" data-i18n="feat.5.desc">In-memory na start; produkcja: PostgreSQL+pgvector lub Qdrant.</p>
       </div>
-      <div class="border border-zinc-200 dark:border-zinc-800 rounded-2xl p-5 shadow-sm glow-border reveal-up tilt" data-tilt>
+      <div class="border border-zinc-200 dark:border-zinc-800 rounded-2xl p-5 shadow-sm">
         <h3 class="font-semibold mb-2" data-i18n="feat.6.title">Swarm & spaces</h3>
         <p class="text-sm text-zinc-600 dark:text-zinc-300" data-i18n="feat.6.desc">Specjaliści współdzielący przestrzenie zespołów i sesji.</p>
       </div>
@@ -193,11 +123,11 @@ lattice&gt; summarize recent notes in team:core</code></pre>
   <!-- QuickStart -->
   <section id="quickstart" class="mx-auto max-w-5xl px-4 sm:px-6 py-16">
     <div class="text-center max-w-2xl mx-auto">
-      <h2 class="text-3xl font-extrabold tracking-tight reveal-up" data-i18n="qs.title">QuickStart</h2>
-      <p class="mt-3 text-zinc-600 dark:text-zinc-300 reveal-up" data-i18n="qs.lead">Szybki start: klon, deps, klucz API, demo.</p>
+      <h2 class="text-3xl font-extrabold tracking-tight" data-i18n="qs.title">QuickStart</h2>
+      <p class="mt-3 text-zinc-600 dark:text-zinc-300" data-i18n="qs.lead">Szybki start: klon, deps, klucz API, demo.</p>
     </div>
-    <div class="mt-8 relative max-w-3xl mx-auto glow-border tilt" data-tilt>
-<pre class="rounded-2xl bg-zinc-900 text-zinc-100 p-6 overflow-x-auto text-sm shadow-xl border border-zinc-800 font-mono"><code id="qsCode">git clone https://github.com/Raezil/lattice-agent.git
+    <div class="mt-8 relative max-w-3xl mx-auto">
+<pre class="rounded-2xl bg-zinc-900 text-zinc-100 p-6 overflow-x-auto text-sm shadow-xl border border-zinc-800"><code id="qsCode">git clone https://github.com/Raezil/lattice-agent.git
 cd lattice-agent
 go mod download
 
@@ -210,18 +140,18 @@ source ~/.bashrc
 
 # demo
 go run ./cmd/quickstart</code></pre>
-      <button class="copy-btn absolute top-3 right-3 px-3 py-1.5 text-sm rounded-lg bg-zinc-700 text-white shadow-glow" data-target="qsCode" aria-label="Copy" data-i18n="btn.copy">Kopiuj</button>
+      <button class="copy-btn absolute top-3 right-3 px-3 py-1.5 text-sm rounded-lg bg-zinc-700 text-white" data-target="qsCode" aria-label="Copy" data-i18n="btn.copy">Kopiuj</button>
     </div>
   </section>
 
   <!-- Agent (below QuickStart & centered) -->
   <section id="agent" class="mx-auto max-w-5xl px-4 sm:px-6 py-12">
     <div class="text-center max-w-2xl mx-auto">
-      <h3 class="text-2xl font-bold reveal-up" data-i18n="agent.title">Agent</h3>
-      <p class="mt-2 text-sm text-zinc-600 dark:text-zinc-300 reveal-up" data-i18n="agent.lead">Minimalny przykład uruchomienia agenta i wygenerowania odpowiedzi.</p>
+      <h3 class="text-2xl font-bold" data-i18n="agent.title">Agent</h3>
+      <p class="mt-2 text-sm text-zinc-600 dark:text-zinc-300" data-i18n="agent.lead">Minimalny przykład uruchomienia agenta i wygenerowania odpowiedzi.</p>
     </div>
-    <div class="mt-6 relative max-w-3xl mx-auto glow-border tilt" data-tilt>
-<pre class="rounded-2xl bg-zinc-900 text-zinc-100 p-6 overflow-x-auto text-sm shadow-xl border border-zinc-800 font-mono"><code id="goCode">package main
+    <div class="mt-6 relative max-w-3xl mx-auto">
+<pre class="rounded-2xl bg-zinc-900 text-zinc-100 p-6 overflow-x-auto text-sm shadow-xl border border-zinc-800"><code id="goCode">package main
 
 import (
   "context"
@@ -258,28 +188,28 @@ func main() {
   if err != nil { log.Fatal(err) }
   log.Println(resp)
 }</code></pre>
-      <button class="copy-btn absolute top-3 right-3 px-3 py-1.5 text-sm rounded-lg bg-zinc-700 text-white shadow-glow" data-target="goCode" aria-label="Copy" data-i18n="btn.copy">Kopiuj</button>
+      <button class="copy-btn absolute top-3 right-3 px-3 py-1.5 text-sm rounded-lg bg-zinc-700 text-white" data-target="goCode" aria-label="Copy" data-i18n="btn.copy">Kopiuj</button>
     </div>
   </section>
 
   <!-- Why -->
   <section id="why" class="mx-auto max-w-5xl px-4 sm:px-6 py-16">
     <div class="text-center max-w-2xl mx-auto">
-      <h2 class="text-3xl font-extrabold tracking-tight reveal-up" data-i18n="why.title">Dlaczego Lattice-Agent?</h2>
-      <p class="mt-3 text-zinc-600 dark:text-zinc-300 reveal-up" data-i18n="why.lead">
+      <h2 class="text-3xl font-extrabold tracking-tight" data-i18n="why.title">Dlaczego Lattice-Agent?</h2>
+      <p class="mt-3 text-zinc-600 dark:text-zinc-300" data-i18n="why.lead">
         AI w produkcji potrzebuje szybkości, niezawodności i prostoty. Lattice-Agent pozwala zespołom budować agentów w Go — z pamięcią grafową, multi-wektorową i współdzieloną przestrzenią swarm. Bez zbędnego bloatu.
       </p>
     </div>
     <div class="mt-8 grid md:grid-cols-3 gap-6">
-      <div class="border border-zinc-200 dark:border-zinc-800 rounded-2xl p-5 shadow-sm glow-border reveal-up tilt" data-tilt>
+      <div class="border border-zinc-200 dark:border-zinc-800 rounded-2xl p-5 shadow-sm">
         <h3 class="font-semibold mb-2" data-i18n="why.item1.title">Wydajność</h3>
         <p class="text-sm text-zinc-600 dark:text-zinc-300" data-i18n="why.item1.desc">Go zapewnia natywną współbieżność i niskie zużycie zasobów — idealne dla agentów w realnych systemach.</p>
       </div>
-      <div class="border border-zinc-200 dark:border-zinc-800 rounded-2xl p-5 shadow-sm glow-border reveal-up tilt" data-tilt>
+      <div class="border border-zinc-200 dark:border-zinc-800 rounded-2xl p-5 shadow-sm">
         <h3 class="font-semibold mb-2" data-i18n="why.item2.title">Skalowalność</h3>
         <p class="text-sm text-zinc-600 dark:text-zinc-300" data-i18n="why.item2.desc">Wbudowana obsługa swarm pozwala agentom współpracować i dzielić pamięć w czasie rzeczywistym.</p>
       </div>
-      <div class="border border-zinc-200 dark:border-zinc-800 rounded-2xl p-5 shadow-sm glow-border reveal-up tilt" data-tilt>
+      <div class="border border-zinc-200 dark:border-zinc-800 rounded-2xl p-5 shadow-sm">
         <h3 class="font-semibold mb-2" data-i18n="why.item3.title">Prostota</h3>
         <p class="text-sm text-zinc-600 dark:text-zinc-300" data-i18n="why.item3.desc">Czyste API, minimalne zależności i jeden interfejs dla wszystkich dostawców LLM i narzędzi.</p>
       </div>
@@ -290,32 +220,32 @@ func main() {
   <!-- FAQ -->
   <section id="faq" class="mx-auto max-w-5xl px-4 sm:px-6 pb-20">
     <div class="text-center max-w-2xl mx-auto">
-      <h2 class="text-3xl font-extrabold tracking-tight reveal-up" data-i18n="faq.title">FAQ</h2>
-      <p class="mt-2 text-sm text-zinc-600 dark:text-zinc-300 reveal-up" data-i18n="faq.lead">Najczęstsze pytania o Lattice-Agent.</p>
+      <h2 class="text-3xl font-extrabold tracking-tight" data-i18n="faq.title">FAQ</h2>
+      <p class="mt-2 text-sm text-zinc-600 dark:text-zinc-300" data-i18n="faq.lead">Najczęstsze pytania o Lattice-Agent.</p>
     </div>
     <div class="mt-6 grid md:grid-cols-2 gap-6">
-      <details class="group border border-zinc-200 dark:border-zinc-800 rounded-2xl p-5 glow-border reveal-up">
+      <details class="group border border-zinc-200 dark:border-zinc-800 rounded-2xl p-5">
         <summary class="cursor-pointer font-semibold list-none flex items-center justify-between">
           <span data-i18n="faq.q1">Jak działa pamięć multi-wektorowa?</span>
           <span aria-hidden class="transition-transform group-open:rotate-180">▾</span>
         </summary>
         <p class="mt-3 text-sm text-zinc-600 dark:text-zinc-300" data-i18n="faq.a1">Każdy rekord przechowuje macierz wektorów (np. tytuł, treść, encje). Wyniki łączone są przez fuzję (RRF/weighted), a sąsiedztwo grafu rozszerza kontekst.</p>
       </details>
-      <details class="group border border-zinc-200 dark:border-zinc-800 rounded-2xl p-5 glow-border reveal-up">
+      <details class="group border border-zinc-200 dark:border-zinc-800 rounded-2xl p-5">
         <summary class="cursor-pointer font-semibold list-none flex items-center justify-between">
           <span data-i18n="faq.q2">Jakie magazyny są wspierane?</span>
           <span aria-hidden class="transition-transform group-open:rotate-180">▾</span>
         </summary>
         <p class="mt-3 text-sm text-zinc-600 dark:text-zinc-300" data-i18n="faq.a2">Dev: in-memory. Prod: PostgreSQL+pgvector lub Qdrant. Adaptery w <code>pkg/memory</code>.</p>
       </details>
-      <details class="group border border-zinc-200 dark:border-zinc-800 rounded-2xl p-5 glow-border reveal-up">
+      <details class="group border border-zinc-200 dark:border-zinc-800 rounded-2xl p-5">
         <summary class="cursor-pointer font-semibold list-none flex items-center justify-between">
           <span data-i18n="faq.q3">Czy muszę używać Gemini?</span>
           <span aria-hidden class="transition-transform group-open:rotate-180">▾</span>
         </summary>
         <p class="mt-3 text-sm text-zinc-600 dark:text-zinc-300" data-i18n="faq.a3">Nie. Interfejs LLM jest plug-and-play (Anthropic, OpenAI, Ollama, własne modele).</p>
       </details>
-      <details class="group border border-zinc-200 dark:border-zinc-800 rounded-2xl p-5 glow-border reveal-up">
+      <details class="group border border-zinc-200 dark:border-zinc-800 rounded-2xl p-5">
         <summary class="cursor-pointer font-semibold list-none flex items-center justify-between">
           <span data-i18n="faq.q4">Jak kontrybuować?</span>
           <span aria-hidden class="transition-transform group-open:rotate-180">▾</span>
@@ -350,7 +280,7 @@ func main() {
   </footer>
 
   <script>
-    // i18n dictionary (same as before, trimmed for brevity but complete)
+    // i18n dictionary
     const I18N = {
       pl: {
         brand: "Lattice-Agent",
@@ -397,13 +327,14 @@ func main() {
         "footer.meta": "Go • UTCP • RAG",
         "btn.copy": "Kopiuj",
         "why.title": "Dlaczego Lattice-Agent?",
-        "why.lead": "AI w produkcji potrzebuje szybkości, niezawodności i prostoty. Lattice-Agent pozwala zespołom budować agentów w Go — z pamięcią grafową, multi-wektorową i współdzieloną przestrzenią swarm. Bez zbędnego bloatu.",
-        "why.item1.title": "Wydajność",
-        "why.item1.desc": "Go zapewnia natywną współbieżność i niskie zużycie zasobów — idealne dla agentów w realnych systemach.",
-        "why.item2.title": "Skalowalność",
-        "why.item2.desc": "Wbudowana obsługa swarm pozwala agentom współpracować i dzielić pamięć w czasie rzeczywistym.",
-        "why.item3.title": "Prostota",
-        "why.item3.desc": "Czyste API, minimalne zależności i jeden interfejs dla wszystkich dostawców LLM i narzędzi.",
+"why.lead": "AI w produkcji potrzebuje szybkości, niezawodności i prostoty. Lattice-Agent pozwala zespołom budować agentów w Go — z pamięcią grafową, multi-wektorową i współdzieloną przestrzenią swarm. Bez zbędnego bloatu.",
+"why.item1.title": "Wydajność",
+"why.item1.desc": "Go zapewnia natywną współbieżność i niskie zużycie zasobów — idealne dla agentów w realnych systemach.",
+"why.item2.title": "Skalowalność",
+"why.item2.desc": "Wbudowana obsługa swarm pozwala agentom współpracować i dzielić pamięć w czasie rzeczywistym.",
+"why.item3.title": "Prostota",
+"why.item3.desc": "Czyste API, minimalne zależności i jeden interfejs dla wszystkich dostawców LLM i narzędzi.",
+
       },
       en: {
         brand: "Lattice-Agent",
@@ -450,13 +381,13 @@ func main() {
         "footer.meta": "Go • UTCP • RAG",
         "btn.copy": "Copy",
         "why.title": "Why Lattice-Agent?",
-        "why.lead": "Production AI needs speed, reliability, and simplicity. Lattice-Agent lets teams build agents in Go — with graph, multi-vector, and shared swarm memory. No bloat.",
-        "why.item1.title": "Performance",
-        "why.item1.desc": "Go brings native concurrency and low resource usage — perfect for real-world agent systems.",
-        "why.item2.title": "Scalability",
-        "why.item2.desc": "Built-in swarm support lets agents collaborate and share memory in real time.",
-        "why.item3.title": "Simplicity",
-        "why.item3.desc": "A clean API, minimal dependencies, and one interface for all LLM providers and tools.",
+"why.lead": "Production AI needs speed, reliability, and simplicity. Lattice-Agent lets teams build agents in Go — with graph, multi-vector, and shared swarm memory. No bloat.",
+"why.item1.title": "Performance",
+"why.item1.desc": "Go brings native concurrency and low resource usage — perfect for real-world agent systems.",
+"why.item2.title": "Scalability",
+"why.item2.desc": "Built-in swarm support lets agents collaborate and share memory in real time.",
+"why.item3.title": "Simplicity",
+"why.item3.desc": "A clean API, minimal dependencies, and one interface for all LLM providers and tools.",
       }
     };
 
@@ -469,6 +400,7 @@ func main() {
         if (!key) continue;
         const val = dict[key];
         if (val !== undefined) {
+          // Allow simple inline HTML (e.g., code tags in FAQ answers)
           if (val.includes('<code>')) el.innerHTML = val;
           else el.textContent = val;
         }
@@ -583,10 +515,12 @@ func main() {
 }`;
       }
 
+      // Update copy buttons text
       for (const el of document.querySelectorAll('.copy-btn')) {
         el.textContent = dict["btn.copy"];
       }
 
+      // Update language toggle label
       const lbl = document.getElementById('langLabel');
       if (lbl) lbl.textContent = lang.toUpperCase();
     }
@@ -633,106 +567,6 @@ func main() {
         setTimeout(()=> applyI18n(document.documentElement.lang || 'pl'), 1200);
       });
     });
-
-    // Intersection-based reveals
-    const io = new IntersectionObserver((entries)=>{
-      for (const e of entries) if (e.isIntersecting) { e.target.classList.add('show'); io.unobserve(e.target); }
-    }, {rootMargin:"-10% 0px -10% 0px", threshold:.12});
-    document.querySelectorAll('.reveal-up').forEach(el=> io.observe(el));
-
-    // Tilt effect
-    const tiltEls = document.querySelectorAll('[data-tilt], .tilt');
-    const calcTilt = (rect, x, y) => {
-      const rx = (y - rect.top - rect.height/2) / rect.height;
-      const ry = (x - rect.left - rect.width/2) / rect.width;
-      return { ax: -rx * 6, ay: ry * 6 };
-    };
-    const onMove = (e, el) => {
-      const rect = el.getBoundingClientRect();
-      const { ax, ay } = calcTilt(rect, e.clientX, e.clientY);
-      el.style.transform = `perspective(900px) rotateX(${ax}deg) rotateY(${ay}deg) translateZ(0)`;
-      el.style.setProperty('--mx', `${((e.clientX-rect.left)/rect.width)*100}%`);
-      el.style.setProperty('--my', `${((e.clientY-rect.top)/rect.height)*100}%`);
-    };
-    tiltEls.forEach(el => {
-      el.addEventListener('mousemove', (e)=> onMove(e, el));
-      el.addEventListener('mouseleave', ()=>{ el.style.transform=''; });
-    });
-
-    // Typewriter for the hero demo code (once on view)
-    const demo = document.getElementById('demoCode');
-    const demoFull = demo.textContent;
-    let demoTyped = false;
-    const typeIO = new IntersectionObserver((entries)=>{
-      for (const e of entries) if(e.isIntersecting && !demoTyped){
-        demoTyped = true; demo.textContent = "";
-        const chars = Array.from(demoFull);
-        let i = 0;
-        const tick = () => {
-          demo.textContent += chars[i++] || "";
-          if (i < chars.length) requestAnimationFrame(tick);
-        };
-        tick();
-        typeIO.unobserve(demo);
-      }
-    }, {threshold:.3});
-    typeIO.observe(demo);
-
-    // Constellation background
-    (function(){
-      const canvas = document.getElementById('constellation');
-      const ctx = canvas.getContext('2d');
-      let w, h, dpr, points, anim, themeDark = document.documentElement.classList.contains('dark');
-      const P = 80; // base point count
-
-      function resize() {
-        dpr = Math.min(window.devicePixelRatio || 1, 2);
-        w = canvas.clientWidth; h = canvas.clientHeight;
-        canvas.width = Math.floor(w * dpr);
-        canvas.height = Math.floor(h * dpr);
-        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-        initPoints();
-      }
-      function initPoints(){
-        const count = Math.max(40, Math.floor((w*h)/14000));
-        points = new Array(count).fill(0).map(()=> ({
-          x: Math.random()*w, y: Math.random()*h,
-          vx: (Math.random()-.5)*.6, vy: (Math.random()-.5)*.6
-        }));
-      }
-      function step(){
-        ctx.clearRect(0,0,w,h);
-        const fg = themeDark ? 'rgba(180, 190, 255, .8)' : 'rgba(20, 20, 40, .8)';
-        const line = themeDark ? 'rgba(120, 130, 255, .12)' : 'rgba(50, 70, 160, .10)';
-        // draw lines
-        for (let i=0;i<points.length;i++){
-          const p = points[i]; p.x+=p.vx; p.y+=p.vy;
-          if (p.x<0||p.x>w) p.vx*=-1;
-          if (p.y<0||p.y>h) p.vy*=-1;
-          for (let j=i+1;j<points.length;j++){
-            const q = points[j];
-            const dx=p.x-q.x, dy=p.y-q.y; const dist = Math.hypot(dx,dy);
-            if (dist < 110) {
-              ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(q.x, q.y);
-              ctx.strokeStyle = line; ctx.lineWidth = 1; ctx.stroke();
-            }
-          }
-        }
-        // draw points
-        for (const p of points){
-          ctx.beginPath(); ctx.arc(p.x, p.y, 1.2, 0, Math.PI*2);
-          ctx.fillStyle = fg; ctx.fill();
-        }
-        anim = requestAnimationFrame(step);
-      }
-      const observer = new ResizeObserver(resize);
-      observer.observe(canvas);
-      resize(); step();
-      // react to theme
-      const themeObs = new MutationObserver(()=> { themeDark = document.documentElement.classList.contains('dark'); });
-      themeObs.observe(document.documentElement, { attributes:true, attributeFilter:['class'] });
-      // cleanup (noop here as this is a single page)
-    })();
   </script>
 </body>
 </html>
