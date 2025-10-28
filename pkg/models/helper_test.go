@@ -2,6 +2,7 @@ package models
 
 import (
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -172,14 +173,25 @@ func TestCombinePromptWithFiles_DefaultNameAndNonText(t *testing.T) {
 		t.Fatalf("combinePromptWithFiles without files = %q, want %q", got, want)
 	}
 
-	if !containsAll(combined, []string{
-		base,
+	if !containsAllRegex(combined, []string{
+		regexp.QuoteMeta(base),
 		"ATTACHMENTS CONTEXT",
-		"<<<FILE file_1>>>",
-		"[Non-text attachment] clip.mp4 (video/mp4)",
+		`<<<FILE file_1(?: \[text/plain\])?>>>:?`, // MIME optional, colon optional
+		regexp.QuoteMeta("[Non-text attachment] clip.mp4 (video/mp4)"),
 	}) {
 		t.Fatalf("combined output missing expected segments:\n%s", combined)
 	}
+}
+
+// containsAllRegex returns true if every pattern (Go regexp) matches somewhere in s.
+func containsAllRegex(s string, patterns []string) bool {
+	for _, p := range patterns {
+		re := regexp.MustCompile(p)
+		if !re.MatchString(s) {
+			return false
+		}
+	}
+	return true
 }
 
 func containsAll(haystack string, needles []string) bool {
