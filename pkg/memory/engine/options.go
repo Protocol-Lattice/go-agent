@@ -5,6 +5,7 @@ import "time"
 // ScoreWeights controls the contribution of each scoring component during retrieval.
 type ScoreWeights struct {
 	Similarity float64
+	Keywords   float64
 	Importance float64
 	Recency    float64
 	Source     float64
@@ -31,9 +32,10 @@ type Options struct {
 func DefaultOptions() Options {
 	return Options{
 		Weights: ScoreWeights{
-			Similarity: 0.55,
-			Importance: 0.25,
-			Recency:    0.15,
+			Similarity: 0.45,
+			Keywords:   0.20,
+			Importance: 0.20,
+			Recency:    0.10,
 			Source:     0.05,
 		},
 		LambdaMMR:              0.7,
@@ -52,7 +54,7 @@ func DefaultOptions() Options {
 
 func (o Options) withDefaults() Options {
 	defaults := DefaultOptions()
-	if o.Weights.Similarity == 0 && o.Weights.Importance == 0 && o.Weights.Recency == 0 && o.Weights.Source == 0 {
+	if o.Weights.Similarity == 0 && o.Weights.Keywords == 0 && o.Weights.Importance == 0 && o.Weights.Recency == 0 && o.Weights.Source == 0 {
 		o.Weights = defaults.Weights
 	}
 	if o.LambdaMMR == 0 {
@@ -92,12 +94,13 @@ func (o Options) withDefaults() Options {
 }
 
 func (o Options) normalizedWeights() ScoreWeights {
-	total := o.Weights.Similarity + o.Weights.Importance + o.Weights.Recency + o.Weights.Source
+	total := o.Weights.Similarity + o.Weights.Keywords + o.Weights.Importance + o.Weights.Recency + o.Weights.Source
 	if total == 0 {
 		return o.Weights
 	}
 	return ScoreWeights{
 		Similarity: o.Weights.Similarity / total,
+		Keywords:   o.Weights.Keywords / total,
 		Importance: o.Weights.Importance / total,
 		Recency:    o.Weights.Recency / total,
 		Source:     o.Weights.Source / total,

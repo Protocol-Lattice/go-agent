@@ -176,6 +176,7 @@ func (e *Engine) Retrieve(ctx context.Context, query string, limit int) ([]model
 	if limit <= 0 {
 		return nil, nil
 	}
+	keywords := extractKeywords(query)
 	embedding, err := e.embed(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("embed query: %w", err)
@@ -242,16 +243,18 @@ func (e *Engine) Retrieve(ctx context.Context, query string, limit int) ([]model
 	now := e.clock().UTC()
 	for i := range candidates {
 		rec := &candidates[i]
+		meta := model.DecodeMetadata(rec.Metadata)
 		if rec.Importance == 0 {
-			rec.Importance = importanceScore(rec.Content, model.DecodeMetadata(rec.Metadata))
+			rec.Importance = importanceScore(rec.Content, meta)
 		}
 		rec.Score = model.MaxCosineSimilarity(embedding, *rec)
+		rec.KeywordScore = keywordMatchScore(rec.Content, rec.Summary, meta, keywords)
 		recency := recencyScore(now.Sub(rec.CreatedAt), e.opts.HalfLife)
 		if e.metrics != nil {
 			e.metrics.ObserveRecency(recency)
 		}
 		sourceScore := e.sourceScore(rec.Source)
-		rec.WeightedScore = weights.Similarity*rec.Score + weights.Importance*rec.Importance + weights.Recency*recency + weights.Source*sourceScore
+		rec.WeightedScore = weights.Similarity*rec.Score + weights.Keywords*rec.KeywordScore + weights.Importance*rec.Importance + weights.Recency*recency + weights.Source*sourceScore
 	}
 	selected := mmrSelect(candidates, embedding, limit, e.opts.LambdaMMR)
 	if e.opts.EnableSummaries {
@@ -594,6 +597,119 @@ func importanceScore(content string, metadata map[string]any) float64 {
 		keywordBoost = 0.6
 	}
 	return clamp(lengthScore+keywordBoost, 0, 1)
+}
+
+var commonStopWords = map[string]struct{}{
+	"a": {}, "an": {}, "and": {}, "are": {}, "as": {}, "at": {}, "be": {}, "been": {}, "but": {}, "by": {},
+	"for": {}, "from": {}, "had": {}, "has": {}, "have": {}, "if": {}, "in": {}, "into": {}, "is": {},
+	"it": {}, "its": {}, "of": {}, "on": {}, "or": {}, "over": {}, "so": {}, "such": {}, "than": {},
+	"that": {}, "the": {}, "their": {}, "there": {}, "these": {}, "they": {}, "this": {}, "those": {},
+	"to": {}, "too": {}, "was": {}, "were": {}, "with": {}, "within": {}, "without": {},
+}
+
+func extractKeywords(text string) []string {
+	lower := strings.ToLower(text)
+	tokens := strings.FieldsFunc(lower, func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsNumber(r)
+	})
+	if len(tokens) == 0 {
+		return nil
+	}
+	keywords := make([]string, 0, len(tokens))
+	seen := make(map[string]struct{}, len(tokens))
+	for _, tok := range tokens {
+		tok = strings.TrimSpace(tok)
+		if len(tok) < 2 {
+			continue
+		}
+		if _, stop := commonStopWords[tok]; stop {
+			continue
+		}
+		if _, ok := seen[tok]; ok {
+			continue
+		}
+		seen[tok] = struct{}{}
+		keywords = append(keywords, tok)
+	}
+	return keywords
+}
+
+func keywordMatchScore(content, summary string, metadata map[string]any, keywords []string) float64 {
+	if len(keywords) == 0 {
+		return 0
+	}
+	sb := strings.Builder{}
+	writeNormalized := func(value string) {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			return
+		}
+		if sb.Len() > 0 {
+			sb.WriteByte(' ')
+		}
+		sb.WriteString(strings.ToLower(trimmed))
+	}
+	writeNormalized(content)
+	writeNormalized(summary)
+	for _, metaVal := range flattenMetadata(metadata) {
+		writeNormalized(metaVal)
+	}
+	haystack := sb.String()
+	if haystack == "" {
+		return 0
+	}
+	matches := 0
+	unique := make(map[string]struct{}, len(keywords))
+	for _, kw := range keywords {
+		if kw == "" {
+			continue
+		}
+		if _, seen := unique[kw]; seen {
+			continue
+		}
+		unique[kw] = struct{}{}
+		if strings.Contains(haystack, kw) {
+			matches++
+		}
+	}
+	if len(unique) == 0 {
+		return 0
+	}
+	return float64(matches) / float64(len(unique))
+}
+
+func flattenMetadata(meta map[string]any) []string {
+	if len(meta) == 0 {
+		return nil
+	}
+	values := make([]string, 0, len(meta))
+	var visit func(any)
+	visit = func(v any) {
+		switch val := v.(type) {
+		case nil:
+			return
+		case string:
+			if trimmed := strings.TrimSpace(val); trimmed != "" {
+				values = append(values, trimmed)
+			}
+		case []any:
+			for _, item := range val {
+				visit(item)
+			}
+		case map[string]any:
+			for _, nested := range val {
+				visit(nested)
+			}
+		default:
+			if s := strings.TrimSpace(model.StringFromAny(val)); s != "" && s != "[]" && s != "{}" && s != "map[]" {
+				values = append(values, s)
+			}
+		}
+	}
+	for _, v := range meta {
+		visit(v)
+	}
+	return values
 }
 
 func mmrSelect(records []model.MemoryRecord, query []float32, limit int, lambda float64) []model.MemoryRecord {

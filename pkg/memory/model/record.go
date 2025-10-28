@@ -12,6 +12,7 @@ type MemoryRecord struct {
 	Embedding       []float32   `json:"embedding"`
 	EmbeddingMatrix [][]float32 `json:"embedding_matrix,omitempty"`
 	Score           float64     `json:"score"`
+	KeywordScore    float64     `json:"keyword_score"`
 	Importance      float64     `json:"importance"`
 	Source          string      `json:"source"`
 	Summary         string      `json:"summary"`
