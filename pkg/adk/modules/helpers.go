@@ -11,6 +11,14 @@ import (
 	"github.com/Raezil/lattice-agent/pkg/models"
 )
 
+var (
+	newMemoryBankWithStore = memory.NewMemoryBankWithStore
+	newSessionMemory       = memory.NewSessionMemory
+	newEngine              = memory.NewEngine
+	newSharedSession       = memory.NewSharedSession
+	newPostgresStore       = memory.NewPostgresStore
+)
+
 // StaticModelProvider returns a provider that always yields the supplied model.
 func StaticModelProvider(model models.Agent) kit.ModelProvider {
 	return func(context.Context) (models.Agent, error) {
@@ -40,10 +48,10 @@ func InMemoryMemoryModule(window int, embeeder memory.Embedder, opts *memory.Opt
 	if size <= 0 {
 		size = 8
 	}
-	bank := memory.NewMemoryBankWithStore(memory.NewInMemoryStore())
-	mem := memory.NewSessionMemory(bank, size)
+	bank := newMemoryBankWithStore(memory.NewInMemoryStore())
+	mem := newSessionMemory(bank, size)
 	mem.WithEmbedder(embeeder)
-	engine := memory.NewEngine(bank.Store, *opts)
+	engine := newEngine(bank.Store, *opts)
 	mem.WithEngine(engine)
 	engineLogger := log.New(os.Stderr, "memory-engine: ", log.LstdFlags)
 	mem.Engine.WithLogger(engineLogger)
@@ -62,10 +70,10 @@ func InQdrantMemory(window int, baseURL string, collection string, embeeder memo
 	if size <= 0 {
 		size = 8
 	}
-	bank := memory.NewMemoryBankWithStore(memory.NewQdrantStore(baseURL, collection, ""))
-	mem := memory.NewSessionMemory(bank, size)
+	bank := newMemoryBankWithStore(memory.NewQdrantStore(baseURL, collection, ""))
+	mem := newSessionMemory(bank, size)
 	mem.WithEmbedder(embeeder)
-	engine := memory.NewEngine(bank.Store, *opts)
+	engine := newEngine(bank.Store, *opts)
 	mem.WithEngine(engine)
 	engineLogger := log.New(os.Stderr, "memory-engine: ", log.LstdFlags)
 	mem.Engine.WithLogger(engineLogger)
@@ -86,19 +94,19 @@ func InPostgresMemory(ctx context.Context, window int, connStr string, embeeder 
 	)
 	provider := func(context.Context) (kit.MemoryBundle, error) {
 		if cached == nil && cachedErr == nil {
-			ps, err := memory.NewPostgresStore(ctx, connStr)
+			ps, err := newPostgresStore(ctx, connStr)
 			if err != nil {
 				cachedErr = err
 				return kit.MemoryBundle{}, err
 			}
-			bank := memory.NewMemoryBankWithStore(ps)
+			bank := newMemoryBankWithStore(ps)
 			size := window
 			if size <= 0 {
 				size = 8
 			}
-			mem := memory.NewSessionMemory(bank, size)
+			mem := newSessionMemory(bank, size)
 			mem.WithEmbedder(embeeder)
-			engine := memory.NewEngine(bank.Store, *opts)
+			engine := newEngine(bank.Store, *opts)
 			mem.WithEngine(engine)
 			engineLogger := log.New(os.Stderr, "memory-engine: ", log.LstdFlags)
 			mem.Engine.WithLogger(engineLogger)
@@ -108,7 +116,7 @@ func InPostgresMemory(ctx context.Context, window int, connStr string, embeeder 
 			return kit.MemoryBundle{}, cachedErr
 		}
 		shared := func(local string, spaces ...string) *memory.SharedSession {
-			return memory.NewSharedSession(cached, local, spaces...)
+			return newSharedSession(cached, local, spaces...)
 		}
 		return kit.MemoryBundle{Session: cached, Shared: shared}, nil
 	}
