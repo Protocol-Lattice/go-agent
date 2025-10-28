@@ -17,9 +17,10 @@ import (
 )
 
 const (
-	DefaultMemorySimWeight        = 0.55
-	DefaultMemoryImportanceWeight = 0.25
-	DefaultMemoryRecencyWeight    = 0.15
+	DefaultMemorySimWeight        = 0.45
+	DefaultMemoryKeywordWeight    = 0.20
+	DefaultMemoryImportanceWeight = 0.20
+	DefaultMemoryRecencyWeight    = 0.10
 	DefaultMemorySourceWeight     = 0.05
 	DefaultMemoryMMRLambda        = 0.7
 	DefaultMemoryClusterSim       = 0.83
@@ -44,6 +45,7 @@ func DefaultMemoryOptions() memory.Options {
 	return memory.Options{
 		Weights: memory.ScoreWeights{
 			Similarity: DefaultMemorySimWeight,
+			Keywords:   DefaultMemoryKeywordWeight,
 			Importance: DefaultMemoryImportanceWeight,
 			Recency:    DefaultMemoryRecencyWeight,
 			Source:     DefaultMemorySourceWeight,
