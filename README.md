@@ -5,9 +5,9 @@
 
 
 [![Go Version](https://img.shields.io/badge/Go-1.25-00ADD8?logo=go&logoColor=white)](https://go.dev/dl/)
-[![CI Status](https://github.com/Raezil/lattice-agent/actions/workflows/go.yml/badge.svg)](https://github.com/Raezil/lattice-agent/actions/workflows/go.yml)
-[![Go Reference](https://pkg.go.dev/badge/github.com/Raezil/lattice-agent.svg)](https://pkg.go.dev/github.com/Raezil/lattice-agent)
-[![Go Report Card](https://goreportcard.com/badge/github.com/Raezil/lattice-agent)](https://goreportcard.com/report/github.com/Raezil/lattice-agent)
+[![CI Status](https://github.com/Protocol-Lattice/agent/actions/workflows/go.yml/badge.svg)](https://github.com/Protocol-Lattice/agent/actions/workflows/go.yml)
+[![Go Reference](https://pkg.go.dev/badge/github.com/Protocol-Lattice/agent.svg)](https://pkg.go.dev/github.com/Protocol-Lattice/agent)
+[![Go Report Card](https://goreportcard.com/badge/github.com/Protocol-Lattice/agent)](https://goreportcard.com/report/github.com/Protocol-Lattice/agent)
 
 **Lattice** helps you build AI agents in Go with clean abstractions for LLMs, tool calling, retrieval-augmented memory, and multi-agent coordination. Focus on your domain logic while Lattice handles the orchestration plumbing.
 
@@ -37,7 +37,7 @@ Lattice provides all of this with idiomatic Go interfaces and minimal dependenci
 ### Installation
 
 ```bash
-git clone https://github.com/Raezil/lattice-agent.git
+git clone https://github.com/Protocol-Lattice/agent.git
 cd lattice-agent
 go mod download
 ```
@@ -52,15 +52,15 @@ import (
 	"flag"
 	"log"
 
-	"github.com/Raezil/lattice-agent/pkg/adk"
-	adkmodules "github.com/Raezil/lattice-agent/pkg/adk/modules"
-	"github.com/Raezil/lattice-agent/pkg/agent"
-	"github.com/Raezil/lattice-agent/pkg/subagents"
+	"github.com/Protocol-Lattice/agent/core/adk"
+	adkmodules "github.com/Protocol-Lattice/agent/core/adk/modules"
+	"github.com/Protocol-Lattice/agent/core/agentic"
+	"github.com/Protocol-Lattice/agent/core/subagents"
 
-	"github.com/Raezil/lattice-agent/pkg/memory"
-	"github.com/Raezil/lattice-agent/pkg/memory/engine"
-	"github.com/Raezil/lattice-agent/pkg/models"
-	"github.com/Raezil/lattice-agent/pkg/tools"
+	"github.com/Protocol-Lattice/agent/core/memory"
+	"github.com/Protocol-Lattice/agent/core/memory/engine"
+	"github.com/Protocol-Lattice/agent/core/models"
+	"github.com/Protocol-Lattice/agent/core/tools"
 )
 
 func main() {
@@ -191,7 +191,7 @@ import (
         "fmt"
         "strings"
 
-        "github.com/Raezil/lattice-agent/pkg/agent"
+        "github.com/Protocol-Lattice/agent/core/agentic"
 )
 
 // EchoTool repeats the provided input. Useful for testing tool wiring.
@@ -314,9 +314,9 @@ Solution: Ensure tool names are unique and properly registered in your tool cata
 
 ### Getting Help
 
-- Check existing [GitHub Issues](https://github.com/Raezil/lattice-agent/issues)
+- Check existing [GitHub Issues](https://github.com/Protocol-Lattice/agent/issues)
 - Review the [examples](./cmd/) for common patterns
-- Join discussions in [GitHub Discussions](https://github.com/Raezil/lattice-agent/discussions)
+- Join discussions in [GitHub Discussions](https://github.com/Protocol-Lattice/agent/discussions)
 
 ## Contributing
 

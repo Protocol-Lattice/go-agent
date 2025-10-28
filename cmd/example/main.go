@@ -33,13 +33,13 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/Raezil/lattice-agent/pkg/adk"
-	"github.com/Raezil/lattice-agent/pkg/adk/modules"
-	"github.com/Raezil/lattice-agent/pkg/agent"
-	"github.com/Raezil/lattice-agent/pkg/memory"
-	"github.com/Raezil/lattice-agent/pkg/memory/store"
-	"github.com/Raezil/lattice-agent/pkg/models"
-	"github.com/Raezil/lattice-agent/pkg/tools"
+	"github.com/Protocol-Lattice/agent/core/adk"
+	"github.com/Protocol-Lattice/agent/core/adk/modules"
+	agent "github.com/Protocol-Lattice/agent/core/agentic"
+	"github.com/Protocol-Lattice/agent/core/memory"
+	"github.com/Protocol-Lattice/agent/core/memory/store"
+	"github.com/Protocol-Lattice/agent/core/models"
+	"github.com/Protocol-Lattice/agent/core/tools"
 )
 
 var (

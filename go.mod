@@ -1,4 +1,4 @@
-module github.com/Raezil/lattice-agent
+module github.com/Protocol-Lattice/agent
 
 go 1.25.0
 

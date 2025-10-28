@@ -28,18 +28,18 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/Raezil/lattice-agent/pkg/adk"
-	adkmodules "github.com/Raezil/lattice-agent/pkg/adk/modules"
-	"github.com/Raezil/lattice-agent/pkg/agent"
-	"github.com/Raezil/lattice-agent/pkg/helpers"
-	"github.com/Raezil/lattice-agent/pkg/memory"
-	"github.com/Raezil/lattice-agent/pkg/memory/engine"
-	"github.com/Raezil/lattice-agent/pkg/models"
-	"github.com/Raezil/lattice-agent/pkg/subagents"
-	"github.com/Raezil/lattice-agent/pkg/tools"
+	"github.com/Protocol-Lattice/agent/core/adk"
+	adkmodules "github.com/Protocol-Lattice/agent/core/adk/modules"
+	agent "github.com/Protocol-Lattice/agent/core/agentic"
+	"github.com/Protocol-Lattice/agent/core/helpers"
+	"github.com/Protocol-Lattice/agent/core/memory"
+	"github.com/Protocol-Lattice/agent/core/memory/engine"
+	"github.com/Protocol-Lattice/agent/core/models"
+	"github.com/Protocol-Lattice/agent/core/subagents"
+	"github.com/Protocol-Lattice/agent/core/tools"
 
 	// swarm API
-	"github.com/Raezil/lattice-agent/pkg/swarm"
+	"github.com/Protocol-Lattice/agent/core/swarm"
 )
 
 //
