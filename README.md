@@ -129,12 +129,10 @@ lattice-agent/
 │   └── team/          # Multi-agent coordination demos
 ├── pkg/
 │   ├── adk/           # Agent Development Kit and module system
-│   ├── agent/         # Core coordinator, routing, and delegation
 │   ├── memory/        # Memory engine and vector store adapters
 │   ├── models/        # LLM provider adapters (Gemini, Ollama, Anthropic)
 │   ├── subagents/     # Pre-built specialist agent personas
-│   └── tools/         # Built-in tools (echo, calculator, time, etc.)
-└── docs/              # Additional documentation
+├── └── tools/         # Built-in tools (echo, calculator, time, etc.)
 ```
 
 ## Configuration
