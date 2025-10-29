@@ -27,17 +27,17 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/Protocol-Lattice/agent/core/adk"
-	adkmodules "github.com/Protocol-Lattice/agent/core/adk/modules"
-	agent "github.com/Protocol-Lattice/agent/core/agentic"
-	"github.com/Protocol-Lattice/agent/core/helpers"
-	"github.com/Protocol-Lattice/agent/core/memory"
-	"github.com/Protocol-Lattice/agent/core/memory/engine"
-	"github.com/Protocol-Lattice/agent/core/models"
-	"github.com/Protocol-Lattice/agent/core/subagents"
-	"github.com/Protocol-Lattice/agent/core/tools"
+	agent "github.com/Protocol-Lattice/go-agent"
+	"github.com/Protocol-Lattice/go-agent/src/adk"
+	adkmodules "github.com/Protocol-Lattice/go-agent/src/adk/modules"
+	"github.com/Protocol-Lattice/go-agent/src/helpers"
+	"github.com/Protocol-Lattice/go-agent/src/memory"
+	"github.com/Protocol-Lattice/go-agent/src/memory/engine"
+	"github.com/Protocol-Lattice/go-agent/src/models"
+	"github.com/Protocol-Lattice/go-agent/src/subagents"
+	"github.com/Protocol-Lattice/go-agent/src/tools"
 
-	"github.com/Protocol-Lattice/agent/core/swarm"
+	"github.com/Protocol-Lattice/go-agent/src/swarm"
 )
 
 // ---- Adapter: concrete ADK *agent.Agent -> swarm.ConversationAgent ----

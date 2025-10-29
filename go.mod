@@ -1,4 +1,4 @@
-module github.com/Protocol-Lattice/agent
+module github.com/Protocol-Lattice/go-agent
 
 go 1.25.0
 

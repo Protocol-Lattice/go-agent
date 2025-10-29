@@ -50,7 +50,7 @@
         <button id="langToggle" class="inline-flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-900" aria-label="Switch language">
           <span class="hidden sm:inline" id="langLabel">PL</span> 🌐
         </button>
-        <a class="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-zinc-900 text-white hover:opacity-90 dark:bg-white dark:text-zinc-900" href="https://github.com/Protocol-Lattice/agent" target="_blank" rel="noreferrer" data-i18n="nav.github">GitHub</a>
+        <a class="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-zinc-900 text-white hover:opacity-90 dark:bg-white dark:text-zinc-900" href="https://github.com/Protocol-Lattice/go-agent" target="_blank" rel="noreferrer" data-i18n="nav.github">GitHub</a>
       </div>
     </div>
   </header>
@@ -69,7 +69,7 @@
         <div class="mt-8 flex flex-wrap items-center justify-center md:justify-start gap-3">
           <a class="px-4 py-2 rounded-lg bg-zinc-900 text-white hover:opacity-90 dark:bg-white dark:text-zinc-900" href="#quickstart" data-i18n="hero.cta1">QuickStart</a>
           <a class="px-4 py-2 rounded-lg border border-zinc-300 hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-900" href="#faq" data-i18n="hero.cta2">FAQ</a>
-          <a class="rounded-lg border border-transparent px-4 py-2 hover:underline" href="https://pkg.go.dev/github.com/Protocol-Lattice/agent" target="_blank" rel="noreferrer">pkg.go.dev ↗</a>
+          <a class="rounded-lg border border-transparent px-4 py-2 hover:underline" href="https://pkg.go.dev/github.com/Protocol-Lattice/go-agent" target="_blank" rel="noreferrer">pkg.go.dev ↗</a>
 
         </div>
         <div class="mt-6 text-xs text-zinc-500 dark:text-zinc-400" data-i18n="hero.meta">Apache-2.0 • Go 1.22+ • UTCP-ready</div>
@@ -127,7 +127,7 @@ lattice&gt; summarize recent notes in team:core</code></pre>
       <p class="mt-3 text-zinc-600 dark:text-zinc-300" data-i18n="qs.lead">Szybki start: klon, deps, klucz API, demo.</p>
     </div>
     <div class="mt-8 relative max-w-3xl mx-auto">
-<pre class="rounded-2xl bg-zinc-900 text-zinc-100 p-6 overflow-x-auto text-sm shadow-xl border border-zinc-800"><code id="qsCode">git clone https://github.com/Protocol-Lattice/agent.git
+<pre class="rounded-2xl bg-zinc-900 text-zinc-100 p-6 overflow-x-auto text-sm shadow-xl border border-zinc-800"><code id="qsCode">git clone https://github.com/Protocol-Lattice/go-agent.git
 cd lattice-agent
 go mod download
 
@@ -157,10 +157,10 @@ import (
   "context"
   "log"
 
-  "github.com/Protocol-Lattice/agent/core/adk"
-  adkmodules "github.com/Protocol-Lattice/agent/core/adk/modules"
-  "github.com/Protocol-Lattice/agent/core/models"
-  "github.com/Protocol-Lattice/agent/core/tools"
+  "github.com/Protocol-Lattice/go-agent/src/adk"
+  adkmodules "github.com/Protocol-Lattice/go-agent/src/adk/modules"
+  "github.com/Protocol-Lattice/go-agent/src/models"
+  "github.com/Protocol-Lattice/go-agent/src/tools"
 )
 
 func main() {
@@ -410,7 +410,7 @@ func main() {
       const go = document.getElementById('goCode');
       if (qs) {
         qs.textContent = lang === 'en'
-          ? `git clone https://github.com/Protocol-Lattice/agent.git
+          ? `git clone https://github.com/Protocol-Lattice/go-agent.git
 cd lattice-agent
 go mod download
 
@@ -423,7 +423,7 @@ source ~/.bashrc
 
 # demo
 go run ./cmd/quickstart`
-          : `git clone https://github.com/Protocol-Lattice/agent.git
+          : `git clone https://github.com/Protocol-Lattice/go-agent.git
 cd lattice-agent
 go mod download
 
@@ -445,10 +445,10 @@ import (
   "context"
   "log"
 
-  "github.com/Protocol-Lattice/agent/core/adk"
-  adkmodules "github.com/Protocol-Lattice/agent/core/adk/modules"
-  "github.com/Protocol-Lattice/agent/core/models"
-  "github.com/Protocol-Lattice/agent/core/tools"
+  "github.com/Protocol-Lattice/go-agent/src/adk"
+  adkmodules "github.com/Protocol-Lattice/go-agent/src/adk/modules"
+  "github.com/Protocol-Lattice/go-agent/src/models"
+  "github.com/Protocol-Lattice/go-agent/src/tools"
 )
 
 func main() {
@@ -482,10 +482,10 @@ import (
   "context"
   "log"
 
-  "github.com/Protocol-Lattice/agent/core/adk"
-  adkmodules "github.com/Protocol-Lattice/agent/core/adk/modules"
-  "github.com/Protocol-Lattice/agent/core/models"
-  "github.com/Protocol-Lattice/agent/core/tools"
+  "github.com/Protocol-Lattice/go-agent/src/adk"
+  adkmodules "github.com/Protocol-Lattice/go-agent/src/adk/modules"
+  "github.com/Protocol-Lattice/go-agent/src/models"
+  "github.com/Protocol-Lattice/go-agent/src/tools"
 )
 
 func main() {
