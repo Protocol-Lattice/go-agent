@@ -337,6 +337,132 @@ func TestInPostgresMemorySuccess(t *testing.T) {
 	}
 }
 
+func TestInMongoMemoryCachesError(t *testing.T) {
+	original := newMongoStore
+	defer func() { newMongoStore = original }()
+
+	var calls int32
+	newMongoStore = func(context.Context, string, string, string) (*store.MongoStore, error) {
+		atomic.AddInt32(&calls, 1)
+		return nil, errors.New("connect failed")
+	}
+
+	opts := memory.DefaultOptions()
+	module := InMongoMemory(context.Background(), 4, "mongodb://invalid", "db", "collection", memory.DummyEmbedder{}, &opts)
+	provider := module.provider
+
+	if _, err := provider(context.Background()); err == nil {
+		t.Fatalf("expected error on first call")
+	}
+	if _, err := provider(context.Background()); err == nil {
+		t.Fatalf("expected cached error on second call")
+	}
+	if calls != 1 {
+		t.Fatalf("expected single attempt to create store, got %d", calls)
+	}
+}
+
+func TestInMongoMemorySuccess(t *testing.T) {
+	originalStore := newMongoStore
+	originalBank := newMemoryBankWithStore
+	originalSession := newSessionMemory
+
+	defer func() {
+		newMongoStore = originalStore
+		newMemoryBankWithStore = originalBank
+		newSessionMemory = originalSession
+	}()
+
+	fakeStore := &stubSchemaStore{}
+	newMongoStore = func(context.Context, string, string, string) (*store.MongoStore, error) {
+		return nil, nil
+	}
+
+	newMemoryBankWithStore = func(store.VectorStore) *memory.MemoryBank {
+		return memory.NewMemoryBankWithStore(fakeStore)
+	}
+
+	newSessionMemory = func(bank *memory.MemoryBank, size int) *memory.SessionMemory {
+		return memory.NewSessionMemory(bank, size)
+	}
+
+	opts := memory.DefaultOptions()
+	module := InMongoMemory(context.Background(), 0, "", "", "", memory.DummyEmbedder{}, &opts)
+	bundle, err := module.provider(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if bundle.Session == nil {
+		t.Fatalf("expected session memory")
+	}
+	shared := bundle.Shared("local")
+	if shared == nil {
+		t.Fatalf("expected shared session")
+	}
+
+	cached, err := module.provider(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error on cached provider: %v", err)
+	}
+	if cached.Session != bundle.Session {
+		t.Fatalf("expected cached session to be reused")
+	}
+}
+
+func TestInNeo4jMemoryNilFactory(t *testing.T) {
+	opts := memory.DefaultOptions()
+	module := InNeo4jMemory(context.Background(), 4, nil, memory.DummyEmbedder{}, &opts)
+	provider := module.provider
+
+	if _, err := provider(context.Background()); err == nil {
+		t.Fatalf("expected error when factory is nil")
+	}
+	if _, err := provider(context.Background()); err == nil {
+		t.Fatalf("expected cached error when factory is nil")
+	}
+}
+
+func TestInNeo4jMemoryNilStore(t *testing.T) {
+	opts := memory.DefaultOptions()
+	module := InNeo4jMemory(context.Background(), 4, func(context.Context) (*memory.Neo4jStore, error) {
+		return nil, nil
+	}, memory.DummyEmbedder{}, &opts)
+	provider := module.provider
+
+	if _, err := provider(context.Background()); err == nil {
+		t.Fatalf("expected error when store is nil")
+	}
+	if _, err := provider(context.Background()); err == nil {
+		t.Fatalf("expected cached error when store is nil")
+	}
+}
+
+func TestInNeo4jMemorySuccess(t *testing.T) {
+	opts := memory.DefaultOptions()
+	module := InNeo4jMemory(context.Background(), 0, func(context.Context) (*memory.Neo4jStore, error) {
+		return &memory.Neo4jStore{}, nil
+	}, memory.DummyEmbedder{}, &opts)
+	bundle, err := module.provider(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if bundle.Session == nil {
+		t.Fatalf("expected session memory")
+	}
+	shared := bundle.Shared("local")
+	if shared == nil {
+		t.Fatalf("expected shared session")
+	}
+
+	cached, err := module.provider(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error on cached provider: %v", err)
+	}
+	if cached.Session != bundle.Session {
+		t.Fatalf("expected cached session to be reused")
+	}
+}
+
 func TestMemoryModuleProvision(t *testing.T) {
 	module := NewMemoryModule("", nil)
 	if module.Name() != "memory" {

@@ -2,12 +2,14 @@ package modules
 
 import (
 	"context"
+	"errors"
 	"log"
 	"os"
 
 	agent "github.com/Protocol-Lattice/go-agent"
 	kit "github.com/Protocol-Lattice/go-agent/src/adk"
 	"github.com/Protocol-Lattice/go-agent/src/memory"
+	memorystore "github.com/Protocol-Lattice/go-agent/src/memory/store"
 	"github.com/Protocol-Lattice/go-agent/src/models"
 )
 
@@ -17,6 +19,7 @@ var (
 	newEngine              = memory.NewEngine
 	newSharedSession       = memory.NewSharedSession
 	newPostgresStore       = memory.NewPostgresStore
+	newMongoStore          = memorystore.NewMongoStore
 )
 
 // StaticModelProvider returns a provider that always yields the supplied model.
@@ -121,6 +124,90 @@ func InPostgresMemory(ctx context.Context, window int, connStr string, embeeder 
 		return kit.MemoryBundle{Session: cached, Shared: shared}, nil
 	}
 	return NewMemoryModule("postgres", provider)
+}
+
+func InMongoMemory(ctx context.Context, window int, uri, database, collection string, embeeder memory.Embedder, opts *memory.Options) *MemoryModule {
+	var (
+		cached    *memory.SessionMemory
+		cachedErr error
+	)
+
+	provider := func(context.Context) (kit.MemoryBundle, error) {
+		if cached == nil && cachedErr == nil {
+			ms, err := newMongoStore(ctx, uri, database, collection)
+			if err != nil {
+				cachedErr = err
+				return kit.MemoryBundle{}, err
+			}
+			bank := newMemoryBankWithStore(ms)
+			size := window
+			if size <= 0 {
+				size = 8
+			}
+			mem := newSessionMemory(bank, size)
+			mem.WithEmbedder(embeeder)
+			engine := newEngine(bank.Store, *opts)
+			mem.WithEngine(engine)
+			engineLogger := log.New(os.Stderr, "memory-engine: ", log.LstdFlags)
+			mem.Engine.WithLogger(engineLogger)
+			cached = mem
+		}
+		if cached == nil {
+			return kit.MemoryBundle{}, cachedErr
+		}
+		shared := func(local string, spaces ...string) *memory.SharedSession {
+			return newSharedSession(cached, local, spaces...)
+		}
+		return kit.MemoryBundle{Session: cached, Shared: shared}, nil
+	}
+
+	return NewMemoryModule("mongo", provider)
+}
+
+func InNeo4jMemory(ctx context.Context, window int, factory func(context.Context) (*memory.Neo4jStore, error), embeeder memory.Embedder, opts *memory.Options) *MemoryModule {
+	var (
+		cached    *memory.SessionMemory
+		cachedErr error
+	)
+
+	provider := func(context.Context) (kit.MemoryBundle, error) {
+		if cached == nil && cachedErr == nil {
+			if factory == nil {
+				cachedErr = errors.New("neo4j store factory is nil")
+				return kit.MemoryBundle{}, cachedErr
+			}
+			store, err := factory(ctx)
+			if err != nil {
+				cachedErr = err
+				return kit.MemoryBundle{}, err
+			}
+			if store == nil {
+				cachedErr = errors.New("neo4j store is nil")
+				return kit.MemoryBundle{}, cachedErr
+			}
+			bank := newMemoryBankWithStore(store)
+			size := window
+			if size <= 0 {
+				size = 8
+			}
+			mem := newSessionMemory(bank, size)
+			mem.WithEmbedder(embeeder)
+			engine := newEngine(bank.Store, *opts)
+			mem.WithEngine(engine)
+			engineLogger := log.New(os.Stderr, "memory-engine: ", log.LstdFlags)
+			mem.Engine.WithLogger(engineLogger)
+			cached = mem
+		}
+		if cached == nil {
+			return kit.MemoryBundle{}, cachedErr
+		}
+		shared := func(local string, spaces ...string) *memory.SharedSession {
+			return newSharedSession(cached, local, spaces...)
+		}
+		return kit.MemoryBundle{Session: cached, Shared: shared}, nil
+	}
+
+	return NewMemoryModule("neo4j", provider)
 }
 
 // StaticToolProvider wraps a fixed tool slice and optional catalog into a
