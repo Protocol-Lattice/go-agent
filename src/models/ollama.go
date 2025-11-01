@@ -1,8 +1,10 @@
 package models
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -19,6 +21,8 @@ type OllamaLLM struct {
 	Client       *ollama.Client
 	Model        string
 	PromptPrefix string
+	httpClient   *http.Client
+	host         string
 }
 
 func NewOllamaLLM(model string, promptPrefix string) (*OllamaLLM, error) {
@@ -37,7 +41,13 @@ func NewOllamaLLM(model string, promptPrefix string) (*OllamaLLM, error) {
 	}
 
 	c := ollama.NewClient(u, httpClient)
-	return &OllamaLLM{Client: c, Model: model, PromptPrefix: promptPrefix}, nil
+	return &OllamaLLM{
+		Client:       c,
+		Model:        model,
+		PromptPrefix: promptPrefix,
+		httpClient:   httpClient,
+		host:         host,
+	}, nil
 }
 
 func (o *OllamaLLM) Generate(ctx context.Context, prompt string) (any, error) {
@@ -134,4 +144,46 @@ func (o *OllamaLLM) GenerateWithFiles(ctx context.Context, prompt string, files 
 		Done:       last.Done,
 		DoneReason: last.DoneReason,
 	}, nil
+}
+
+// WebSearch queries the Ollama Web Search API and returns top results.
+func (o *OllamaLLM) WebSearch(ctx context.Context, query string, limit int) ([]map[string]string, error) {
+	endpoint := fmt.Sprintf("%s/api/web_search", strings.TrimRight(o.host, "/"))
+
+	reqBody := map[string]any{"query": query}
+	if limit > 0 {
+		reqBody["limit"] = limit
+	}
+	buf := new(bytes.Buffer)
+	if err := json.NewEncoder(buf).Encode(reqBody); err != nil {
+		return nil, fmt.Errorf("encode request: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, buf)
+	if err != nil {
+		return nil, fmt.Errorf("new request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if key := os.Getenv("OLLAMA_API_KEY"); key != "" {
+		req.Header.Set("Authorization", "Bearer "+key)
+	}
+
+	resp, err := o.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("http request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("web search failed: %s", resp.Status)
+	}
+
+	var data struct {
+		Results []map[string]string `json:"results"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		return nil, fmt.Errorf("decode response: %w", err)
+	}
+
+	return data.Results, nil
 }
