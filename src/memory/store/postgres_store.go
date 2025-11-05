@@ -3,7 +3,6 @@ package store
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"fmt"
 	"os"
 	"sort"
@@ -15,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/Protocol-Lattice/go-agent/src/memory/model"
+	json "github.com/alpkeskin/gotoon"
 )
 
 // PostgresStore implements VectorStore using Postgres + pgvector.

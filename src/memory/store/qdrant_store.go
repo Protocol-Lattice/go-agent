@@ -3,7 +3,6 @@ package store
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -18,6 +17,7 @@ import (
 	"time"
 
 	"github.com/Protocol-Lattice/go-agent/src/memory/model"
+	json "github.com/alpkeskin/gotoon"
 )
 
 // --- Qdrant types ---

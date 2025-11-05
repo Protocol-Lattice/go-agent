@@ -3,7 +3,6 @@ package runtime
 import (
 	"context"
 	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
@@ -14,6 +13,7 @@ import (
 
 	"github.com/Protocol-Lattice/go-agent/src/memory"
 	"github.com/Protocol-Lattice/go-agent/src/models"
+	json "github.com/alpkeskin/gotoon"
 	"github.com/universal-tool-calling-protocol/go-utcp"
 )
 

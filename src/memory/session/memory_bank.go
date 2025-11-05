@@ -2,7 +2,6 @@ package session
 
 import (
 	"context"
-	"encoding/json"
 	"io"
 	"sync"
 
@@ -10,6 +9,7 @@ import (
 	memengine "github.com/Protocol-Lattice/go-agent/src/memory/engine"
 	"github.com/Protocol-Lattice/go-agent/src/memory/model"
 	"github.com/Protocol-Lattice/go-agent/src/memory/store"
+	json "github.com/alpkeskin/gotoon"
 )
 
 // MemoryBank is a thin wrapper around a VectorStore implementation.

@@ -1,7 +1,7 @@
 package model
 
 import (
-	"encoding/json"
+	json "github.com/alpkeskin/gotoon"
 	"time"
 )
 

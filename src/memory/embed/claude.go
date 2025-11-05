@@ -3,13 +3,14 @@ package embed
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"time"
+
+	json "github.com/alpkeskin/gotoon"
 )
 
 // ClaudeEmbedder proxies to Anthropic-recommended Voyage AI embeddings.

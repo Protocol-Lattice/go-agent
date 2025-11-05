@@ -3,12 +3,12 @@ package runtime
 import (
 	"context"
 	"encoding/base64"
-	"encoding/json"
 	"strings"
 	"testing"
 
 	"github.com/Protocol-Lattice/go-agent/src/memory"
 	"github.com/Protocol-Lattice/go-agent/src/models"
+	json "github.com/alpkeskin/gotoon"
 )
 
 type stubModel struct {

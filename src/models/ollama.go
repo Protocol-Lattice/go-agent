@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -12,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	json "github.com/alpkeskin/gotoon"
 	ollama "github.com/ollama/ollama/api" // <- correct import
 )
 

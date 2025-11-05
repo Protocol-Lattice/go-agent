@@ -19,7 +19,6 @@ package main
 import (
 	"bufio"
 	"context"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -39,6 +38,7 @@ import (
 	"github.com/Protocol-Lattice/go-agent/src/memory/engine"
 	"github.com/Protocol-Lattice/go-agent/src/models"
 	"github.com/Protocol-Lattice/go-agent/src/tools"
+	json "github.com/alpkeskin/gotoon"
 )
 
 var (

@@ -1,9 +1,9 @@
 package model
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
+	json "github.com/alpkeskin/gotoon"
 	"strconv"
 )
 

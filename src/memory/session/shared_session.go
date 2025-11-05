@@ -2,13 +2,13 @@ package session
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"sort"
 	"strings"
 	"sync"
 
 	"github.com/Protocol-Lattice/go-agent/src/memory/model"
+	json "github.com/alpkeskin/gotoon"
 )
 
 // SharedSession layers on top of SessionMemory to let multiple agents

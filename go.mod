@@ -3,17 +3,20 @@ module github.com/Protocol-Lattice/go-agent
 go 1.25.0
 
 require (
-	github.com/anthropics/anthropic-sdk-go v1.13.0
-	github.com/anush008/fastembed-go v1.0.0
-	github.com/google/generative-ai-go v0.20.1
-	github.com/jackc/pgx/v5 v5.7.6
-	github.com/neo4j/neo4j-go-driver/v5 v5.28.4
-	github.com/ollama/ollama v0.12.5
-	github.com/sashabaranov/go-openai v1.41.2
-	github.com/universal-tool-calling-protocol/go-utcp v1.7.1
-	go.mongodb.org/mongo-driver v1.13.1
-	google.golang.org/api v0.252.0
+        github.com/alpkeskin/gotoon v0.0.0
+        github.com/anthropics/anthropic-sdk-go v1.13.0
+        github.com/anush008/fastembed-go v1.0.0
+        github.com/google/generative-ai-go v0.20.1
+        github.com/jackc/pgx/v5 v5.7.6
+        github.com/neo4j/neo4j-go-driver/v5 v5.28.4
+        github.com/ollama/ollama v0.12.5
+        github.com/sashabaranov/go-openai v1.41.2
+        github.com/universal-tool-calling-protocol/go-utcp v1.7.1
+        go.mongodb.org/mongo-driver v1.13.1
+        google.golang.org/api v0.252.0
 )
+
+replace github.com/alpkeskin/gotoon => ./third_party/gotoon
 
 require (
 	cloud.google.com/go v0.115.0 // indirect

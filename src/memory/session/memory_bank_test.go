@@ -2,7 +2,6 @@ package session
 
 import (
 	"context"
-	"encoding/json"
 	"sync"
 	"testing"
 	"time"
@@ -10,6 +9,7 @@ import (
 	"github.com/Protocol-Lattice/go-agent/src/memory/embed"
 	"github.com/Protocol-Lattice/go-agent/src/memory/model"
 	"github.com/Protocol-Lattice/go-agent/src/memory/store"
+	json "github.com/alpkeskin/gotoon"
 )
 
 type stubVectorStore struct {
