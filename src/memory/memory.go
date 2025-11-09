@@ -37,6 +37,7 @@ type (
 	PostgresStore           = storepkg.PostgresStore
 	QdrantStore             = storepkg.QdrantStore
 	Neo4jStore              = storepkg.Neo4jStore
+	MongoStore              = storepkg.MongoStore
 	Distance                = storepkg.Distance
 	CreateCollectionRequest = storepkg.CreateCollectionRequest
 
@@ -77,4 +78,5 @@ var (
 	NewPostgresStore = storepkg.NewPostgresStore
 	NewQdrantStore   = storepkg.NewQdrantStore
 	NewNeo4jStore    = storepkg.NewNeo4jStore
+	NewMongoStore    = storepkg.NewMongoStore
 )
