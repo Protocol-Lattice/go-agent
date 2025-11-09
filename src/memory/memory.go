@@ -1,6 +1,8 @@
 package memory
 
 import (
+	"strings"
+
 	embedpkg "github.com/Protocol-Lattice/go-agent/src/memory/embed"
 	memengine "github.com/Protocol-Lattice/go-agent/src/memory/engine"
 	"github.com/Protocol-Lattice/go-agent/src/memory/model"
@@ -80,3 +82,35 @@ var (
 	NewNeo4jStore    = storepkg.NewNeo4jStore
 	NewMongoStore    = storepkg.NewMongoStore
 )
+
+// ChunkText splits long text into roughly `chunkSize` rune segments
+// along line or paragraph boundaries for better embedding quality.
+func ChunkText(text string, chunkSize int) []string {
+	if chunkSize <= 0 {
+		chunkSize = 2000
+	}
+
+	lines := strings.Split(text, "\n")
+	var (
+		chunks []string
+		buf    strings.Builder
+		size   int
+	)
+	for _, line := range lines {
+		if size+len(line) > chunkSize {
+			chunks = append(chunks, buf.String())
+			buf.Reset()
+			size = 0
+		}
+		buf.WriteString(line)
+		buf.WriteString("\n")
+		size += len(line)
+	}
+	if buf.Len() > 0 {
+		chunks = append(chunks, buf.String())
+	}
+	if len(chunks) == 0 {
+		chunks = []string{text}
+	}
+	return chunks
+}
