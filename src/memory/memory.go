@@ -74,6 +74,7 @@ var (
 	NewOpenAIEmbedder   = embedpkg.NewOpenAIEmbedder
 	NewVertexAIEmbedder = embedpkg.NewVertexAIEmbedder
 	NewOllamaEmbedder   = embedpkg.NewOllamaEmbedder
+	NewFastEmbeed       = embedpkg.NewFastEmbeed
 	NewClaudeEmbedder   = embedpkg.NewClaudeEmbedder
 
 	NewInMemoryStore = storepkg.NewInMemoryStore

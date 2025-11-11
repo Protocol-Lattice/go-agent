@@ -62,23 +62,6 @@ func AutoEmbedder() Embedder {
 		}
 	}
 
-	// Heuristics when ADK_EMBED_PROVIDER not specified:
-	if os.Getenv("OPENAI_API_KEY") != "" || os.Getenv("OPENAI_KEY") != "" {
-		if e, err := NewOpenAIEmbedder(model); err == nil {
-			return e
-		}
-	}
-	if os.Getenv("GOOGLE_API_KEY") != "" || os.Getenv("GEMINI_API_KEY") != "" {
-		if e, err := NewVertexAIEmbedder(model); err == nil {
-			return e
-		}
-	}
-	if os.Getenv("OLLAMA_HOST") != "" {
-		if e, err := NewOllamaEmbedder(model); err == nil {
-			return e
-		}
-	}
-
 	log.Printf("AutoEmbedder: falling back to DummyEmbedder")
 	return DummyEmbedder{}
 }
