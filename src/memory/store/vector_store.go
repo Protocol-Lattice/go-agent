@@ -10,7 +10,7 @@ import (
 // VectorStore defines the contract for long-term memory backends.
 type VectorStore interface {
 	StoreMemory(ctx context.Context, sessionID, content string, metadata map[string]any, embedding []float32) error
-	SearchMemory(ctx context.Context, queryEmbedding []float32, limit int) ([]model.MemoryRecord, error)
+	SearchMemory(ctx context.Context, sessionID string, queryEmbedding []float32, limit int) ([]model.MemoryRecord, error)
 	UpdateEmbedding(ctx context.Context, id int64, embedding []float32, lastEmbedded time.Time) error
 	DeleteMemory(ctx context.Context, ids []int64) error
 	Iterate(ctx context.Context, fn func(model.MemoryRecord) bool) error

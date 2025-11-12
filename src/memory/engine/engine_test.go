@@ -32,7 +32,7 @@ func TestEngineWeightedRetrievalAndSummaries(t *testing.T) {
 		t.Fatalf("store low priority memory: %v", err)
 	}
 
-	records, err := engine.Retrieve(ctx, "production issue", 2)
+	records, err := engine.Retrieve(ctx, "team", "production issue", 2)
 	if err != nil {
 		t.Fatalf("retrieve: %v", err)
 	}
@@ -115,7 +115,7 @@ func TestEngineHybridKeywordBoost(t *testing.T) {
 		t.Fatalf("store incident memory: %v", err)
 	}
 
-	records, err := engine.Retrieve(ctx, "SAML login failure escalation", 2)
+	records, err := engine.Retrieve(ctx, "team", "SAML login failure escalation", 2)
 	if err != nil {
 		t.Fatalf("retrieve: %v", err)
 	}
@@ -146,7 +146,7 @@ func TestEngineReembedOnDrift(t *testing.T) {
 		t.Fatalf("update embedding: %v", err)
 	}
 
-	if _, err := engine.Retrieve(ctx, "latency", 1); err != nil {
+	if _, err := engine.Retrieve(ctx, "beta", "latency", 1); err != nil {
 		t.Fatalf("retrieve: %v", err)
 	}
 	snap := engine.MetricsSnapshot()

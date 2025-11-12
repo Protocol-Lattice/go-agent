@@ -105,7 +105,7 @@ func (sm *SessionMemory) Embed(ctx context.Context, text string) ([]float32, err
 func (sm *SessionMemory) RetrieveContext(ctx context.Context, sessionID, query string, limit int) ([]model.MemoryRecord, error) {
 	var longTerm []model.MemoryRecord
 	if sm.Engine != nil {
-		records, err := sm.Engine.Retrieve(ctx, query, limit)
+		records, err := sm.Engine.Retrieve(ctx, sessionID, query, limit)
 		if err != nil {
 			return nil, err
 		}
@@ -115,7 +115,7 @@ func (sm *SessionMemory) RetrieveContext(ctx context.Context, sessionID, query s
 		if err != nil {
 			return nil, err
 		}
-		records, err := sm.Bank.SearchMemory(ctx, queryEmbedding, limit)
+		records, err := sm.Bank.SearchMemory(ctx, sessionID, queryEmbedding, limit)
 		if err != nil {
 			return nil, err
 		}
@@ -159,11 +159,11 @@ func (mb *MemoryBank) StoreMemory(ctx context.Context, sessionID, content, metad
 }
 
 // SearchMemory returns top-k similar memories
-func (mb *MemoryBank) SearchMemory(ctx context.Context, queryEmbedding []float32, limit int) ([]model.MemoryRecord, error) {
+func (mb *MemoryBank) SearchMemory(ctx context.Context, sessionID string, queryEmbedding []float32, limit int) ([]model.MemoryRecord, error) {
 	if mb == nil || mb.Store == nil {
 		return nil, nil
 	}
-	return mb.Store.SearchMemory(ctx, queryEmbedding, limit)
+	return mb.Store.SearchMemory(ctx, sessionID, queryEmbedding, limit)
 }
 
 // CreateSchema initialises the backing store if it supports schema management.

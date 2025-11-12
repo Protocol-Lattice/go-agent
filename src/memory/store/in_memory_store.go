@@ -65,7 +65,7 @@ func (s *InMemoryStore) StoreMemory(_ context.Context, sessionID, content string
 	return nil
 }
 
-func (s *InMemoryStore) SearchMemory(_ context.Context, queryEmbedding []float32, limit int) ([]model.MemoryRecord, error) {
+func (s *InMemoryStore) SearchMemory(_ context.Context, sessionID string, queryEmbedding []float32, limit int) ([]model.MemoryRecord, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if limit <= 0 {
@@ -77,6 +77,9 @@ func (s *InMemoryStore) SearchMemory(_ context.Context, queryEmbedding []float32
 	}
 	scoredRecords := make([]scored, 0, len(s.records))
 	for _, rec := range s.records {
+		if sessionID != "" && rec.SessionID != sessionID {
+			continue
+		}
 		score := model.MaxCosineSimilarity(queryEmbedding, rec)
 		rec.Score = score
 		scoredRecords = append(scoredRecords, scored{rec: rec, score: score})

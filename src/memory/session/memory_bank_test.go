@@ -48,7 +48,7 @@ func (s *stubVectorStore) StoreMemory(_ context.Context, sessionID, content stri
 	return nil
 }
 
-func (s *stubVectorStore) SearchMemory(_ context.Context, _ []float32, _ int) ([]model.MemoryRecord, error) {
+func (s *stubVectorStore) SearchMemory(_ context.Context, _ string, _ []float32, _ int) ([]model.MemoryRecord, error) {
 	if s.searchErr != nil {
 		return nil, s.searchErr
 	}
@@ -107,11 +107,11 @@ func TestMemoryBankStoreMemoryRespectsProvidedSpace(t *testing.T) {
 
 func TestMemoryBankSearchMemoryNilStore(t *testing.T) {
 	var bank *MemoryBank
-	if results, err := bank.SearchMemory(context.Background(), nil, 5); err != nil || results != nil {
+	if results, err := bank.SearchMemory(context.Background(), "s1", nil, 5); err != nil || results != nil {
 		t.Fatalf("expected nil results and no error, got %v, %v", results, err)
 	}
 	bank = &MemoryBank{}
-	if results, err := bank.SearchMemory(context.Background(), nil, 5); err != nil || results != nil {
+	if results, err := bank.SearchMemory(context.Background(), "s1", nil, 5); err != nil || results != nil {
 		t.Fatalf("expected nil results and no error, got %v, %v", results, err)
 	}
 }

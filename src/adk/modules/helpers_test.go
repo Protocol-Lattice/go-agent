@@ -46,7 +46,7 @@ func (stubVectorStore) StoreMemory(context.Context, string, string, map[string]a
 	return nil
 }
 
-func (stubVectorStore) SearchMemory(context.Context, []float32, int) ([]model.MemoryRecord, error) {
+func (stubVectorStore) SearchMemory(context.Context, string, []float32, int) ([]model.MemoryRecord, error) {
 	return nil, nil
 }
 

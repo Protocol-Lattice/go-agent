@@ -93,17 +93,24 @@ func (ps *PostgresStore) StoreMemory(ctx context.Context, sessionID, content str
 }
 
 // SearchMemory returns top-k similar memories from Postgres.
-func (ps *PostgresStore) SearchMemory(ctx context.Context, queryEmbedding []float32, limit int) ([]model.MemoryRecord, error) {
+func (ps *PostgresStore) SearchMemory(ctx context.Context, sessionID string, queryEmbedding []float32, limit int) ([]model.MemoryRecord, error) {
 	if ps == nil || ps.DB == nil {
 		return nil, nil
 	}
 	jsonEmbed, _ := json.Marshal(queryEmbedding)
-	rows, err := ps.DB.Query(ctx, `
+	query := `
         SELECT id, session_id, content, metadata::text, importance, source, summary, created_at, last_embedded, embedding::text, embedding_matrix::text, (embedding <-> $1::vector) AS score
         FROM memory_bank
-        ORDER BY embedding <-> $1::vector
-        LIMIT $2;
-        `, vectorFromJSON(jsonEmbed), limit)
+        `
+	args := []any{vectorFromJSON(jsonEmbed)}
+	if sessionID != "" {
+		query += " WHERE session_id = $" + strconv.Itoa(len(args)+1)
+		args = append(args, sessionID)
+	}
+	query += " ORDER BY embedding <-> $1::vector LIMIT $" + strconv.Itoa(len(args)+1)
+	args = append(args, limit)
+
+	rows, err := ps.DB.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}

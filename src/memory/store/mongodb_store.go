@@ -105,11 +105,15 @@ func (ms *MongoStore) StoreMemory(ctx context.Context, sessionID, content string
 	return err
 }
 
-func (ms *MongoStore) SearchMemory(ctx context.Context, queryEmbedding []float32, limit int) ([]model.MemoryRecord, error) {
+func (ms *MongoStore) SearchMemory(ctx context.Context, sessionID string, queryEmbedding []float32, limit int) ([]model.MemoryRecord, error) {
 	if ms == nil || ms.collection == nil || limit <= 0 {
 		return nil, nil
 	}
-	cursor, err := ms.collection.Find(ctx, bson.M{})
+	filter := bson.M{}
+	if sessionID != "" {
+		filter["session_id"] = sessionID
+	}
+	cursor, err := ms.collection.Find(ctx, filter)
 	if err != nil {
 		return nil, err
 	}

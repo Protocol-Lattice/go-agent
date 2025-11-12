@@ -110,7 +110,7 @@ func (e *Engine) Store(ctx context.Context, sessionID, content string, metadata 
 	importance := importanceScore(content, metadata)
 	metadata["importance"] = importance
 	// Deduplication based on cosine similarity.
-	candidates, err := e.store.SearchMemory(ctx, embedding, 5)
+	candidates, err := e.store.SearchMemory(ctx, sessionID, embedding, 5)
 	if err != nil {
 		return model.MemoryRecord{}, err
 	}
@@ -145,7 +145,7 @@ func (e *Engine) Store(ctx context.Context, sessionID, content string, metadata 
 		return model.MemoryRecord{}, err
 	}
 	stored := newRecord
-	if results, err := e.store.SearchMemory(ctx, embedding, 1); err == nil && len(results) > 0 {
+	if results, err := e.store.SearchMemory(ctx, sessionID, embedding, 1); err == nil && len(results) > 0 {
 		stored = results[0]
 	}
 	if stored.Space == "" {
@@ -170,7 +170,7 @@ func (e *Engine) Store(ctx context.Context, sessionID, content string, metadata 
 }
 
 // Retrieve performs weighted retrieval with MMR diversification and optional re-embedding.
-func (e *Engine) Retrieve(ctx context.Context, query string, limit int) ([]model.MemoryRecord, error) {
+func (e *Engine) Retrieve(ctx context.Context, sessionID, query string, limit int) ([]model.MemoryRecord, error) {
 	if e.store == nil {
 		return nil, errors.New("memory engine has no store")
 	}
@@ -186,7 +186,7 @@ func (e *Engine) Retrieve(ctx context.Context, query string, limit int) ([]model
 	if searchLimit < limit {
 		searchLimit = limit
 	}
-	candidates, err := e.store.SearchMemory(ctx, embedding, searchLimit)
+	candidates, err := e.store.SearchMemory(ctx, sessionID, embedding, searchLimit)
 	if err != nil {
 		return nil, err
 	}

@@ -95,8 +95,8 @@ func (s *Neo4jStore) StoreMemory(ctx context.Context, sessionID, content string,
 }
 
 // SearchMemory forwards the call to the underlying vector store.
-func (s *Neo4jStore) SearchMemory(ctx context.Context, queryEmbedding []float32, limit int) ([]model.MemoryRecord, error) {
-	return s.base.SearchMemory(ctx, queryEmbedding, limit)
+func (s *Neo4jStore) SearchMemory(ctx context.Context, sessionID string, queryEmbedding []float32, limit int) ([]model.MemoryRecord, error) {
+	return s.base.SearchMemory(ctx, sessionID, queryEmbedding, limit)
 }
 
 // UpdateEmbedding forwards the call to the underlying vector store.

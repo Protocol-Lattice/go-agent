@@ -23,7 +23,7 @@ func BenchmarkEngineRetrieve(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if _, err := engine.Retrieve(ctx, "system design", 5); err != nil {
+		if _, err := engine.Retrieve(ctx, "bench", "system design", 5); err != nil {
 			b.Fatalf("retrieve: %v", err)
 		}
 	}

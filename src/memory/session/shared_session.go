@@ -285,7 +285,7 @@ func (ss *SharedSession) retrieve(ctx context.Context, query string, limit int, 
 	}
 	var long []model.MemoryRecord
 	if ss.base.Engine != nil {
-		recs, err := ss.base.Engine.Retrieve(ctx, query, oversample)
+		recs, err := ss.base.Engine.Retrieve(ctx, "", query, oversample)
 		if err != nil {
 			return nil, err
 		}
@@ -299,7 +299,7 @@ func (ss *SharedSession) retrieve(ctx context.Context, query string, limit int, 
 		if err != nil {
 			return nil, err
 		}
-		recs, err := ss.base.Bank.SearchMemory(ctx, emb, oversample)
+		recs, err := ss.base.Bank.SearchMemory(ctx, "", emb, oversample)
 		if err != nil {
 			return nil, err
 		}

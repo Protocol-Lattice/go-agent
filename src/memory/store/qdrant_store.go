@@ -298,7 +298,7 @@ func (qs *QdrantStore) StoreMemory(ctx context.Context, sessionID, content strin
 }
 
 // SearchMemory performs a similarity search.
-func (qs *QdrantStore) SearchMemory(ctx context.Context, queryEmbedding []float32, limit int) ([]model.MemoryRecord, error) {
+func (qs *QdrantStore) SearchMemory(ctx context.Context, sessionID string, queryEmbedding []float32, limit int) ([]model.MemoryRecord, error) {
 	if qs == nil {
 		return nil, errors.New("nil qdrant store")
 	}
@@ -310,6 +310,13 @@ func (qs *QdrantStore) SearchMemory(ctx context.Context, queryEmbedding []float3
 		"limit":        limit,
 		"with_vector":  true,
 		"with_payload": true,
+	}
+	if sessionID != "" {
+		reqBody["filter"] = map[string]any{
+			"must": []map[string]any{
+				{"key": "session_id", "match": map[string]any{"value": sessionID}},
+			},
+		}
 	}
 	var resp qdrantEnvelope[[]qdrantPointResult]
 	if err := qs.do(ctx, http.MethodPost, fmt.Sprintf("/collections/%s/points/search", url.PathEscape(qs.collection)), reqBody, &resp); err != nil {
