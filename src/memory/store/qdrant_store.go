@@ -312,10 +312,9 @@ func (qs *QdrantStore) SearchMemory(ctx context.Context, sessionID string, query
 		"with_payload": true,
 	}
 	if sessionID != "" {
+		// Add session ID filter to the request body
 		reqBody["filter"] = map[string]any{
-			"must": []map[string]any{
-				{"key": "session_id", "match": map[string]any{"value": sessionID}},
-			},
+			"must": []map[string]any{{"key": "session_id", "match": map[string]any{"value": sessionID}}},
 		}
 	}
 	var resp qdrantEnvelope[[]qdrantPointResult]

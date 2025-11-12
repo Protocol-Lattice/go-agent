@@ -3,7 +3,6 @@ package store
 import (
 	"context"
 	"errors"
-	"sort"
 	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
@@ -109,40 +108,48 @@ func (ms *MongoStore) SearchMemory(ctx context.Context, sessionID string, queryE
 	if ms == nil || ms.collection == nil || limit <= 0 {
 		return nil, nil
 	}
-	filter := bson.M{}
-	if sessionID != "" {
-		filter["session_id"] = sessionID
+
+	// Use $vectorSearch for efficient similarity search in MongoDB Atlas.
+	pipeline := mongo.Pipeline{
+		{
+			{"$vectorSearch", bson.D{
+				{"index", "vector_index"},
+				{"path", "embedding"},
+				{"queryVector", float64Embedding(queryEmbedding)},
+				{"numCandidates", int64(limit * 10)}, // Oversample for better accuracy
+				{"limit", int64(limit)},
+			}},
+		},
+		{
+			{"$addFields", bson.D{
+				{"score", bson.D{{"$meta", "vectorSearchScore"}}},
+			}},
+		},
 	}
-	cursor, err := ms.collection.Find(ctx, filter)
+
+	// Add a $match stage if sessionID is provided.
+	if sessionID != "" {
+		pipeline = append(pipeline, bson.D{{"$match", bson.D{{"session_id", sessionID}}}})
+	}
+
+	cursor, err := ms.collection.Aggregate(ctx, pipeline)
 	if err != nil {
 		return nil, err
 	}
 	defer cursor.Close(ctx)
 
-	type scored struct {
-		record model.MemoryRecord
-		score  float64
-	}
-	var scoredRecords []scored
+	var records []model.MemoryRecord
 	for cursor.Next(ctx) {
-		var doc mongoMemoryDocument
+		var doc struct {
+			mongoMemoryDocument `bson:",inline"`
+			Score               float64 `bson:"score"`
+		}
 		if err := cursor.Decode(&doc); err != nil {
 			return nil, err
 		}
 		rec := doc.toRecord()
-		rec.Score = model.MaxCosineSimilarity(queryEmbedding, rec)
-		scoredRecords = append(scoredRecords, scored{record: rec, score: rec.Score})
-	}
-	if err := cursor.Err(); err != nil {
-		return nil, err
-	}
-	sort.Slice(scoredRecords, func(i, j int) bool { return scoredRecords[i].score > scoredRecords[j].score })
-	if len(scoredRecords) > limit {
-		scoredRecords = scoredRecords[:limit]
-	}
-	records := make([]model.MemoryRecord, len(scoredRecords))
-	for i, sc := range scoredRecords {
-		records[i] = sc.record
+		rec.Score = doc.Score
+		records = append(records, rec)
 	}
 	return records, nil
 }
@@ -212,6 +219,19 @@ func (ms *MongoStore) CreateSchema(ctx context.Context, _ string) error {
 		{
 			Keys:    bson.D{{Key: "space", Value: 1}},
 			Options: options.Index().SetName("space"),
+		},
+		// Vector search index for Atlas
+		{
+			Keys: bson.D{
+				{"embedding", "cosmos.vector"},
+			},
+			Options: options.Index().
+				SetName("vector_index").
+				SetWeights(bson.D{
+					{"numDimensions", 768}, // Assuming 768, adjust as needed
+					{"similarity", "cosine"},
+					{"type", "ivf"},
+				}),
 		},
 	}
 	if _, err := ms.collection.Indexes().CreateMany(ctx, indexes); err != nil {

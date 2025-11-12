@@ -257,7 +257,7 @@ func (s *Neo4jStore) UpsertGraph(ctx context.Context, record model.MemoryRecord,
 }
 
 // Neighborhood returns the nodes within the requested number of hops from the provided seeds.
-func (s *Neo4jStore) Neighborhood(ctx context.Context, seedIDs []int64, hops, limit int) ([]model.MemoryRecord, error) {
+func (s *Neo4jStore) Neighborhood(ctx context.Context, sessionID string, seedIDs []int64, hops, limit int) ([]model.MemoryRecord, error) {
 	if s.driver == nil {
 		return nil, ErrNeo4jUnavailable
 	}
@@ -270,9 +270,10 @@ func (s *Neo4jStore) Neighborhood(ctx context.Context, seedIDs []int64, hops, li
 	}
 	defer session.Close(ctx)
 	params := map[string]any{
-		"seed_ids": seedIDs,
-		"hops":     hops,
-		"limit":    limit,
+		"seed_ids":   seedIDs,
+		"hops":       hops,
+		"session_id": sessionID, // Pass sessionID to the query
+		"limit":      limit,
 	}
 	result, err := session.Run(ctx, neo4jNeighborhoodQuery, params)
 	if err != nil {
@@ -349,6 +350,7 @@ UNWIND $seed_ids AS seed
 MATCH (start:Memory {id: seed})
 MATCH path=(start)-[:RELATED_TO*1..$hops]-(neighbor:Memory)
 WHERE NOT neighbor.id IN $seed_ids
+  AND ($session_id = '' OR neighbor.session_id = $session_id) // Filter by session_id
 WITH neighbor, MIN(length(path)) AS depth
 RETURN neighbor.id AS id,
        neighbor.session_id AS session_id,

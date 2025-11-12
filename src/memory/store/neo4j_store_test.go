@@ -273,7 +273,7 @@ func TestNeo4jStoreNeighborhood(t *testing.T) {
 			},
 		},
 	}
-	neighbors, err := store.Neighborhood(context.Background(), []int64{42}, 2, 5)
+	neighbors, err := store.Neighborhood(context.Background(), "session-1", []int64{42}, 2, 5)
 	if err != nil {
 		t.Fatalf("neighborhood: %v", err)
 	}
@@ -348,7 +348,7 @@ func TestNeo4jUnavailable(t *testing.T) {
 	if err := store.UpsertGraph(context.Background(), model.MemoryRecord{ID: 1}, nil); !errors.Is(err, ErrNeo4jUnavailable) {
 		t.Fatalf("expected ErrNeo4jUnavailable, got %v", err)
 	}
-	if _, err := store.Neighborhood(context.Background(), []int64{1}, 1, 1); !errors.Is(err, ErrNeo4jUnavailable) {
+	if _, err := store.Neighborhood(context.Background(), "session-1", []int64{1}, 1, 1); !errors.Is(err, ErrNeo4jUnavailable) {
 		t.Fatalf("expected ErrNeo4jUnavailable, got %v", err)
 	}
 }

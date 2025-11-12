@@ -201,11 +201,11 @@ func (e *Engine) Retrieve(ctx context.Context, sessionID, query string, limit in
 			}
 		}
 		if len(seedIDs) > 0 {
-			hops := e.opts.GraphNeighborhoodHops
+			hops := e.opts.GraphNeighborhoodHops // Use the configured hops
 			if hops <= 0 {
 				hops = 1
 			}
-			neighbors, err := graphStore.Neighborhood(ctx, seedIDs, hops, e.opts.GraphNeighborhoodLimit)
+			neighbors, err := graphStore.Neighborhood(ctx, sessionID, seedIDs, hops, e.opts.GraphNeighborhoodLimit)
 			if err != nil {
 				e.logf("graph neighborhood: %v", err)
 			} else if len(neighbors) > 0 {

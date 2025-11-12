@@ -98,19 +98,22 @@ func (ps *PostgresStore) SearchMemory(ctx context.Context, sessionID string, que
 		return nil, nil
 	}
 	jsonEmbed, _ := json.Marshal(queryEmbedding)
-	query := `
+
+	var queryBuilder strings.Builder
+	queryBuilder.WriteString(`
         SELECT id, session_id, content, metadata::text, importance, source, summary, created_at, last_embedded, embedding::text, embedding_matrix::text, (embedding <-> $1::vector) AS score
         FROM memory_bank
-        `
+        `)
+
 	args := []any{vectorFromJSON(jsonEmbed)}
 	if sessionID != "" {
-		query += " WHERE session_id = $" + strconv.Itoa(len(args)+1)
+		queryBuilder.WriteString(" WHERE session_id = $" + strconv.Itoa(len(args)+1))
 		args = append(args, sessionID)
 	}
-	query += " ORDER BY embedding <-> $1::vector LIMIT $" + strconv.Itoa(len(args)+1)
+	queryBuilder.WriteString(" ORDER BY embedding <-> $1::vector LIMIT $" + strconv.Itoa(len(args)+1))
 	args = append(args, limit)
 
-	rows, err := ps.DB.Query(ctx, query, args...)
+	rows, err := ps.DB.Query(ctx, queryBuilder.String(), args...)
 	if err != nil {
 		return nil, err
 	}
@@ -251,11 +254,13 @@ func (ps *PostgresStore) UpsertGraph(ctx context.Context, record model.MemoryRec
 }
 
 // Neighborhood returns memories connected within the configured hop distance.
-func (ps *PostgresStore) Neighborhood(ctx context.Context, seedIDs []int64, hops, limit int) ([]model.MemoryRecord, error) {
+func (ps *PostgresStore) Neighborhood(ctx context.Context, sessionID string, seedIDs []int64, hops, limit int) ([]model.MemoryRecord, error) {
 	if ps == nil || ps.DB == nil || len(seedIDs) == 0 || hops <= 0 || limit <= 0 {
 		return nil, nil
 	}
-	rows, err := ps.DB.Query(ctx, `
+
+	var queryBuilder strings.Builder
+	queryBuilder.WriteString(`
 WITH RECURSIVE walk AS (
         SELECT UNNEST($1::bigint[]) AS id, 0 AS depth
         UNION ALL
@@ -273,10 +278,16 @@ SELECT DISTINCT ON (mb.id)
 FROM walk
 JOIN memory_bank mb ON mb.id = walk.id
 LEFT JOIN memory_nodes mn ON mn.memory_id = mb.id
-WHERE walk.depth > 0
-ORDER BY mb.id, walk.depth ASC, mb.created_at DESC
-LIMIT $3;
-        `, seedIDs, hops, limit)
+WHERE walk.depth > 0 `)
+
+	args := []any{seedIDs, hops, limit}
+	if sessionID != "" {
+		queryBuilder.WriteString(" AND mb.session_id = $" + strconv.Itoa(len(args)+1))
+		args = append(args, sessionID)
+	}
+	queryBuilder.WriteString(` ORDER BY mb.id, walk.depth ASC, mb.created_at DESC LIMIT $3;`)
+
+	rows, err := ps.DB.Query(ctx, queryBuilder.String(), args...)
 	if err != nil {
 		return nil, err
 	}

@@ -25,5 +25,5 @@ type SchemaInitializer interface {
 // GraphStore is implemented by vector stores that maintain graph neighborhoods for memories.
 type GraphStore interface {
 	UpsertGraph(ctx context.Context, record model.MemoryRecord, edges []model.GraphEdge) error
-	Neighborhood(ctx context.Context, seedIDs []int64, hops, limit int) ([]model.MemoryRecord, error)
+	Neighborhood(ctx context.Context, sessionID string, seedIDs []int64, hops, limit int) ([]model.MemoryRecord, error)
 }
