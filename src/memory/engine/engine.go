@@ -125,6 +125,7 @@ func (e *Engine) Store(ctx context.Context, sessionID, content string, metadata 
 	newRecord := model.MemoryRecord{
 		SessionID:    sessionID,
 		Content:      content,
+		Metadata:     model.StringFromAny(metadata),
 		Embedding:    embedding,
 		Importance:   importance,
 		Source:       model.StringFromAny(metadata["source"]),
