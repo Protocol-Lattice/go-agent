@@ -753,10 +753,8 @@ func (a *Agent) buildAttachmentPrompt(title string, files []models.File) string 
 	if len(files) == 0 {
 		return ""
 	}
-	var sb strings.Builder
-	sb.WriteString("\n\n")
-	sb.WriteString(title)
-	sb.WriteString(":\n")
+	var fallback strings.Builder
+	entries := make([]map[string]any, 0, len(files))
 	for i, f := range files {
 		name := strings.TrimSpace(f.Name)
 		if name == "" {
@@ -766,13 +764,37 @@ func (a *Agent) buildAttachmentPrompt(title string, files []models.File) string 
 		if mime == "" {
 			mime = "application/octet-stream"
 		}
-		size := humanSize(len(f.Data))
-		sb.WriteString(fmt.Sprintf("- %s (%s, %s)", name, mime, size))
-		if isTextAttachment(mime, f.Data) && len(f.Data) > 0 {
-			sb.WriteString("\n  preview:\n  ")
-			sb.WriteString(escapePromptContent(previewText(mime, f.Data)))
+		sizeBytes := len(f.Data)
+		isText := isTextAttachment(mime, f.Data)
+		entry := map[string]any{
+			"id":         i + 1,
+			"name":       name,
+			"mime":       mime,
+			"size_bytes": sizeBytes,
+			"text":       isText,
 		}
+		if isText && len(f.Data) > 0 {
+			entry["preview"] = previewText(mime, f.Data)
+		}
+		entries = append(entries, entry)
+
+		fallback.WriteString(fmt.Sprintf("- %s (%s, %s)", name, mime, humanSize(sizeBytes)))
+		if isText && len(f.Data) > 0 {
+			fallback.WriteString("\n  preview:\n  ")
+			fallback.WriteString(escapePromptContent(previewText(mime, f.Data)))
+		}
+		fallback.WriteString("\n")
+	}
+
+	var sb strings.Builder
+	sb.WriteString("\n\n")
+	sb.WriteString(title)
+	sb.WriteString(":\n")
+	if toon := encodeTOONBlock(map[string]any{"files": entries}); toon != "" {
+		sb.WriteString(indentBlock(toon, "  "))
 		sb.WriteString("\n")
+	} else {
+		sb.WriteString(fallback.String())
 	}
 	return sb.String()
 }
