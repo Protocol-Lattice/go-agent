@@ -118,7 +118,6 @@ func New(opts Options) (*Agent, error) {
 	return a, nil
 }
 
-// Generate processes a user message, optionally invoking tools or sub-agents.
 func (a *Agent) Generate(ctx context.Context, sessionID, userInput string) (string, error) {
 	if strings.TrimSpace(userInput) == "" {
 		return "", errors.New("user input is empty")
@@ -128,9 +127,13 @@ func (a *Agent) Generate(ctx context.Context, sessionID, userInput string) (stri
 
 	if handled, output, metadata, err := a.handleCommand(ctx, sessionID, userInput); handled {
 		if err != nil {
-			a.storeMemory(sessionID, "assistant", fmt.Sprintf("tool error: %v", err), map[string]string{"source": "tool"})
+			a.storeMemory(sessionID, "assistant",
+				fmt.Sprintf("tool error: %v", err),
+				map[string]string{"source": "tool"},
+			)
 			return "", err
 		}
+
 		extra := map[string]string{"source": "tool"}
 		for k, v := range metadata {
 			if strings.TrimSpace(k) == "" || strings.TrimSpace(v) == "" {
@@ -138,8 +141,13 @@ func (a *Agent) Generate(ctx context.Context, sessionID, userInput string) (stri
 			}
 			extra[k] = v
 		}
-		a.storeMemory(sessionID, "assistant", output, extra)
-		return output, nil
+
+		// NEW: include TOON when command handled
+		toonBytes, _ := gotoon.Encode(output)
+		full := fmt.Sprintf("%s\n\n.toon:\n%s", output, string(toonBytes))
+
+		a.storeMemory(sessionID, "assistant", full, extra)
+		return full, nil
 	}
 
 	prompt, err := a.buildPrompt(ctx, sessionID, userInput)
@@ -147,12 +155,10 @@ func (a *Agent) Generate(ctx context.Context, sessionID, userInput string) (stri
 		return "", err
 	}
 
-	// Rehydrate any session attachments from memory and pass them along.
 	files, _ := a.RetrieveAttachmentFiles(ctx, sessionID, a.contextLimit)
 
 	var completion any
 	if len(files) > 0 {
-		// Ensure the prompt already lists them for model awareness.
 		completion, err = a.model.GenerateWithFiles(ctx, prompt, files)
 	} else {
 		completion, err = a.model.Generate(ctx, prompt)
@@ -161,9 +167,15 @@ func (a *Agent) Generate(ctx context.Context, sessionID, userInput string) (stri
 		return "", err
 	}
 
+	// original plain text
 	response := fmt.Sprint(completion)
-	a.storeMemory(sessionID, "assistant", response, nil)
-	return response, nil
+
+	// NEW: add toon version
+	toonBytes, _ := gotoon.Encode(completion)
+	full := fmt.Sprintf("%s\n\n.toon:\n%s", response, string(toonBytes))
+
+	a.storeMemory(sessionID, "assistant", full, nil)
+	return full, nil
 }
 
 // Flush persists session memory into the long-term store.
@@ -717,34 +729,46 @@ func (a *Agent) GenerateWithFiles(
 		a.storeMemory(sessionID, "user", userInput, nil)
 	}
 
-	// Build base prompt (includes memory and any previously stored attachments).
+	// Build base prompt
 	prompt, err := a.buildPrompt(ctx, sessionID, userInput)
 	if err != nil {
 		return "", err
 	}
 
-	// Persist this-turn files into session memory (so they’re discoverable later).
+	// Persist new this-turn files
 	if len(files) > 0 {
 		a.storeAttachmentMemories(sessionID, files)
-		// Make it explicit to the model which files arrive with this call.
 		prompt += a.buildAttachmentPrompt("Files provided for this turn", files)
 	}
 
-	// Also rehydrate prior session files (avoid duplication by simple name+size check).
+	// Rehydrate old files
 	existing, _ := a.RetrieveAttachmentFiles(ctx, sessionID, a.contextLimit)
-	// naive de-dupe: if both lists are present, keep both but that’s fine; model can handle.
 	if len(existing) > 0 {
 		prompt += a.buildAttachmentPrompt("Session attachments (rehydrated)", existing)
 	}
 
-	completion, err := a.model.GenerateWithFiles(ctx, prompt, append(existing, files...))
+	// Model call
+	completion, err := a.model.GenerateWithFiles(
+		ctx,
+		prompt,
+		append(existing, files...),
+	)
 	if err != nil {
 		return "", err
 	}
 
 	response := fmt.Sprint(completion)
-	a.storeMemory(sessionID, "assistant", response, nil)
-	return response, nil
+
+	// ---------------------------------------
+	// 🔵 NEW: Add TOON-encoded output
+	// ---------------------------------------
+	toonBytes, _ := gotoon.Encode(completion)
+	full := fmt.Sprintf("%s\n\n.toon:\n%s", response, string(toonBytes))
+
+	// store TOON-enhanced version
+	a.storeMemory(sessionID, "assistant", full, nil)
+
+	return full, nil
 }
 
 // buildAttachmentPrompt renders a compact, token-conscious list of files.
