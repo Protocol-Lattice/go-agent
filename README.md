@@ -232,6 +232,111 @@ Perfect for:
 - Complex tasks requiring specialist coordination
 - Projects with explicit access control requirements
 
+## Why Use TOON?
+
+**Token-Oriented Object Notation (TOON)** is integrated into Lattice to dramatically reduce token consumption when passing structured data to and from LLMs. This is especially critical for AI agent workflows where context windows are precious and API costs scale with token usage.
+
+### The Problem with JSON
+
+Traditional JSON is verbose and wastes tokens on repetitive syntax. Consider passing agent memory or tool responses:
+
+```json
+{
+  "memories": [
+    { "id": 1, "content": "User prefers Python", "importance": 0.9, "timestamp": "2025-01-15" },
+    { "id": 2, "content": "User is building CLI tools", "importance": 0.85, "timestamp": "2025-01-14" },
+    { "id": 3, "content": "User works with PostgreSQL", "importance": 0.8, "timestamp": "2025-01-13" }
+  ]
+}
+```
+
+**Token count:** ~180 tokens
+
+### The TOON Solution
+
+TOON compresses the same data by eliminating redundancy:
+
+```
+memories[3]{id,content,importance,timestamp}:
+1,User prefers Python,0.9,2025-01-15
+2,User is building CLI tools,0.85,2025-01-14
+3,User works with PostgreSQL,0.8,2025-01-13
+```
+
+**Token count:** ~85 tokens
+
+**Savings: ~53% fewer tokens**
+
+### Why This Matters for AI Agents
+
+1. **Larger Context Windows** – Fit more memories, tool results, and conversation history into the same context limit
+2. **Lower API Costs** – Reduce your LLM API bills by up to 50% on structured data
+3. **Faster Processing** – Fewer tokens mean faster inference times and lower latency
+4. **Better Memory Systems** – Store and retrieve more historical context without hitting token limits
+5. **Multi-Agent Communication** – Pass more information between coordinating agents efficiently
+
+### When TOON Shines
+
+TOON is particularly effective for:
+
+- **Agent Memory Banks** – Retrieving and formatting conversation history
+- **Tool Responses** – Returning structured data from database queries or API calls
+- **Multi-Agent Coordination** – Sharing state between specialist agents
+- **Batch Operations** – Processing multiple similar records (users, tasks, logs)
+- **RAG Contexts** – Injecting retrieved documents with metadata
+
+### Example: Memory Retrieval
+
+When your agent queries its memory system, TOON can encode dozens of memories in the space where JSON would fit only a handful:
+
+```go
+// Retrieve memories
+memories := sessionMemory.Retrieve(ctx, "user preferences", 20)
+
+// Encode with TOON for LLM context
+encoded, _ := toon.Marshal(memories, toon.WithLengthMarkers(true))
+
+// Pass to LLM with 40-60% fewer tokens than JSON
+prompt := fmt.Sprintf("Based on these memories:\n%s\n\nAnswer the user's question.", encoded)
+```
+
+### Human-Readable Format
+
+Despite its compactness, TOON remains readable for debugging and development. The format explicitly declares its schema, making it self-documenting:
+
+```
+users[2]{id,name,role}:
+1,Alice,admin
+2,Bob,user
+```
+
+You can immediately see: 2 users, with fields id/name/role, followed by their values.
+
+### Getting Started with TOON
+
+Lattice automatically uses TOON for internal data serialization. To use it in your custom tools or memory adapters:
+
+```go
+import "github.com/toon-format/toon-go"
+
+// Encode your structs
+encoded, err := toon.Marshal(data, toon.WithLengthMarkers(true))
+
+// Decode back to structs
+var result MyStruct
+err = toon.Unmarshal(encoded, &result)
+
+// Or decode to dynamic maps
+var doc map[string]any
+err = toon.Unmarshal(encoded, &doc)
+```
+
+For more details, see the [TOON specification](https://github.com/toon-format/spec/blob/main/SPEC.md).
+
+---
+
+**Bottom Line:** TOON helps your agents do more with less, turning token budgets into a competitive advantage rather than a constraint.
+
 ## Development
 
 ### Running Tests
