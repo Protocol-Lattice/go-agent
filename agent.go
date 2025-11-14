@@ -14,6 +14,7 @@ import (
 
 	"github.com/Protocol-Lattice/go-agent/src/memory"
 	"github.com/Protocol-Lattice/go-agent/src/models"
+	"github.com/alpkeskin/gotoon"
 	"github.com/universal-tool-calling-protocol/go-utcp"
 )
 
@@ -220,7 +221,7 @@ func (a *Agent) buildFullPrompt(userInput string, records []memory.MemoryRecord)
 		sb.WriteString(sub)
 	}
 
-	sb.WriteString("\n\nConversation memory:\n")
+	sb.WriteString("\n\nConversation memory (TOON):\n")
 	sb.WriteString(a.renderMemory(records))
 
 	sb.WriteString("\n\nCurrent user message:\n")
@@ -242,17 +243,17 @@ func (a *Agent) renderTools() string {
 	for _, spec := range specs {
 		sb.WriteString(fmt.Sprintf("- %s: %s\n", spec.Name, spec.Description))
 		if len(spec.InputSchema) > 0 {
-			if schemaJSON, err := json.MarshalIndent(spec.InputSchema, "  ", "  "); err == nil {
-				sb.WriteString("  Input schema: ")
-				sb.Write(schemaJSON)
+			if schemaTOON := encodeTOONBlock(spec.InputSchema); schemaTOON != "" {
+				sb.WriteString("  Input schema (TOON):\n")
+				sb.WriteString(indentBlock(schemaTOON, "    "))
 				sb.WriteString("\n")
 			}
 		}
 		if len(spec.Examples) > 0 {
-			sb.WriteString("  Examples:\n")
+			sb.WriteString("  Examples (TOON):\n")
 			for _, ex := range spec.Examples {
-				if exJSON, err := json.MarshalIndent(ex, "    ", "  "); err == nil {
-					sb.Write(exJSON)
+				if exTOON := encodeTOONBlock(ex); exTOON != "" {
+					sb.WriteString(indentBlock(exTOON, "    "))
 					sb.WriteString("\n")
 				}
 			}
@@ -284,16 +285,44 @@ func (a *Agent) renderMemory(records []memory.MemoryRecord) string {
 		return "(no stored memory)\n"
 	}
 
-	var sb strings.Builder
-	for i, rec := range records {
+	entries := make([]map[string]any, 0, len(records))
+	var fallback strings.Builder
+	counter := 0
+	for _, rec := range records {
 		content := strings.TrimSpace(rec.Content)
 		if content == "" {
 			continue
 		}
+		counter++
 		role := metadataRole(rec.Metadata)
-		sb.WriteString(fmt.Sprintf("%d. [%s] %s\n", i+1, role, escapePromptContent(content)))
+		space := rec.Space
+		if space == "" {
+			space = rec.SessionID
+		}
+		entry := map[string]any{
+			"id":          counter,
+			"role":        role,
+			"space":       space,
+			"score":       rec.Score,
+			"importance":  rec.Importance,
+			"source":      rec.Source,
+			"summary":     rec.Summary,
+			"content":     content,
+			"last_update": rec.LastEmbedded.UTC().Format(time.RFC3339Nano),
+		}
+		if rec.LastEmbedded.IsZero() {
+			delete(entry, "last_update")
+		}
+		entries = append(entries, entry)
+		fallback.WriteString(fmt.Sprintf("%d. [%s] %s\n", counter, role, escapePromptContent(content)))
 	}
-	return sb.String()
+	if len(entries) == 0 {
+		return "(no stored memory)\n"
+	}
+	if toon := encodeTOONBlock(map[string]any{"memories": entries}); toon != "" {
+		return toon + "\n"
+	}
+	return fallback.String()
 }
 
 // escapePromptContent safely escapes content that might break formatting.
@@ -782,4 +811,29 @@ func truncate(s string, max int) string {
 		return s[:max-3] + "..."
 	}
 	return s[:max]
+}
+
+func encodeTOONBlock(value any) string {
+	if value == nil {
+		return ""
+	}
+	if encoded, err := gotoon.Encode(value); err == nil {
+		return strings.TrimSpace(encoded)
+	}
+	if fallback, err := json.MarshalIndent(value, "", "  "); err == nil {
+		return strings.TrimSpace(string(fallback))
+	}
+	return ""
+}
+
+func indentBlock(text, prefix string) string {
+	text = strings.TrimRight(text, "\n")
+	if text == "" {
+		return ""
+	}
+	lines := strings.Split(text, "\n")
+	for i := range lines {
+		lines[i] = prefix + lines[i]
+	}
+	return strings.Join(lines, "\n")
 }

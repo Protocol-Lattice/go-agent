@@ -3,6 +3,7 @@ module github.com/Protocol-Lattice/go-agent
 go 1.25.0
 
 require (
+	github.com/alpkeskin/gotoon v0.1.1
 	github.com/anthropics/anthropic-sdk-go v1.13.0
 	github.com/anush008/fastembed-go v1.0.0
 	github.com/google/generative-ai-go v0.20.1
