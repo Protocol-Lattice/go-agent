@@ -16,6 +16,7 @@ import (
 	"github.com/Protocol-Lattice/go-agent/src/models"
 	"github.com/alpkeskin/gotoon"
 	"github.com/universal-tool-calling-protocol/go-utcp"
+	"github.com/universal-tool-calling-protocol/go-utcp/src/plugins/codemode"
 )
 
 const defaultSystemPrompt = "You are the primary coordinator for an AI agent team. Provide concise, accurate answers and explain when you call tools or delegate work to specialist sub-agents."
@@ -32,6 +33,7 @@ type Agent struct {
 	UTCPClient        utcp.UtcpClientInterface
 	mu                sync.Mutex
 	Shared            *memory.SharedSession
+	CodeMode          *codemode.CodeModeUTCP
 }
 
 // Options configure a new Agent.
@@ -45,8 +47,8 @@ type Options struct {
 	ToolCatalog       ToolCatalog
 	SubAgentDirectory SubAgentDirectory
 	UTCPClient        utcp.UtcpClientInterface
-
-	Shared *memory.SharedSession
+	CodeMode          *codemode.CodeModeUTCP
+	Shared            *memory.SharedSession
 }
 
 // New creates an Agent with the provided options.
@@ -113,9 +115,70 @@ func New(opts Options) (*Agent, error) {
 		subAgentDirectory: subAgentDirectory,
 		UTCPClient:        opts.UTCPClient,
 		Shared:            opts.Shared,
+		CodeMode:          opts.CodeMode,
 	}
 
 	return a, nil
+}
+
+// codeModeOrchestrator decides whether CodeMode should execute userInput,
+// runs it, stores TOON-encoded memory, and returns the final output.
+func (a *Agent) codeModeOrchestrator(
+	ctx context.Context,
+	sessionID string,
+	userInput string,
+) (bool, string, error) {
+
+	// If CodeMode is not active, skip.
+	if a.CodeMode == nil {
+		return false, "", nil
+	}
+
+	// Decide if this input looks like “code to execute”.
+	// You can refine this heuristic over time.
+	trim := strings.TrimSpace(userInput)
+	if !strings.HasPrefix(trim, "```go") &&
+		!strings.Contains(trim, "main(") &&
+		!strings.Contains(trim, "{") {
+		// Not CodeMode input — let LLM handle normally.
+		return false, "", nil
+	}
+
+	// Strip code fences if present.
+	code := trim
+	if strings.HasPrefix(trim, "```") {
+		code = strings.TrimPrefix(trim, "```go")
+		code = strings.TrimPrefix(code, "```")
+		code = strings.TrimSuffix(code, "```")
+		code = strings.TrimSpace(code)
+	}
+
+	// Execute via CodeModeUTCP.
+	result, err := a.CodeMode.Execute(ctx, codemode.CodeModeArgs{
+		Code:    code,
+		Timeout: 20000,
+	})
+	if err != nil {
+		// Store error so LLM has context.
+		a.storeMemory(sessionID, "assistant",
+			fmt.Sprintf("CodeMode error: %v", err),
+			map[string]string{"source": "codemode"},
+		)
+		return true, "", err
+	}
+
+	output := fmt.Sprint(result.Value)
+
+	// Encode TOON output
+	toonBytes, _ := gotoon.Encode(result.Value)
+	full := fmt.Sprintf("%s\n\n.toon:\n%s", output, string(toonBytes))
+
+	// Store memory
+	a.storeMemory(sessionID, "assistant", full,
+		map[string]string{"source": "codemode"},
+	)
+
+	return true, full, nil
 }
 
 func (a *Agent) Generate(ctx context.Context, sessionID, userInput string) (string, error) {
@@ -148,6 +211,24 @@ func (a *Agent) Generate(ctx context.Context, sessionID, userInput string) (stri
 
 		a.storeMemory(sessionID, "assistant", full, extra)
 		return full, nil
+	}
+
+	// NEW: Tool Orchestrator (runs BEFORE CodeMode)
+	if handled, output, err := a.toolOrchestrator(ctx, sessionID, userInput); handled {
+		if err != nil {
+			return "", err
+		}
+		return output, nil
+	}
+
+	// CodeMode Orchestrator
+	if a.CodeMode != nil {
+		if handled, output, err := a.codeModeOrchestrator(ctx, sessionID, userInput); handled {
+			if err != nil {
+				return "", err
+			}
+			return output, nil
+		}
 	}
 
 	prompt, err := a.buildPrompt(ctx, sessionID, userInput)
@@ -882,4 +963,109 @@ func indentBlock(text, prefix string) string {
 		lines[i] = prefix + lines[i]
 	}
 	return strings.Join(lines, "\n")
+}
+
+type ToolChoice struct {
+	UseTool   bool           `json:"use_tool"`
+	ToolName  string         `json:"tool_name"`
+	Arguments map[string]any `json:"arguments"`
+	Reason    string         `json:"reason"`
+}
+
+func (a *Agent) toolOrchestrator(
+	ctx context.Context,
+	sessionID string,
+	userInput string,
+) (bool, string, error) {
+
+	// If no tools registered, skip.
+	if len(a.ToolSpecs()) == 0 {
+		return false, "", nil
+	}
+
+	// ---- STEP 1: Ask LLM for a decision ----
+	choicePrompt := fmt.Sprintf(`
+You are a tool selection engine.
+
+A user asked:
+%q
+
+Available tools:
+%s
+
+Before answering, think step by step whether any tool should be used.
+
+Return ONLY a JSON object like this:
+
+{
+  "use_tool": true|false,
+  "tool_name": "name or empty",
+  "arguments": { },
+  "reason": "short explanation"
+}
+`, userInput, a.renderTools())
+
+	raw, err := a.model.Generate(ctx, choicePrompt)
+	if err != nil {
+		return false, "", err
+	}
+
+	var tc ToolChoice
+	if err := json.Unmarshal([]byte(fmt.Sprint(raw)), &tc); err != nil {
+		// Not a tool decision — fallback to normal generation
+		return false, "", nil
+	}
+
+	if !tc.UseTool {
+		return false, "", nil
+	}
+
+	// ---- STEP 2: Execute the tool ----
+	tool, spec, ok := a.lookupTool(tc.ToolName)
+	if !ok {
+		return true, "", fmt.Errorf("orchestrator: unknown tool '%s'", tc.ToolName)
+	}
+
+	result, err := tool.Invoke(ctx, ToolRequest{
+		SessionID: sessionID,
+		Arguments: tc.Arguments,
+	})
+	if err != nil {
+		a.storeMemory(sessionID, "assistant",
+			fmt.Sprintf("tool %s error: %v", tc.ToolName, err),
+			map[string]string{"source": "tool_orchestrator"},
+		)
+		return true, "", err
+	}
+
+	// ---- STEP 3: Ask LLM to write final answer ----
+	finalPrompt := fmt.Sprintf(`
+The tool %q was executed.
+
+Arguments:
+%s
+
+Result:
+%s
+
+Using this result, write the final answer to the user.
+`, tc.ToolName, encodeTOONBlock(tc.Arguments), result.Content)
+
+	final, err := a.model.Generate(ctx, finalPrompt)
+	if err != nil {
+		return true, "", err
+	}
+
+	full := fmt.Sprint(final)
+
+	// Store TOON-enhanced memory
+	toonBytes, _ := gotoon.Encode(full)
+	store := fmt.Sprintf("%s\n\n.toon:\n%s", full, string(toonBytes))
+
+	a.storeMemory(sessionID, "assistant", store, map[string]string{
+		"tool":   spec.Name,
+		"source": "tool_orchestrator",
+	})
+
+	return true, store, nil
 }

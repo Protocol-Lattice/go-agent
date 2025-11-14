@@ -11,7 +11,7 @@ require (
 	github.com/neo4j/neo4j-go-driver/v5 v5.28.4
 	github.com/ollama/ollama v0.12.5
 	github.com/sashabaranov/go-openai v1.41.2
-	github.com/universal-tool-calling-protocol/go-utcp v1.7.1
+	github.com/universal-tool-calling-protocol/go-utcp v1.7.5
 	go.mongodb.org/mongo-driver v1.13.1
 	google.golang.org/api v0.252.0
 )
@@ -76,6 +76,7 @@ require (
 	github.com/tidwall/match v1.1.1 // indirect
 	github.com/tidwall/pretty v1.2.1 // indirect
 	github.com/tidwall/sjson v1.2.5 // indirect
+	github.com/traefik/yaegi v0.16.1 // indirect
 	github.com/wlynxg/anet v0.0.3 // indirect
 	github.com/xdg-go/pbkdf2 v1.0.0 // indirect
 	github.com/xdg-go/scram v1.1.2 // indirect
