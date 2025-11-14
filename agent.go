@@ -16,7 +16,9 @@ import (
 	"github.com/Protocol-Lattice/go-agent/src/models"
 	"github.com/alpkeskin/gotoon"
 	"github.com/universal-tool-calling-protocol/go-utcp"
+	"github.com/universal-tool-calling-protocol/go-utcp/src/plugins/chain"
 	"github.com/universal-tool-calling-protocol/go-utcp/src/plugins/codemode"
+	"github.com/universal-tool-calling-protocol/go-utcp/src/tools"
 )
 
 const defaultSystemPrompt = "You are the primary coordinator for an AI agent team. Provide concise, accurate answers and explain when you call tools or delegate work to specialist sub-agents."
@@ -34,6 +36,7 @@ type Agent struct {
 	mu                sync.Mutex
 	Shared            *memory.SharedSession
 	CodeMode          *codemode.CodeModeUTCP
+	CodeChain         *chain.UtcpChainClient
 }
 
 // Options configure a new Agent.
@@ -49,6 +52,7 @@ type Options struct {
 	UTCPClient        utcp.UtcpClientInterface
 	CodeMode          *codemode.CodeModeUTCP
 	Shared            *memory.SharedSession
+	CodeChain         *chain.UtcpChainClient
 }
 
 // New creates an Agent with the provided options.
@@ -116,6 +120,7 @@ func New(opts Options) (*Agent, error) {
 		UTCPClient:        opts.UTCPClient,
 		Shared:            opts.Shared,
 		CodeMode:          opts.CodeMode,
+		CodeChain:         opts.CodeChain,
 	}
 
 	return a, nil
@@ -181,87 +186,237 @@ func (a *Agent) codeModeOrchestrator(
 	return true, full, nil
 }
 
-func (a *Agent) Generate(ctx context.Context, sessionID, userInput string) (string, error) {
-	if strings.TrimSpace(userInput) == "" {
-		return "", errors.New("user input is empty")
+func (a *Agent) toolPicker(
+	ctx context.Context,
+	sessionID string,
+	userInput string,
+) (bool, string, error) {
+
+	if a.UTCPClient == nil {
+		return false, "", nil
 	}
 
-	a.storeMemory(sessionID, "user", userInput, nil)
-
-	if handled, output, metadata, err := a.handleCommand(ctx, sessionID, userInput); handled {
-		if err != nil {
-			a.storeMemory(sessionID, "assistant",
-				fmt.Sprintf("tool error: %v", err),
-				map[string]string{"source": "tool"},
-			)
-			return "", err
-		}
-
-		extra := map[string]string{"source": "tool"}
-		for k, v := range metadata {
-			if strings.TrimSpace(k) == "" || strings.TrimSpace(v) == "" {
-				continue
-			}
-			extra[k] = v
-		}
-
-		// NEW: include TOON when command handled
-		toonBytes, _ := gotoon.Encode(output)
-		full := fmt.Sprintf("%s\n\n.toon:\n%s", output, string(toonBytes))
-
-		a.storeMemory(sessionID, "assistant", full, extra)
-		return full, nil
+	// Fetch all UTCP tools
+	tools, err := a.UTCPClient.SearchTools("", 50)
+	if err != nil || len(tools) == 0 {
+		return false, "", nil
 	}
 
-	// NEW: Tool Orchestrator (runs BEFORE CodeMode)
-	if handled, output, err := a.toolOrchestrator(ctx, sessionID, userInput); handled {
-		if err != nil {
-			return "", err
-		}
-		return output, nil
+	// Build compact tool list for LLM
+	var sb strings.Builder
+	sb.WriteString("Available UTCP tools:\n")
+	for _, t := range tools {
+		sb.WriteString(fmt.Sprintf("- %s: %s\n", t.Name, t.Description))
 	}
+	toolsBlock := sb.String()
 
-	// CodeMode Orchestrator
-	if a.CodeMode != nil {
-		if handled, output, err := a.codeModeOrchestrator(ctx, sessionID, userInput); handled {
-			if err != nil {
-				return "", err
-			}
-			return output, nil
-		}
-	}
+	// ---- 1. Ask LLM if we should call a tool ----
+	choicePrompt := fmt.Sprintf(`
+You are a strict tool selector.
 
-	prompt, err := a.buildPrompt(ctx, sessionID, userInput)
+User message:
+%q
+
+%s
+
+Think step-by-step whether a tool must be called.
+
+Respond ONLY with JSON:
+{
+  "use_tool": true|false,
+  "tool_name": "name or empty",
+  "arguments": {},
+  "reason": "short explanation"
+}
+`, userInput, toolsBlock)
+
+	raw, err := a.model.Generate(ctx, choicePrompt)
 	if err != nil {
-		return "", err
+		return false, "", err
 	}
 
-	files, _ := a.RetrieveAttachmentFiles(ctx, sessionID, a.contextLimit)
-
-	var completion any
-	if len(files) > 0 {
-		completion, err = a.model.GenerateWithFiles(ctx, prompt, files)
-	} else {
-		completion, err = a.model.Generate(ctx, prompt)
+	var tc ToolChoice
+	if err := json.Unmarshal([]byte(fmt.Sprint(raw)), &tc); err != nil {
+		// LLM didn't follow the JSON format → fallback to normal pipeline
+		return false, "", nil
 	}
+
+	if !tc.UseTool {
+		return false, "", nil
+	}
+
+	// ---- 2. Validate tool exists ----
+	exists := false
+	for _, t := range tools {
+		if t.Name == tc.ToolName {
+			exists = true
+			break
+		}
+	}
+	if !exists {
+		return true, "", fmt.Errorf("tool picker: unknown UTCP tool %q", tc.ToolName)
+	}
+
+	// ---- 3. Execute the tool ----
+	result, err := a.UTCPClient.CallTool(ctx, tc.ToolName, tc.Arguments)
 	if err != nil {
-		return "", err
+		a.storeMemory(sessionID, "assistant",
+			fmt.Sprintf("tool %s error: %v", tc.ToolName, err),
+			map[string]string{"source": "tool_picker"},
+		)
+		return true, "", err
 	}
 
-	// original plain text
-	response := fmt.Sprint(completion)
+	// ---- 4. LLM composes final answer for user ----
+	finalPrompt := fmt.Sprintf(`
+The UTCP tool %q was executed.
 
-	// NEW: add toon version
-	toonBytes, _ := gotoon.Encode(completion)
-	full := fmt.Sprintf("%s\n\n.toon:\n%s", response, string(toonBytes))
+Arguments:
+%s
 
-	a.storeMemory(sessionID, "assistant", full, nil)
-	return full, nil
+Result:
+%s
+
+Write the final answer to the user.
+`, tc.ToolName, encodeTOONBlock(tc.Arguments), encodeTOONBlock(result))
+
+	final, err := a.model.Generate(ctx, finalPrompt)
+	if err != nil {
+		return true, "", err
+	}
+
+	output := fmt.Sprint(final)
+
+	// ---- 5. Store TOON-enhanced memory ----
+	toon, _ := gotoon.Encode(output)
+	wrapped := fmt.Sprintf("%s\n\n.toon:\n%s", output, string(toon))
+
+	a.storeMemory(sessionID, "assistant",
+		wrapped,
+		map[string]string{"tool": tc.ToolName, "source": "tool_picker"},
+	)
+
+	return true, wrapped, nil
 }
 
 // Flush persists session memory into the long-term store.
 func (a *Agent) Flush(ctx context.Context, sessionID string) error {
 	return a.memory.FlushToLongTerm(ctx, sessionID)
+}
+
+func (a *Agent) toolOrchestrator(
+	ctx context.Context,
+	sessionID string,
+	userInput string,
+) (bool, string, error) {
+
+	if a.UTCPClient == nil {
+		return false, "", nil
+	}
+
+	// Fetch UTCP tools dynamically
+	toolList, err := a.UTCPClient.SearchTools("", 50)
+	if err != nil {
+		return false, "", nil
+	}
+	if len(toolList) == 0 {
+		return false, "", nil
+	}
+
+	// Build LLM decision prompt
+	var sb strings.Builder
+	sb.WriteString("UTCP Tools:\n")
+	for _, t := range toolList {
+		sb.WriteString(fmt.Sprintf("- %s: %s\n", t.Name, t.Description))
+	}
+	toolsDesc := sb.String()
+
+	choicePrompt := fmt.Sprintf(`
+You are a tool selection engine.
+
+A user asked:
+%q
+
+%s
+
+Before answering, think step by step whether any tool should be used.
+
+Return ONLY a JSON object like this:
+
+{
+  "use_tool": true|false,
+  "tool_name": "name or empty",
+  "arguments": { },
+  "reason": "short explanation"
+}
+`, userInput, toolsDesc)
+
+	raw, err := a.model.Generate(ctx, choicePrompt)
+	if err != nil {
+		return false, "", err
+	}
+
+	var tc ToolChoice
+	if err := json.Unmarshal([]byte(fmt.Sprint(raw)), &tc); err != nil {
+		return false, "", nil
+	}
+
+	if !tc.UseTool {
+		return false, "", nil
+	}
+
+	// Validate tool exists
+	exists := false
+	for _, t := range toolList {
+		if t.Name == tc.ToolName {
+			exists = true
+			break
+		}
+	}
+	if !exists {
+		return true, "", fmt.Errorf("UTCP tool unknown: %s", tc.ToolName)
+	}
+
+	// Execute UTCP tool
+	result, err := a.UTCPClient.CallTool(ctx, tc.ToolName, tc.Arguments)
+	if err != nil {
+		a.storeMemory(sessionID, "assistant",
+			fmt.Sprintf("tool %s error: %v", tc.ToolName, err),
+			map[string]string{"source": "tool_orchestrator"},
+		)
+		return true, "", err
+	}
+
+	// Ask LLM for final answer
+	finalPrompt := fmt.Sprintf(`
+The UTCP tool %q was executed.
+
+Arguments:
+%s
+
+Result:
+%s
+
+Using this result, write the final answer to the user.
+`, tc.ToolName, encodeTOONBlock(tc.Arguments), encodeTOONBlock(result))
+
+	final, err := a.model.Generate(ctx, finalPrompt)
+	if err != nil {
+		return true, "", err
+	}
+
+	full := fmt.Sprint(final)
+
+	// Add TOON in memory
+	toonBytes, _ := gotoon.Encode(full)
+	store := fmt.Sprintf("%s\n\n.toon:\n%s", full, string(toonBytes))
+
+	a.storeMemory(sessionID, "assistant", store, map[string]string{
+		"tool":   tc.ToolName,
+		"source": "tool_orchestrator",
+	})
+
+	return true, store, nil
 }
 
 func (a *Agent) buildPrompt(ctx context.Context, sessionID, userInput string) (string, error) {
@@ -298,14 +453,67 @@ func (a *Agent) buildPrompt(ctx context.Context, sessionID, userInput string) (s
 
 	return prompt, nil
 }
+func (a *Agent) renderUTCPTools() string {
+	if a.UTCPClient == nil {
+		return ""
+	}
+
+	// Query UTCP provider for all tools
+	toolList, err := a.UTCPClient.SearchTools("", 50)
+	if err != nil || len(toolList) == 0 {
+		return ""
+	}
+
+	var sb strings.Builder
+	sb.WriteString("Available UTCP tools:\n")
+
+	for _, t := range toolList {
+		sb.WriteString(fmt.Sprintf("- %s: %s\n", t.Name, t.Description))
+
+		// -----------------------------
+		// Render arguments (input schema)
+		// -----------------------------
+		props := t.Inputs.Properties
+		req := map[string]bool{}
+		for _, r := range t.Inputs.Required {
+			req[r] = true
+		}
+
+		// Only show args if tool has fields
+		if len(props) > 0 {
+			sb.WriteString("  args:\n")
+			for name, spec := range props {
+				typ := ""
+
+				// Detect type from JSON schema "type" if present
+				if m, ok := spec.(map[string]any); ok {
+					if tval, ok := m["type"].(string); ok {
+						typ = tval
+					}
+				}
+
+				if typ == "" {
+					typ = "any"
+				}
+
+				if req[name] {
+					sb.WriteString(fmt.Sprintf("    - %s (%s, required)\n", name, typ))
+				} else {
+					sb.WriteString(fmt.Sprintf("    - %s (%s)\n", name, typ))
+				}
+			}
+		}
+	}
+
+	return sb.String()
+}
 
 func (a *Agent) buildFullPrompt(userInput string, records []memory.MemoryRecord) string {
 	var sb strings.Builder
 	sb.Grow(4096)
 
 	sb.WriteString(a.systemPrompt)
-
-	if tools := a.renderTools(); tools != "" {
+	if tools := a.renderUTCPTools(); tools != "" {
 		sb.WriteString("\n\n")
 		sb.WriteString(tools)
 	}
@@ -321,38 +529,6 @@ func (a *Agent) buildFullPrompt(userInput string, records []memory.MemoryRecord)
 	sb.WriteString(strings.TrimSpace(userInput))
 	sb.WriteString("\n\nCompose the best possible assistant reply.\n")
 
-	return sb.String()
-}
-
-// renderTools formats the available tool specs into a prompt-friendly block.
-func (a *Agent) renderTools() string {
-	specs := a.ToolSpecs()
-	if len(specs) == 0 {
-		return ""
-	}
-
-	var sb strings.Builder
-	sb.WriteString("Available tools:\n")
-	for _, spec := range specs {
-		sb.WriteString(fmt.Sprintf("- %s: %s\n", spec.Name, spec.Description))
-		if len(spec.InputSchema) > 0 {
-			if schemaTOON := encodeTOONBlock(spec.InputSchema); schemaTOON != "" {
-				sb.WriteString("  Input schema (TOON):\n")
-				sb.WriteString(indentBlock(schemaTOON, "    "))
-				sb.WriteString("\n")
-			}
-		}
-		if len(spec.Examples) > 0 {
-			sb.WriteString("  Examples (TOON):\n")
-			for _, ex := range spec.Examples {
-				if exTOON := encodeTOONBlock(ex); exTOON != "" {
-					sb.WriteString(indentBlock(exTOON, "    "))
-					sb.WriteString("\n")
-				}
-			}
-		}
-	}
-	sb.WriteString("Invoke a tool with: `tool:<name> <json arguments>`\n")
 	return sb.String()
 }
 
@@ -710,11 +886,11 @@ func (a *Agent) lookupSubAgent(name string) (SubAgent, bool) {
 }
 
 // ToolSpecs returns the registered tool specifications in deterministic order.
-func (a *Agent) ToolSpecs() []ToolSpec {
+func (a *Agent) ToolSpecs() ([]tools.Tool, error) {
 	if a.toolCatalog == nil {
-		return nil
+		return nil, errors.ErrUnsupported
 	}
-	return a.toolCatalog.Specs()
+	return a.UTCPClient.SearchTools("", 50)
 }
 
 // Tools returns the registered tools in deterministic order.
@@ -972,100 +1148,85 @@ type ToolChoice struct {
 	Reason    string         `json:"reason"`
 }
 
-func (a *Agent) toolOrchestrator(
+// codeChainOrchestrator decides whether a UTCP chain should run,
+// executes it via UtcpChainClient, encodes output in TOON, stores memory,
+// and returns the final result.
+func (a *Agent) codeChainOrchestrator(
 	ctx context.Context,
 	sessionID string,
 	userInput string,
 ) (bool, string, error) {
 
-	// If no tools registered, skip.
-	if len(a.ToolSpecs()) == 0 {
+	// Chain client not enabled → skip
+	if a.CodeChain == nil {
 		return false, "", nil
 	}
 
-	// ---- STEP 1: Ask LLM for a decision ----
-	choicePrompt := fmt.Sprintf(`
-You are a tool selection engine.
+	trim := strings.TrimSpace(userInput)
+	lower := strings.ToLower(trim)
 
-A user asked:
-%q
+	// ---- 1. Detection heuristics ----
+	// You can refine these later.
+	isChain :=
+		strings.HasPrefix(lower, "chain:") ||
+			strings.Contains(lower, "\"tool_name\"") ||
+			strings.Contains(lower, "\"steps\"") ||
+			strings.Contains(lower, "use_previous")
 
-Available tools:
-%s
-
-Before answering, think step by step whether any tool should be used.
-
-Return ONLY a JSON object like this:
-
-{
-  "use_tool": true|false,
-  "tool_name": "name or empty",
-  "arguments": { },
-  "reason": "short explanation"
-}
-`, userInput, a.renderTools())
-
-	raw, err := a.model.Generate(ctx, choicePrompt)
-	if err != nil {
-		return false, "", err
-	}
-
-	var tc ToolChoice
-	if err := json.Unmarshal([]byte(fmt.Sprint(raw)), &tc); err != nil {
-		// Not a tool decision — fallback to normal generation
+	if !isChain {
 		return false, "", nil
 	}
 
-	if !tc.UseTool {
-		return false, "", nil
+	// ---- 2. Extract JSON payload ----
+	payload := strings.TrimSpace(strings.TrimPrefix(lower, "chain:"))
+	if payload == "" {
+		return true, "", errors.New("chain: missing steps payload")
 	}
 
-	// ---- STEP 2: Execute the tool ----
-	tool, spec, ok := a.lookupTool(tc.ToolName)
-	if !ok {
-		return true, "", fmt.Errorf("orchestrator: unknown tool '%s'", tc.ToolName)
+	var steps []chain.ChainStep
+	var wrapper struct {
+		Steps   []chain.ChainStep `json:"steps"`
+		Timeout int               `json:"timeout"`
 	}
 
-	result, err := tool.Invoke(ctx, ToolRequest{
-		SessionID: sessionID,
-		Arguments: tc.Arguments,
-	})
+	// Accept direct []ChainStep or wrapped object { steps: [...] }
+	if err := json.Unmarshal([]byte(payload), &steps); err != nil {
+		if err2 := json.Unmarshal([]byte(payload), &wrapper); err2 != nil {
+			return true, "", fmt.Errorf("chain: invalid steps JSON: %v", err)
+		}
+		steps = wrapper.Steps
+	}
+
+	timeout := 20 * time.Second
+	if wrapper.Timeout > 0 {
+		timeout = time.Duration(wrapper.Timeout) * time.Millisecond
+	}
+
+	// ---- 3. Execute chain ----
+	result, err := a.CodeChain.CallToolChain(ctx, steps, timeout)
 	if err != nil {
 		a.storeMemory(sessionID, "assistant",
-			fmt.Sprintf("tool %s error: %v", tc.ToolName, err),
-			map[string]string{"source": "tool_orchestrator"},
+			fmt.Sprintf("CodeChain error: %v", err),
+			map[string]string{"source": "codechain"},
 		)
 		return true, "", err
 	}
 
-	// ---- STEP 3: Ask LLM to write final answer ----
-	finalPrompt := fmt.Sprintf(`
-The tool %q was executed.
-
-Arguments:
-%s
-
-Result:
-%s
-
-Using this result, write the final answer to the user.
-`, tc.ToolName, encodeTOONBlock(tc.Arguments), result.Content)
-
-	final, err := a.model.Generate(ctx, finalPrompt)
-	if err != nil {
-		return true, "", err
+	// ---- 4. Convert result → string ----
+	var out string
+	if b, err := json.MarshalIndent(result, "", "  "); err == nil {
+		out = string(b)
+	} else {
+		out = fmt.Sprint(result)
 	}
 
-	full := fmt.Sprint(final)
+	// ---- 5. TOON encode + store ----
+	toonBytes, _ := gotoon.Encode(result)
+	full := fmt.Sprintf("%s\n\n.toon:\n%s", out, string(toonBytes))
 
-	// Store TOON-enhanced memory
-	toonBytes, _ := gotoon.Encode(full)
-	store := fmt.Sprintf("%s\n\n.toon:\n%s", full, string(toonBytes))
+	a.storeMemory(sessionID, "assistant", full,
+		map[string]string{"source": "codechain"},
+	)
 
-	a.storeMemory(sessionID, "assistant", store, map[string]string{
-		"tool":   spec.Name,
-		"source": "tool_orchestrator",
-	})
-
-	return true, store, nil
+	return true, full, nil
 }
