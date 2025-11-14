@@ -186,281 +186,93 @@ func (a *Agent) codeModeOrchestrator(
 	return true, full, nil
 }
 
-func (a *Agent) toolPicker(
-	ctx context.Context,
-	sessionID string,
-	userInput string,
-) (bool, string, error) {
-
-	if a.UTCPClient == nil {
-		return false, "", nil
-	}
-
-	// Fetch all UTCP tools
-	tools, err := a.UTCPClient.SearchTools("", 50)
-	if err != nil || len(tools) == 0 {
-		return false, "", nil
-	}
-
-	// Build compact tool list for LLM
-	var sb strings.Builder
-	sb.WriteString("Available UTCP tools:\n")
-	for _, t := range tools {
-		sb.WriteString(fmt.Sprintf("- %s: %s\n", t.Name, t.Description))
-	}
-	toolsBlock := sb.String()
-
-	// ---- 1. Ask LLM if we should call a tool ----
-	choicePrompt := fmt.Sprintf(`
-You are a strict tool selector.
-
-User message:
-%q
-
-%s
-
-Think step-by-step whether a tool must be called.
-
-Respond ONLY with JSON:
-{
-  "use_tool": true|false,
-  "tool_name": "name or empty",
-  "arguments": {},
-  "reason": "short explanation"
-}
-`, userInput, toolsBlock)
-
-	raw, err := a.model.Generate(ctx, choicePrompt)
-	if err != nil {
-		return false, "", err
-	}
-
-	var tc ToolChoice
-	if err := json.Unmarshal([]byte(fmt.Sprint(raw)), &tc); err != nil {
-		// LLM didn't follow the JSON format → fallback to normal pipeline
-		return false, "", nil
-	}
-
-	if !tc.UseTool {
-		return false, "", nil
-	}
-
-	// ---- 2. Validate tool exists ----
-	exists := false
-	for _, t := range tools {
-		if t.Name == tc.ToolName {
-			exists = true
-			break
-		}
-	}
-	if !exists {
-		return true, "", fmt.Errorf("tool picker: unknown UTCP tool %q", tc.ToolName)
-	}
-
-	// ---- 3. Execute the tool ----
-	result, err := a.UTCPClient.CallTool(ctx, tc.ToolName, tc.Arguments)
-	if err != nil {
-		a.storeMemory(sessionID, "assistant",
-			fmt.Sprintf("tool %s error: %v", tc.ToolName, err),
-			map[string]string{"source": "tool_picker"},
-		)
-		return true, "", err
-	}
-
-	// ---- 4. LLM composes final answer for user ----
-	finalPrompt := fmt.Sprintf(`
-The UTCP tool %q was executed.
-
-Arguments:
-%s
-
-Result:
-%s
-
-Write the final answer to the user.
-`, tc.ToolName, encodeTOONBlock(tc.Arguments), encodeTOONBlock(result))
-
-	final, err := a.model.Generate(ctx, finalPrompt)
-	if err != nil {
-		return true, "", err
-	}
-
-	output := fmt.Sprint(final)
-
-	// ---- 5. Store TOON-enhanced memory ----
-	toon, _ := gotoon.Encode(output)
-	wrapped := fmt.Sprintf("%s\n\n.toon:\n%s", output, string(toon))
-
-	a.storeMemory(sessionID, "assistant",
-		wrapped,
-		map[string]string{"tool": tc.ToolName, "source": "tool_picker"},
-	)
-
-	return true, wrapped, nil
-}
-
 // Flush persists session memory into the long-term store.
 func (a *Agent) Flush(ctx context.Context, sessionID string) error {
 	return a.memory.FlushToLongTerm(ctx, sessionID)
 }
 
-func (a *Agent) toolOrchestrator(
+func (a *Agent) executeTool(ctx context.Context, sessionID, toolName string, args map[string]any) (any, error) {
+	// 1. Try to find and invoke the tool locally first.
+	if tool, _, ok := a.lookupTool(toolName); ok {
+		resp, err := tool.Invoke(ctx, ToolRequest{
+			SessionID: sessionID,
+			Arguments: args,
+		})
+		if err != nil {
+			return nil, err
+		}
+		return resp.Content, nil
+	}
+
+	// 2. If not found locally, and a UTCP client exists, try calling it remotely.
+	if a.UTCPClient != nil {
+		return a.UTCPClient.CallTool(ctx, toolName, args)
+	}
+
+	return nil, fmt.Errorf("unknown tool: %s", toolName)
+}
+
+// buildPrompt assembles the full assistant prompt for normal LLM generation.
+// It does NOT include Toon markup. It NEVER formats for tool calls.
+// It simply injects system prompt, retrieved memory, and file context.
+func (a *Agent) buildPrompt(
 	ctx context.Context,
 	sessionID string,
 	userInput string,
-) (bool, string, error) {
+) (string, error) {
 
-	if a.UTCPClient == nil {
-		return false, "", nil
-	}
-
-	// Fetch UTCP tools dynamically
-	toolList, err := a.UTCPClient.SearchTools("", 50)
-	if err != nil {
-		return false, "", nil
-	}
-	if len(toolList) == 0 {
-		return false, "", nil
-	}
-
-	// Build LLM decision prompt
-	var sb strings.Builder
-	sb.WriteString("UTCP Tools:\n")
-	for _, t := range toolList {
-		sb.WriteString(fmt.Sprintf("- %s: %s\n", t.Name, t.Description))
-	}
-	toolsDesc := sb.String()
-
-	choicePrompt := fmt.Sprintf(`
-You are a tool selection engine.
-
-A user asked:
-%q
-
-%s
-
-Before answering, think step by step whether any tool should be used.
-
-Return ONLY a JSON object like this:
-
-{
-  "use_tool": true|false,
-  "tool_name": "name or empty",
-  "arguments": { },
-  "reason": "short explanation"
-}
-`, userInput, toolsDesc)
-
-	raw, err := a.model.Generate(ctx, choicePrompt)
-	if err != nil {
-		return false, "", err
-	}
-
-	var tc ToolChoice
-	if err := json.Unmarshal([]byte(fmt.Sprint(raw)), &tc); err != nil {
-		return false, "", nil
-	}
-
-	if !tc.UseTool {
-		return false, "", nil
-	}
-
-	// Validate tool exists
-	exists := false
-	for _, t := range toolList {
-		if t.Name == tc.ToolName {
-			exists = true
-			break
-		}
-	}
-	if !exists {
-		return true, "", fmt.Errorf("UTCP tool unknown: %s", tc.ToolName)
-	}
-
-	// Execute UTCP tool
-	result, err := a.UTCPClient.CallTool(ctx, tc.ToolName, tc.Arguments)
-	if err != nil {
-		a.storeMemory(sessionID, "assistant",
-			fmt.Sprintf("tool %s error: %v", tc.ToolName, err),
-			map[string]string{"source": "tool_orchestrator"},
-		)
-		return true, "", err
-	}
-
-	// Ask LLM for final answer
-	finalPrompt := fmt.Sprintf(`
-The UTCP tool %q was executed.
-
-Arguments:
-%s
-
-Result:
-%s
-
-Using this result, write the final answer to the user.
-`, tc.ToolName, encodeTOONBlock(tc.Arguments), encodeTOONBlock(result))
-
-	final, err := a.model.Generate(ctx, finalPrompt)
-	if err != nil {
-		return true, "", err
-	}
-
-	full := fmt.Sprint(final)
-
-	// Add TOON in memory
-	toonBytes, _ := gotoon.Encode(full)
-	store := fmt.Sprintf("%s\n\n.toon:\n%s", full, string(toonBytes))
-
-	a.storeMemory(sessionID, "assistant", store, map[string]string{
-		"tool":   tc.ToolName,
-		"source": "tool_orchestrator",
-	})
-
-	return true, store, nil
-}
-
-func (a *Agent) buildPrompt(ctx context.Context, sessionID, userInput string) (string, error) {
+	// Detect query type to choose retrieval depth.
 	queryType := classifyQuery(userInput)
-
 	var records []memory.MemoryRecord
 	var err error
 
 	switch queryType {
+
 	case QueryMath:
-		// math: no heavy retrieve
+		// Skip heavy retrieval; math needs no context.
+
 	case QueryShortFactoid:
 		records, err = a.retrieveContext(ctx, sessionID, userInput, min(a.contextLimit/2, 3))
 		if err != nil {
 			return "", fmt.Errorf("retrieve context: %w", err)
 		}
+
 	case QueryComplex:
 		records, err = a.retrieveContext(ctx, sessionID, userInput, a.contextLimit)
 		if err != nil {
 			return "", fmt.Errorf("retrieve context: %w", err)
 		}
+
 	default:
-		// fallthrough; empty records ok
+		// Unknown → no retrieval
 	}
 
-	// Base prompt (system + tools + memory + user msg)
-	prompt := a.buildFullPrompt(userInput, records)
+	// Build LLM prompt without tools/subagents:
+	// Tools are only exposed inside the toolOrchestrator,
+	// not during normal generation.
+	var sb strings.Builder
+	sb.Grow(4096)
 
-	// Include any previously uploaded files that we can rehydrate from memory.
-	// This informs the model what's being sent via GenerateWithFiles (if any).
-	if files, _ := a.RetrieveAttachmentFiles(ctx, sessionID, a.contextLimit); len(files) > 0 {
-		prompt += a.buildAttachmentPrompt("Session attachments (rehydrated)", files)
+	sb.WriteString(a.systemPrompt)
+	sb.WriteString("\n\nConversation memory (TOON):\n")
+	sb.WriteString(a.renderMemory(records))
+
+	sb.WriteString("\n\nUser: ")
+	sb.WriteString(strings.TrimSpace(userInput))
+	sb.WriteString("\n\n") // no forced persona label
+
+	// Rehydrate attachments
+	files, _ := a.RetrieveAttachmentFiles(ctx, sessionID, a.contextLimit)
+	if len(files) > 0 {
+		sb.WriteString(a.buildAttachmentPrompt("Session attachments (rehydrated)", files))
 	}
 
-	return prompt, nil
+	return sb.String(), nil
 }
-func (a *Agent) renderUTCPTools() string {
-	if a.UTCPClient == nil {
-		return ""
-	}
 
-	// Query UTCP provider for all tools
-	toolList, err := a.UTCPClient.SearchTools("", 50)
-	if err != nil || len(toolList) == 0 {
+func (a *Agent) renderTools() string {
+	toolList := a.ToolSpecs()
+	if len(toolList) == 0 {
 		return ""
 	}
 
@@ -471,36 +283,43 @@ func (a *Agent) renderUTCPTools() string {
 		sb.WriteString(fmt.Sprintf("- %s: %s\n", t.Name, t.Description))
 
 		// -----------------------------
-		// Render arguments (input schema)
+		// Input arguments (InputSchema)
 		// -----------------------------
 		props := t.Inputs.Properties
-		req := map[string]bool{}
+		required := map[string]bool{}
 		for _, r := range t.Inputs.Required {
-			req[r] = true
+			required[r] = true
 		}
 
-		// Only show args if tool has fields
 		if len(props) > 0 {
 			sb.WriteString("  args:\n")
-			for name, spec := range props {
-				typ := ""
 
-				// Detect type from JSON schema "type" if present
+			for name, spec := range props {
+				typ := "any"
+
 				if m, ok := spec.(map[string]any); ok {
 					if tval, ok := m["type"].(string); ok {
 						typ = tval
 					}
 				}
 
-				if typ == "" {
-					typ = "any"
-				}
-
-				if req[name] {
+				if required[name] {
 					sb.WriteString(fmt.Sprintf("    - %s (%s, required)\n", name, typ))
 				} else {
 					sb.WriteString(fmt.Sprintf("    - %s (%s)\n", name, typ))
 				}
+			}
+		}
+
+		// -----------------------------
+		// Output schema (optional)
+		// -----------------------------
+		out := t.Outputs
+		if len(out.Properties) > 0 || out.Type != "" {
+			if toon := encodeTOONBlock(out); toon != "" {
+				sb.WriteString("  returns (TOON):\n")
+				sb.WriteString(indentBlock(toon, "    "))
+				sb.WriteString("\n")
 			}
 		}
 	}
@@ -513,8 +332,8 @@ func (a *Agent) buildFullPrompt(userInput string, records []memory.MemoryRecord)
 	sb.Grow(4096)
 
 	sb.WriteString(a.systemPrompt)
-	if tools := a.renderUTCPTools(); tools != "" {
-		sb.WriteString("\n\n")
+	if tools := a.renderTools(); tools != "" {
+		sb.WriteString("\n\nAvailable Tools:\n")
 		sb.WriteString(tools)
 	}
 	if sub := a.renderSubAgents(); sub != "" {
@@ -600,35 +419,62 @@ func escapePromptContent(s string) string {
 	return s
 }
 
+func (a *Agent) detectDirectToolCall(s string) (string, map[string]any, bool) {
+	s = strings.TrimSpace(s)
+	lower := strings.ToLower(s)
+
+	// ---------------------------------------------
+	// Case 1: Raw JSON: {"tool": "...", "arguments": {...}}
+	// ---------------------------------------------
+	if strings.HasPrefix(s, "{") && strings.Contains(s, "\"tool\"") {
+		var payload struct {
+			Tool      string         `json:"tool"`
+			Arguments map[string]any `json:"arguments"`
+		}
+		if err := json.Unmarshal([]byte(s), &payload); err == nil && payload.Tool != "" {
+			return payload.Tool, payload.Arguments, true
+		}
+	}
+
+	// ---------------------------------------------
+	// Case 2: DSL: tool: echo { ... }
+	// ---------------------------------------------
+	if strings.HasPrefix(lower, "tool:") {
+		rest := strings.TrimSpace(s[len("tool:"):])
+		parts := strings.Fields(rest)
+		if len(parts) >= 2 {
+			tool := parts[0]
+			argsStr := strings.TrimSpace(rest[len(tool):])
+
+			var args map[string]any
+			_ = json.Unmarshal([]byte(argsStr), &args) // best-effort
+
+			return tool, args, true
+		}
+	}
+
+	// ---------------------------------------------
+	// Case 3: Shorthand: echo { ... }
+	// ---------------------------------------------
+	parts := strings.Fields(s)
+	if len(parts) >= 2 {
+		tool := strings.TrimSpace(parts[0])
+		argsStr := strings.TrimSpace(s[len(tool):])
+
+		var args map[string]any
+		if err := json.Unmarshal([]byte(argsStr), &args); err == nil {
+			return tool, args, true
+		}
+	}
+
+	return "", nil, false
+}
+
 func (a *Agent) handleCommand(ctx context.Context, sessionID, userInput string) (bool, string, map[string]string, error) {
 	trimmed := strings.TrimSpace(userInput)
 	lower := strings.ToLower(trimmed)
 
 	switch {
-	case strings.HasPrefix(lower, "tool:"):
-		payload := strings.TrimSpace(trimmed[len("tool:"):])
-		if payload == "" {
-			return true, "", nil, errors.New("tool name is missing")
-		}
-		name, args := splitCommand(payload)
-		tool, spec, ok := a.lookupTool(name)
-		if !ok {
-			return true, "", nil, fmt.Errorf("unknown tool: %s", name)
-		}
-		arguments := parseToolArguments(args)
-		response, err := tool.Invoke(ctx, ToolRequest{SessionID: sessionID, Arguments: arguments})
-		if err != nil {
-			return true, "", nil, err
-		}
-		metadata := map[string]string{"tool": spec.Name}
-		for k, v := range response.Metadata {
-			if strings.TrimSpace(k) == "" || strings.TrimSpace(v) == "" {
-				continue
-			}
-			metadata[k] = v
-		}
-		a.storeMemory(sessionID, "tool", fmt.Sprintf("%s => %s", spec.Name, strings.TrimSpace(response.Content)), metadata)
-		return true, response.Content, metadata, nil
 	case strings.HasPrefix(lower, "subagent:"):
 		payload := strings.TrimSpace(trimmed[len("subagent:"):])
 		if payload == "" {
@@ -886,11 +732,37 @@ func (a *Agent) lookupSubAgent(name string) (SubAgent, bool) {
 }
 
 // ToolSpecs returns the registered tool specifications in deterministic order.
-func (a *Agent) ToolSpecs() ([]tools.Tool, error) {
-	if a.toolCatalog == nil {
-		return nil, errors.ErrUnsupported
+func (a *Agent) ToolSpecs() []tools.Tool {
+	var allSpecs []tools.Tool
+	seen := make(map[string]bool)
+
+	// 1. Get local tool specs
+	if a.toolCatalog != nil {
+		for _, spec := range a.toolCatalog.Specs() {
+			key := strings.ToLower(spec.Name)
+			if !seen[key] {
+				allSpecs = append(allSpecs, tools.Tool{
+					Name:        spec.Name,
+					Description: spec.Description,
+					Inputs:      tools.ToolInputOutputSchema{Properties: spec.InputSchema},
+				})
+				seen[key] = true
+			}
+		}
 	}
-	return a.UTCPClient.SearchTools("", 50)
+
+	// 2. Get UTCP tool specs and merge
+	if a.UTCPClient != nil {
+		utcpTools, _ := a.UTCPClient.SearchTools("", 50)
+		for _, tool := range utcpTools {
+			key := strings.ToLower(tool.Name)
+			if !seen[key] {
+				allSpecs = append(allSpecs, tool)
+				seen[key] = true
+			}
+		}
+	}
+	return allSpecs
 }
 
 // Tools returns the registered tools in deterministic order.
@@ -961,6 +833,107 @@ func (a *Agent) EnsureSpaceGrants(sessionID string, spaces []string) {
 		}
 		a.memory.Spaces.Grant(s, sessionID, memory.SpaceRoleWriter, 0)
 	}
+}
+
+func (a *Agent) Generate(ctx context.Context, sessionID, userInput string) (string, error) {
+	trimmed := strings.TrimSpace(userInput)
+	if trimmed == "" {
+		return "", errors.New("user input is empty")
+	}
+
+	// ---------------------------------------------
+	// 0. DIRECT TOOL INVOCATION (bypass LLM entirely)
+	// ---------------------------------------------
+	if toolName, args, ok := a.detectDirectToolCall(trimmed); ok {
+		// Execute tool immediately
+		result, err := a.executeTool(ctx, sessionID, toolName, args)
+		if err != nil {
+			return "", err
+		}
+
+		// RAW output — NO toon, NO coordinator, NO assistant prefix
+		return fmt.Sprint(result), nil
+	}
+
+	// ---------------------------------------------
+	// 1. Normal: store user memory
+	// ---------------------------------------------
+	a.storeMemory(sessionID, "user", userInput, nil)
+
+	// ---------------------------------------------
+	// 2. Tool orchestrator (LLM decides a tool)
+	// ---------------------------------------------
+	if handled, output, err := a.toolOrchestrator(ctx, sessionID, userInput); handled {
+		if err != nil {
+			return "", err
+		}
+		return output, nil // toolOrchestrator already returns RAW tool output
+	}
+	// ---------------------------------------------
+	// 0B. SUBAGENT COMMANDS (e.g., subagent:researcher ...)
+	// ---------------------------------------------
+	if handled, out, meta, err := a.handleCommand(ctx, sessionID, userInput); handled {
+		if err != nil {
+			return "", err
+		}
+		a.storeMemory(sessionID, "subagent", out, meta)
+		return out, nil
+	}
+
+	// ---------------------------------------------
+	// 3. CodeChain (pre-CodeMode)
+	// ---------------------------------------------
+	if a.CodeChain != nil {
+		if handled, output, err := a.codeChainOrchestrator(ctx, sessionID, userInput); handled {
+			if err != nil {
+				return "", err
+			}
+			return output, nil
+		}
+	}
+
+	// ---------------------------------------------
+	// 4. CodeMode
+	// ---------------------------------------------
+	if a.CodeMode != nil {
+		if handled, output, err := a.codeModeOrchestrator(ctx, sessionID, userInput); handled {
+			if err != nil {
+				return "", err
+			}
+			return output, nil
+		}
+	}
+
+	// ---------------------------------------------
+	// 5. Standard LLM response
+	// ---------------------------------------------
+	prompt, err := a.buildPrompt(ctx, sessionID, userInput)
+	if err != nil {
+		return "", err
+	}
+
+	files, _ := a.RetrieveAttachmentFiles(ctx, sessionID, a.contextLimit)
+
+	var completion any
+	if len(files) > 0 {
+		completion, err = a.model.GenerateWithFiles(ctx, prompt, files)
+	} else {
+		completion, err = a.model.Generate(ctx, prompt)
+	}
+	if err != nil {
+		return "", err
+	}
+
+	response := fmt.Sprint(completion)
+
+	// ---------------------------------------------
+	// 6. TOON for assistant messages only
+	// ---------------------------------------------
+	toonBytes, _ := gotoon.Encode(completion)
+	full := fmt.Sprintf("%s\n\n.toon:\n%s", response, string(toonBytes))
+
+	a.storeMemory(sessionID, "assistant", full, nil)
+	return full, nil
 }
 
 // SessionMemory exposes the underlying session memory (useful for advanced setup/tests).
@@ -1229,4 +1202,125 @@ func (a *Agent) codeChainOrchestrator(
 	)
 
 	return true, full, nil
+}
+
+func (a *Agent) toolOrchestrator(
+	ctx context.Context,
+	sessionID string,
+	userInput string,
+) (bool, string, error) {
+
+	// Collect merged local + UTCP tools
+	toolList := a.ToolSpecs()
+	if len(toolList) == 0 {
+		return false, "", nil
+	}
+
+	// -----------------------------
+	// 1. Build LLM tool-selection prompt
+	// -----------------------------
+	var sb strings.Builder
+	sb.WriteString("UTCP Tools:\n")
+	for _, t := range toolList {
+		sb.WriteString(fmt.Sprintf("- %s: %s\n", t.Name, t.Description))
+	}
+	toolsDesc := sb.String()
+
+	choicePrompt := fmt.Sprintf(`
+You are a tool selection engine.
+
+A user asked:
+%q
+
+%s
+
+Think step-by-step whether ANY tool should be used.
+
+Return ONLY a JSON object EXACTLY like this:
+
+{
+  "use_tool": true|false,
+  "tool_name": "name or empty",
+  "arguments": { },
+  "reason": "short explanation"
+}
+
+Return ONLY JSON. No explanations.
+`, userInput, toolsDesc)
+
+	// -----------------------------
+	// 2. Query LLM
+	// -----------------------------
+	raw, err := a.model.Generate(ctx, choicePrompt)
+	if err != nil {
+		return false, "", err
+	}
+
+	response := strings.TrimSpace(fmt.Sprint(raw))
+
+	// -----------------------------
+	// 3. STRICT JSON GATE
+	// -----------------------------
+	if !strings.HasPrefix(response, "{") || !strings.HasSuffix(response, "}") {
+		return false, "", nil
+	}
+
+	var tc ToolChoice
+	if err := json.Unmarshal([]byte(response), &tc); err != nil {
+		return false, "", nil
+	}
+
+	if !tc.UseTool {
+		return false, "", nil
+	}
+	if strings.TrimSpace(tc.ToolName) == "" {
+		return false, "", nil
+	}
+
+	// -----------------------------
+	// 4. Validate tool exists
+	// -----------------------------
+	exists := false
+	for _, t := range toolList {
+		if t.Name == tc.ToolName {
+			exists = true
+			break
+		}
+	}
+	if !exists {
+		return true, "", fmt.Errorf("UTCP tool unknown: %s", tc.ToolName)
+	}
+
+	// -----------------------------
+	// 5. Execute UTCP or local tool
+	// IMPORTANT: always return RAW result.
+	// -----------------------------
+	result, err := a.executeTool(ctx, sessionID, tc.ToolName, tc.Arguments)
+	if err != nil {
+		// still store memory in TOON for context
+		a.storeMemory(sessionID, "assistant",
+			fmt.Sprintf("tool %s error: %v", tc.ToolName, err),
+			map[string]string{"source": "tool_orchestrator"},
+		)
+		return true, "", err
+	}
+
+	// -----------------------------
+	// 6. RAW OUTPUT (NO TOON FORMATTING!)
+	// -----------------------------
+	rawOut := fmt.Sprint(result)
+
+	// Store TOON version separately in memory (allowed)
+	toonBytes, _ := gotoon.Encode(rawOut)
+	store := fmt.Sprintf("%s\n\n.toon:\n%s", rawOut, string(toonBytes))
+
+	a.storeMemory(sessionID, "assistant", store, map[string]string{
+		"tool":   tc.ToolName,
+		"source": "tool_orchestrator",
+	})
+
+	// -----------------------------
+	// 7. Return RAW tool output (what UTCP tests expect)
+	// -----------------------------
+	return true, rawOut, nil
 }

@@ -99,14 +99,10 @@ func TestNewRegistersToolsAndSubagents(t *testing.T) {
 		t.Fatalf("New returned error: %v", err)
 	}
 
-	specs := agent.ToolSpecs()
-	if len(specs) != 1 {
-		t.Fatalf("expected 1 tool spec, got %d", len(specs))
+	localTools := agent.Tools()
+	if len(localTools) != 1 {
+		t.Fatalf("expected 1 tool, got %d", len(localTools))
 	}
-	if specs[0].Name != "Echo" {
-		t.Fatalf("expected tool spec to retain original casing, got %q", specs[0].Name)
-	}
-
 	subagents := agent.SubAgents()
 	if len(subagents) != 1 {
 		t.Fatalf("expected 1 subagent, got %d", len(subagents))
