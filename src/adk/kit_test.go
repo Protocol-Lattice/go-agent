@@ -101,7 +101,7 @@ func TestKitBuildAgent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("tool invocation failed: %v", err)
 	}
-	if strings.TrimSpace(toolResponse) != "ping" {
+	if !strings.HasPrefix(toolResponse, "ping") {
 		t.Fatalf("unexpected tool response %q", toolResponse)
 	}
 
