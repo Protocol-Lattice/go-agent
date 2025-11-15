@@ -5,6 +5,7 @@ import (
 
 	agent "github.com/Protocol-Lattice/go-agent"
 	"github.com/universal-tool-calling-protocol/go-utcp"
+	"github.com/universal-tool-calling-protocol/go-utcp/src/plugins/codemode"
 )
 
 // Option configures the AgentDevelopmentKit during construction.
@@ -80,6 +81,13 @@ func WithSubAgents(subAgents ...agent.SubAgent) Option {
 func WithUTCP(client utcp.UtcpClientInterface) Option {
 	return func(kit *AgentDevelopmentKit) error {
 		kit.UTCP = client
+		return nil
+	}
+}
+
+func WithCodeModeUtcp(client utcp.UtcpClientInterface) Option {
+	return func(kit *AgentDevelopmentKit) error {
+		kit.CodeMode = *codemode.NewCodeModeUTCP(client)
 		return nil
 	}
 }

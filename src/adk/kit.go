@@ -9,6 +9,7 @@ import (
 	agent "github.com/Protocol-Lattice/go-agent"
 	"github.com/Protocol-Lattice/go-agent/src/memory"
 	"github.com/universal-tool-calling-protocol/go-utcp"
+	"github.com/universal-tool-calling-protocol/go-utcp/src/plugins/codemode"
 	"github.com/universal-tool-calling-protocol/go-utcp/src/tools"
 	"github.com/universal-tool-calling-protocol/go-utcp/src/transports"
 )
@@ -36,6 +37,7 @@ type AgentDevelopmentKit struct {
 
 	agentOptions []AgentOption
 	UTCP         utcp.UtcpClientInterface
+	CodeMode     codemode.CodeModeUTCP
 }
 
 // New constructs a kit, applies the provided options and bootstraps registered
