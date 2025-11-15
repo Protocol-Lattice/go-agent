@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -693,6 +694,72 @@ func isTextAttachment(mime string, data []byte) bool {
 	return utf8.Valid(data)
 }
 
+func renderUtcpToolsForPrompt(list []tools.Tool) string {
+	if len(list) == 0 {
+		return "No UTCP tools available.\n"
+	}
+
+	// Deterministic ordering
+	sort.Slice(list, func(i, j int) bool {
+		return strings.ToLower(list[i].Name) < strings.ToLower(list[j].Name)
+	})
+
+	var sb strings.Builder
+	sb.WriteString("Available UTCP tools:\n")
+
+	for _, t := range list {
+		// ---- Basic metadata ----
+		sb.WriteString(fmt.Sprintf("- %s: %s\n", t.Name, t.Description))
+
+		// ---- Input schema ----
+		props := t.Inputs.Properties
+		required := map[string]bool{}
+		for _, r := range t.Inputs.Required {
+			required[r] = true
+		}
+
+		if len(props) > 0 {
+			sb.WriteString("  args:\n")
+
+			// deterministic order of args
+			keys := make([]string, 0, len(props))
+			for k := range props {
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
+
+			for _, name := range keys {
+				spec := props[name]
+
+				typ := "any"
+				if mm, ok := spec.(map[string]any); ok {
+					if tt, ok := mm["type"].(string); ok {
+						typ = tt
+					}
+				}
+
+				if required[name] {
+					sb.WriteString(fmt.Sprintf("    - %s (%s, required)\n", name, typ))
+				} else {
+					sb.WriteString(fmt.Sprintf("    - %s (%s)\n", name, typ))
+				}
+			}
+		}
+
+		// ---- Output schema (TOON-encoded) ----
+		out := t.Outputs
+		if len(out.Properties) > 0 || out.Type != "" {
+			if toon := encodeTOONBlock(out); toon != "" {
+				sb.WriteString("  returns (TOON):\n")
+				sb.WriteString(indentBlock(toon, "    "))
+				sb.WriteString("\n")
+			}
+		}
+	}
+
+	return sb.String()
+}
+
 func buildAttachmentMemoryContent(name, mime string, data []byte) string {
 	display := strings.TrimSpace(name)
 	if display == "" {
@@ -735,21 +802,6 @@ func (a *Agent) lookupSubAgent(name string) (SubAgent, bool) {
 func (a *Agent) ToolSpecs() []tools.Tool {
 	var allSpecs []tools.Tool
 	seen := make(map[string]bool)
-
-	// 1. Get local tool specs
-	if a.toolCatalog != nil {
-		for _, spec := range a.toolCatalog.Specs() {
-			key := strings.ToLower(spec.Name)
-			if !seen[key] {
-				allSpecs = append(allSpecs, tools.Tool{
-					Name:        spec.Name,
-					Description: spec.Description,
-					Inputs:      tools.ToolInputOutputSchema{Properties: spec.InputSchema},
-				})
-				seen[key] = true
-			}
-		}
-	}
 
 	// 2. Get UTCP tool specs and merge
 	if a.UTCPClient != nil {
@@ -1224,15 +1276,23 @@ func (a *Agent) toolOrchestrator(
 	for _, t := range toolList {
 		sb.WriteString(fmt.Sprintf("- %s: %s\n", t.Name, t.Description))
 	}
-	toolsDesc := sb.String()
+
+	toolDesc := renderUtcpToolsForPrompt(toolList)
 
 	choicePrompt := fmt.Sprintf(`
-You are a tool selection engine.
+You are a UTCP tool selection engine.
 
 A user asked:
 %q
 
+You have access to these UTCP tools:
 %s
+
+You can also discover tools dynamically using:
+search_tools("<query>", <limit>)
+
+Example:
+search_tools("file", 10)
 
 Think step-by-step whether ANY tool should be used.
 
@@ -1246,7 +1306,7 @@ Return ONLY a JSON object EXACTLY like this:
 }
 
 Return ONLY JSON. No explanations.
-`, userInput, toolsDesc)
+`, userInput, toolDesc)
 
 	// -----------------------------
 	// 2. Query LLM
@@ -1259,14 +1319,15 @@ Return ONLY JSON. No explanations.
 	response := strings.TrimSpace(fmt.Sprint(raw))
 
 	// -----------------------------
-	// 3. STRICT JSON GATE
+	// 3. EXTRACT AND VALIDATE JSON
 	// -----------------------------
-	if !strings.HasPrefix(response, "{") || !strings.HasSuffix(response, "}") {
+	jsonStr := extractJSON(response)
+	if jsonStr == "" {
 		return false, "", nil
 	}
 
 	var tc ToolChoice
-	if err := json.Unmarshal([]byte(response), &tc); err != nil {
+	if err := json.Unmarshal([]byte(jsonStr), &tc); err != nil {
 		return false, "", nil
 	}
 
@@ -1323,4 +1384,87 @@ Return ONLY JSON. No explanations.
 	// 7. Return RAW tool output (what UTCP tests expect)
 	// -----------------------------
 	return true, rawOut, nil
+}
+
+// extractJSON attempts to extract valid JSON from a response that may contain
+// markdown code fences, extra text, or concatenated content.
+func extractJSON(response string) string {
+	response = strings.TrimSpace(response)
+
+	// Case 1: Pure JSON (starts and ends with braces)
+	if strings.HasPrefix(response, "{") && strings.HasSuffix(response, "}") {
+		return response
+	}
+
+	// Case 2: JSON wrapped in markdown code fence
+	// ```json\n{...}\n```
+	if strings.Contains(response, "```") {
+		// Remove opening fence
+		response = strings.TrimSpace(response)
+		response = strings.TrimPrefix(response, "```json")
+		response = strings.TrimPrefix(response, "```")
+		response = strings.TrimSpace(response)
+
+		// Remove closing fence
+		if idx := strings.Index(response, "```"); idx != -1 {
+			response = response[:idx]
+		}
+		response = strings.TrimSpace(response)
+
+		if strings.HasPrefix(response, "{") && strings.HasSuffix(response, "}") {
+			return response
+		}
+	}
+
+	// Case 3: JSON followed by extra content (e.g., " | prompt text")
+	// Find the first { and try to extract a complete JSON object
+	startIdx := strings.Index(response, "{")
+	if startIdx == -1 {
+		return ""
+	}
+
+	// Find the matching closing brace
+	depth := 0
+	inString := false
+	escaped := false
+
+	for i := startIdx; i < len(response); i++ {
+		ch := response[i]
+
+		if escaped {
+			escaped = false
+			continue
+		}
+
+		if ch == '\\' {
+			escaped = true
+			continue
+		}
+
+		if ch == '"' {
+			inString = !inString
+			continue
+		}
+
+		if inString {
+			continue
+		}
+
+		if ch == '{' {
+			depth++
+		} else if ch == '}' {
+			depth--
+			if depth == 0 {
+				// Found the matching closing brace
+				candidate := response[startIdx : i+1]
+				// Validate it's actually valid JSON
+				var test interface{}
+				if json.Unmarshal([]byte(candidate), &test) == nil {
+					return candidate
+				}
+			}
+		}
+	}
+
+	return ""
 }

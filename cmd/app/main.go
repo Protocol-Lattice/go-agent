@@ -32,13 +32,11 @@ import (
 	"time"
 	"unicode/utf8"
 
-	agent "github.com/Protocol-Lattice/go-agent"
 	"github.com/Protocol-Lattice/go-agent/src/adk"
 	"github.com/Protocol-Lattice/go-agent/src/adk/modules"
 	"github.com/Protocol-Lattice/go-agent/src/memory"
 	"github.com/Protocol-Lattice/go-agent/src/memory/engine"
 	"github.com/Protocol-Lattice/go-agent/src/models"
-	"github.com/Protocol-Lattice/go-agent/src/tools"
 )
 
 var (
@@ -86,7 +84,6 @@ func main() {
 				return models.NewLLMProvider(c, strings.ToLower(*flagProvider), *flagModel, "Swarm orchestration:")
 			}),
 			modules.InQdrantMemory(100000, *qdrantURL, *qdrantCollection, memory.AutoEmbedder(), &memOpts),
-			modules.NewToolModule("essentials", modules.StaticToolProvider([]agent.Tool{&tools.EchoTool{}}, nil)),
 		),
 	)
 	if err != nil {

@@ -9,6 +9,11 @@ import (
 
 	"github.com/Protocol-Lattice/go-agent/src/memory"
 	"github.com/Protocol-Lattice/go-agent/src/models"
+	"github.com/universal-tool-calling-protocol/go-utcp/src/providers/base"
+	"github.com/universal-tool-calling-protocol/go-utcp/src/repository"
+	"github.com/universal-tool-calling-protocol/go-utcp/src/tools"
+	utcpTools "github.com/universal-tool-calling-protocol/go-utcp/src/tools"
+	"github.com/universal-tool-calling-protocol/go-utcp/src/transports"
 )
 
 type stubModel struct {
@@ -38,6 +43,14 @@ func (m *fileEchoModel) GenerateWithFiles(ctx context.Context, prompt string, fi
 	return m.response, nil
 }
 
+type stubUTCPClient struct {
+	callCount       int
+	lastToolName    string
+	searchTools     []utcpTools.Tool
+	lastSearchQuery string
+	lastSearchLimit int
+}
+
 type stubTool struct {
 	spec      ToolSpec
 	lastInput ToolRequest
@@ -52,6 +65,26 @@ func (t *stubTool) Invoke(ctx context.Context, req ToolRequest) (ToolResponse, e
 	}
 	str, _ := val.(string)
 	return ToolResponse{Content: str}, nil
+}
+
+func (c *stubUTCPClient) CallTool(ctx context.Context, toolName string, args map[string]any) (any, error) {
+	c.callCount++
+	c.lastToolName = toolName
+	return "utcp says " + toolName, nil
+}
+
+func (c *stubUTCPClient) SearchTools(query string, limit int) ([]utcpTools.Tool, error) {
+	c.lastSearchQuery = query
+	c.lastSearchLimit = limit
+	return c.searchTools, nil
+}
+
+func (c *stubUTCPClient) CallToolStream(ctx context.Context, toolName string, args map[string]any) (transports.StreamResult, error) {
+	return nil, nil
+}
+
+func (c *stubUTCPClient) DeregisterToolProvider(ctx context.Context, name string) error {
+	return nil
 }
 
 type stubSubAgent struct {
@@ -422,5 +455,87 @@ func TestRetrieveAttachmentFilesReturnsBinaryData(t *testing.T) {
 		if string(file.Data) != string(want.Data) {
 			t.Fatalf("attachment %d: expected data %v, got %v", i, want.Data, file.Data)
 		}
+	}
+}
+
+func (u *stubUTCPClient) GetTransports() map[string]repository.ClientTransport {
+	return nil
+}
+
+func TestAgentCallsUTCPClientForRemoteTools(t *testing.T) {
+	ctx := context.Background()
+	model := &stubModel{response: "ok"}
+	mem := memory.NewSessionMemory(&memory.MemoryBank{}, 0)
+	utcpClient := &stubUTCPClient{}
+
+	agent, err := New(Options{
+		Model:      model,
+		Memory:     mem,
+		UTCPClient: utcpClient,
+	})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+
+	// Execute a tool that does not exist locally.
+	_, err = agent.executeTool(ctx, "session1", "remote_tool", nil)
+	if err != nil {
+		t.Fatalf("executeTool returned an unexpected error: %v", err)
+	}
+
+	if utcpClient.callCount != 1 {
+		t.Fatalf("expected UTCP client to be called once, got %d", utcpClient.callCount)
+	}
+	if utcpClient.lastToolName != "remote_tool" {
+		t.Fatalf("expected UTCP client to be called with 'remote_tool', got %q", utcpClient.lastToolName)
+	}
+}
+
+func (u *stubUTCPClient) RegisterToolProvider(ctx context.Context, prov base.Provider) ([]tools.Tool, error) {
+	return nil, nil
+}
+
+func TestAgentMergesUTCPSearchResults(t *testing.T) {
+	ctx := context.Background()
+	model := &stubModel{
+		response: `{
+			"use_tool": true,
+			"tool_name": "utcp_tool",
+			"arguments": {"input": "test"},
+			"reason": "testing utcp search"
+		}`,
+	}
+	mem := memory.NewSessionMemory(&memory.MemoryBank{}, 0)
+	utcpClient := &stubUTCPClient{
+		searchTools: []utcpTools.Tool{
+			{Name: "utcp_tool", Description: "A tool from UTCP search"},
+		},
+	}
+
+	agent, err := New(Options{
+		Model:      model,
+		Memory:     mem,
+		UTCPClient: utcpClient,
+	})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+
+	// This will trigger the tool orchestrator, which calls ToolSpecs, which calls SearchTools.
+	_, err = agent.Generate(ctx, "session1", "use the utcp tool")
+	if err != nil {
+		t.Fatalf("Generate returned an unexpected error: %v", err)
+	}
+
+	// Verify SearchTools was called by ToolSpecs()
+	if utcpClient.lastSearchQuery != "" || utcpClient.lastSearchLimit != 50 {
+		t.Fatalf("expected SearchTools to be called with ('', 50), got (%q, %d)", utcpClient.lastSearchQuery, utcpClient.lastSearchLimit)
+	}
+
+	if utcpClient.callCount != 1 {
+		t.Fatalf("expected UTCP client's CallTool to be called once, got %d", utcpClient.callCount)
+	}
+	if utcpClient.lastToolName != "utcp_tool" {
+		t.Fatalf("expected UTCP client to be called with 'utcp_tool', got %q", utcpClient.lastToolName)
 	}
 }

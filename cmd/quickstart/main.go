@@ -27,7 +27,6 @@ import (
 	"sort"
 	"strings"
 
-	agent "github.com/Protocol-Lattice/go-agent"
 	"github.com/Protocol-Lattice/go-agent/src/adk"
 	adkmodules "github.com/Protocol-Lattice/go-agent/src/adk/modules"
 	"github.com/Protocol-Lattice/go-agent/src/helpers"
@@ -35,7 +34,6 @@ import (
 	"github.com/Protocol-Lattice/go-agent/src/memory/engine"
 	"github.com/Protocol-Lattice/go-agent/src/models"
 	"github.com/Protocol-Lattice/go-agent/src/subagents"
-	"github.com/Protocol-Lattice/go-agent/src/tools"
 
 	"github.com/Protocol-Lattice/go-agent/src/swarm"
 )
@@ -115,7 +113,6 @@ func main() {
 				return models.NewGeminiLLM(ctx, *modelName, "Swarm orchestration:")
 			}),
 			adkmodules.InQdrantMemory(100000, *qdrantURL, *qdrantCollection, memory.AutoEmbedder(), &memOpts),
-			adkmodules.NewToolModule("essentials", adkmodules.StaticToolProvider([]agent.Tool{&tools.EchoTool{}}, nil)),
 		),
 	)
 	if err != nil {

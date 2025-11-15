@@ -13,7 +13,6 @@ import (
 	"github.com/Protocol-Lattice/go-agent/src/memory"
 	"github.com/Protocol-Lattice/go-agent/src/models"
 	"github.com/Protocol-Lattice/go-agent/src/subagents"
-	"github.com/Protocol-Lattice/go-agent/src/tools"
 )
 
 const (
@@ -75,7 +74,6 @@ func TestKitBuildAgent(t *testing.T) {
 		adk.WithModules(
 			kitmodules.NewModelModule("coordinator", kitmodules.StaticModelProvider(models.NewDummyLLM("Coordinator:"))),
 			kitmodules.InMemoryMemoryModule(4, memory.DummyEmbedder{}, &memoryOpts),
-			kitmodules.NewToolModule("echo", kitmodules.StaticToolProvider([]agent.Tool{&tools.EchoTool{}}, nil)),
 			kitmodules.NewSubAgentModule("researcher", kitmodules.StaticSubAgentProvider([]agent.SubAgent{subagents.NewResearcher(researcherModel)}, nil)),
 		),
 	)
@@ -97,13 +95,6 @@ func TestKitBuildAgent(t *testing.T) {
 	}
 
 	// Ensure tool registry works by issuing a command.
-	toolResponse, err := built.Generate(ctx, "session", "tool:echo {\"input\": \"ping\"}")
-	if err != nil {
-		t.Fatalf("tool invocation failed: %v", err)
-	}
-	if !strings.HasPrefix(toolResponse, "ping") {
-		t.Fatalf("unexpected tool response %q", toolResponse)
-	}
 
 	// Ensure sub-agent invocation path is configured.
 	saResponse, err := built.Generate(ctx, "session", "subagent:researcher Summarise the impact of refactoring")

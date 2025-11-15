@@ -170,30 +170,6 @@ func TestModelModuleProvision(t *testing.T) {
 	}
 }
 
-func TestToolModuleProvision(t *testing.T) {
-	invoked := false
-	provider := func(context.Context) (kit.ToolBundle, error) {
-		invoked = true
-		return kit.ToolBundle{}, nil
-	}
-	module := NewToolModule("", provider)
-	if module.Name() != "tools" {
-		t.Fatalf("expected default name 'tools'")
-	}
-	kitInstance := &kit.AgentDevelopmentKit{}
-	if err := module.Provision(context.Background(), kitInstance); err != nil {
-		t.Fatalf("provision failed: %v", err)
-	}
-	if len(kitInstance.ToolProviders()) != 1 {
-		t.Fatalf("expected tool provider to be registered")
-	}
-	if !invoked {
-		if _, err := kitInstance.ToolProviders()[0](context.Background()); err != nil {
-			t.Fatalf("invoking provider failed: %v", err)
-		}
-	}
-}
-
 func TestSubAgentModuleProvision(t *testing.T) {
 	provider := StaticSubAgentProvider([]agent.SubAgent{stubSubAgent{name: "x"}}, nil)
 	module := NewSubAgentModule("", provider)
