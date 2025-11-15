@@ -112,6 +112,11 @@ func New(opts Options) (*Agent, error) {
 		}
 	}
 
+	codeMode := opts.CodeMode
+	if codeMode == nil && opts.UTCPClient != nil {
+		codeMode = codemode.NewCodeModeUTCP(opts.UTCPClient)
+	}
+
 	a := &Agent{
 		model:             opts.Model,
 		memory:            opts.Memory,
@@ -121,7 +126,7 @@ func New(opts Options) (*Agent, error) {
 		subAgentDirectory: subAgentDirectory,
 		UTCPClient:        opts.UTCPClient,
 		Shared:            opts.Shared,
-		CodeMode:          opts.CodeMode,
+		CodeMode:          codeMode,
 		CodeChain:         opts.CodeChain,
 	}
 
@@ -836,13 +841,54 @@ func (a *Agent) lookupSubAgent(name string) (SubAgent, bool) {
 func (a *Agent) ToolSpecs() []tools.Tool {
 	var allSpecs []tools.Tool
 	seen := make(map[string]bool)
+
+	// 1. Local tools registered via ToolCatalog
+	if a.toolCatalog != nil {
+		for _, spec := range a.toolCatalog.Specs() {
+			name := strings.TrimSpace(spec.Name)
+			if name == "" {
+				continue
+			}
+			key := strings.ToLower(name)
+			if seen[key] {
+				continue
+			}
+
+			allSpecs = append(allSpecs, tools.Tool{
+				Name:        name,
+				Description: spec.Description,
+				Inputs: tools.ToolInputOutputSchema{
+					Type:       "object",
+					Properties: spec.InputSchema,
+				},
+			})
+			seen[key] = true
+		}
+	}
+
+	// 2. Built-in CodeMode tool (if available)
+	if a.CodeMode != nil {
+		if cmTools, err := a.CodeMode.Tools(context.Background()); err == nil {
+			for _, t := range cmTools {
+				key := strings.ToLower(strings.TrimSpace(t.Name))
+				if key == "" || seen[key] {
+					continue
+				}
+				allSpecs = append(allSpecs, t)
+				seen[key] = true
+			}
+		}
+	}
+
 	limit, err := strconv.Atoi(os.Getenv("utcp_search_tools_limit"))
 	if err != nil {
 		limit = 50
 	}
 	if limit == 0 {
 		limit = 50
-	} // 2. Get UTCP tool specs and merge
+	}
+
+	// 3. Get UTCP tool specs and merge
 	if a.UTCPClient != nil {
 		utcpTools, _ := a.UTCPClient.SearchTools("", limit)
 		for _, tool := range utcpTools {
