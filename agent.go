@@ -204,21 +204,7 @@ func (a *Agent) executeTool(
 	}
 
 	// ---------------------------------------------
-	// 1. LOCAL tool
-	// ---------------------------------------------
-	if tool, _, ok := a.lookupTool(toolName); ok {
-		resp, err := tool.Invoke(ctx, ToolRequest{
-			SessionID: sessionID,
-			Arguments: args,
-		})
-		if err != nil {
-			return nil, err
-		}
-		return resp.Content, nil
-	}
-
-	// ---------------------------------------------
-	// 2. REMOTE UTCP TOOL
+	// 1. REMOTE UTCP TOOL
 	// If "stream": true → CallToolStream
 	// else → CallTool
 	// ---------------------------------------------
@@ -1355,6 +1341,7 @@ Return ONLY a JSON object EXACTLY like this:
   "use_tool": true|false,
   "tool_name": "name or empty",
   "arguments": { },
+  "stream": true|false,
   "reason": "short explanation"
 }
 
