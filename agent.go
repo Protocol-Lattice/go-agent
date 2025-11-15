@@ -154,8 +154,7 @@ Respond ONLY with JSON:
 {
   "use_code": true|false,
   "arguments": { "code": "...", "timeout": 20000 },
-  "stream": true|false,
-  "reason": "short explanation"
+  "stream": true|false
 }
 `, userInput)
 
@@ -1041,16 +1040,11 @@ func (a *Agent) Generate(ctx context.Context, sessionID, userInput string) (stri
 		}
 	}
 
-	// ---------------------------------------------
-	// 3. CODECHAIN (multi-step tool logic)
-	// ---------------------------------------------
-	if a.CodeChain != nil {
-		if handled, output, err := a.codeChainOrchestrator(ctx, sessionID, userInput); handled {
-			if err != nil {
-				return "", err
-			}
-			return output, nil
-		}
+	// -------------------------------------------------------------
+	// 3. Chain Orchestrator (LLM decides a multi-step chain execution)
+	// -------------------------------------------------------------
+	if handled, output, err := a.codeChainOrchestrator(ctx, sessionID, userInput); handled {
+		return output, err
 	}
 
 	// ---------------------------------------------
@@ -1285,87 +1279,132 @@ type ToolChoice struct {
 	Reason    string         `json:"reason"`
 }
 
-// codeChainOrchestrator decides whether a UTCP chain should run,
-// executes it via UtcpChainClient, encodes output in TOON, stores memory,
-// and returns the final result.
+// codeChainOrchestrator lets the LLM decide whether to execute a multi-step UTCP chain.
+// It mirrors the design and behavior of toolOrchestrator, but produces a []ChainStep
+// and executes it via CodeChain (UTCP chain execution engine).
+
 func (a *Agent) codeChainOrchestrator(
 	ctx context.Context,
 	sessionID string,
 	userInput string,
 ) (bool, string, error) {
 
-	// Chain client not enabled → skip
 	if a.CodeChain == nil {
 		return false, "", nil
 	}
 
-	trim := strings.TrimSpace(userInput)
-	lower := strings.ToLower(trim)
+	// ----------------------------------------------------------
+	// 1. Build chain-selection prompt (LLM chain planning engine)
+	// ----------------------------------------------------------
+	toolList := a.ToolSpecs()
+	toolDesc := renderUtcpToolsForPrompt(toolList)
 
-	// ---- 1. Detection heuristics ----
-	// You can refine these later.
-	isChain :=
-		strings.HasPrefix(lower, "chain:") ||
-			strings.Contains(lower, "\"tool_name\"") ||
-			strings.Contains(lower, "\"steps\"") ||
-			strings.Contains(lower, "use_previous")
+	choicePrompt := fmt.Sprintf(`
+You are a UTCP chain planning engine.
 
-	if !isChain {
+A user asked:
+%q
+
+You have access to these UTCP tools:
+%s
+
+You can also discover tools dynamically using:
+search_tools("<query>", <limit>)
+
+Example:
+search_tools("file", 10)
+
+Think step-by-step whether ANY chain should be used.
+
+Return ONLY a JSON object EXACTLY like this:
+
+{
+  "use_chain": true|false,
+  "steps": [
+    { "tool_name": "...", "inputs": {...}, "use_previous": true|false, "stream": true|false }
+  ],
+  "timeout": 20000
+}
+
+Return ONLY JSON. No explanations.
+`, userInput, toolDesc)
+
+	raw, err := a.model.Generate(ctx, choicePrompt)
+	if err != nil {
 		return false, "", nil
 	}
 
-	// ---- 2. Extract JSON payload ----
-	payload := strings.TrimSpace(strings.TrimPrefix(lower, "chain:"))
-	if payload == "" {
-		return true, "", errors.New("chain: missing steps payload")
+	jsonStr := extractJSON(fmt.Sprint(raw))
+	if jsonStr == "" {
+		return false, "", nil
 	}
 
-	var steps []chain.ChainStep
-	var wrapper struct {
-		Steps   []chain.ChainStep `json:"steps"`
-		Timeout int               `json:"timeout"`
+	// ----------------------------------------------------------
+	// 2. Parse JSON with all chain fields (including stream/use_previous)
+	// ----------------------------------------------------------
+	type chainStepJSON struct {
+		ID          string         `json:"id"`
+		ToolName    string         `json:"tool_name"`
+		Inputs      map[string]any `json:"inputs"`
+		UsePrevious bool           `json:"use_previous"`
+		Stream      bool           `json:"stream"`
 	}
 
-	// Accept direct []ChainStep or wrapped object { steps: [...] }
-	if err := json.Unmarshal([]byte(payload), &steps); err != nil {
-		if err2 := json.Unmarshal([]byte(payload), &wrapper); err2 != nil {
-			return true, "", fmt.Errorf("chain: invalid steps JSON: %v", err)
+	var parsed struct {
+		Steps   []chainStepJSON `json:"steps"`
+		Timeout int             `json:"timeout"`
+	}
+
+	if err := json.Unmarshal([]byte(jsonStr), &parsed); err != nil {
+		return false, "", nil
+	}
+	timeout := time.Duration(parsed.Timeout) * time.Millisecond
+	if timeout <= 0 {
+		timeout = 20 * time.Second
+	}
+
+	// ----------------------------------------------------------
+	// 3. Convert JSON → UTCP ChainStep via builder (correct)
+	// ----------------------------------------------------------
+	steps := make([]chain.ChainStep, len(parsed.Steps))
+	for i, s := range parsed.Steps {
+		steps[i] = chain.ChainStep{
+			ToolName:    s.ToolName,
+			Inputs:      s.Inputs,
+			Stream:      s.Stream,
+			UsePrevious: s.UsePrevious,
 		}
-		steps = wrapper.Steps
 	}
 
-	timeout := 20 * time.Second
-	if wrapper.Timeout > 0 {
-		timeout = time.Duration(wrapper.Timeout) * time.Millisecond
-	}
-
-	// ---- 3. Execute chain ----
+	// ----------------------------------------------------------
+	// 4. Execute chain
+	// ----------------------------------------------------------
 	result, err := a.CodeChain.CallToolChain(ctx, steps, timeout)
 	if err != nil {
 		a.storeMemory(sessionID, "assistant",
-			fmt.Sprintf("CodeChain error: %v", err),
-			map[string]string{"source": "codechain"},
+			fmt.Sprintf("Chain error: %v", err),
+			map[string]string{"source": "chain"},
 		)
 		return true, "", err
 	}
 
-	// ---- 4. Convert result → string ----
-	var out string
-	if b, err := json.MarshalIndent(result, "", "  "); err == nil {
-		out = string(b)
-	} else {
-		out = fmt.Sprint(result)
-	}
+	// ----------------------------------------------------------
+	// 5. Encode result
+	// ----------------------------------------------------------
+	outBytes, _ := json.Marshal(result)
+	rawOut := string(outBytes)
 
-	// ---- 5. TOON encode + store ----
-	toonBytes, _ := gotoon.Encode(result)
-	full := fmt.Sprintf("%s\n\n.toon:\n%s", out, string(toonBytes))
+	toonBytes, _ := gotoon.Encode(rawOut)
+	full := fmt.Sprintf("%s\n\n.toon:\n%s", rawOut, string(toonBytes))
 
-	a.storeMemory(sessionID, "assistant", full,
-		map[string]string{"source": "codechain"},
-	)
+	// ----------------------------------------------------------
+	// 6. Store memory
+	// ----------------------------------------------------------
+	a.storeMemory(sessionID, "assistant", full, map[string]string{
+		"source": "chain",
+	})
 
-	return true, full, nil
+	return true, rawOut, nil
 }
 
 // In the toolOrchestrator function, modify the JSON parsing section:
@@ -1424,8 +1463,7 @@ Return ONLY a JSON object EXACTLY like this:
   "use_tool": true|false,
   "tool_name": "name or empty",
   "arguments": { },
-  "stream": true|false,
-  "reason": "short explanation"
+  "stream": true|false
 }
 
 Return ONLY JSON. No explanations.
