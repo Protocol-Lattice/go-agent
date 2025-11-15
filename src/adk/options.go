@@ -5,6 +5,7 @@ import (
 
 	agent "github.com/Protocol-Lattice/go-agent"
 	"github.com/universal-tool-calling-protocol/go-utcp"
+	"github.com/universal-tool-calling-protocol/go-utcp/src/plugins/chain"
 	"github.com/universal-tool-calling-protocol/go-utcp/src/plugins/codemode"
 )
 
@@ -88,6 +89,13 @@ func WithUTCP(client utcp.UtcpClientInterface) Option {
 func WithCodeModeUtcp(client utcp.UtcpClientInterface) Option {
 	return func(kit *AgentDevelopmentKit) error {
 		kit.CodeMode = *codemode.NewCodeModeUTCP(client)
+		return nil
+	}
+}
+
+func WithChainModeUtcp(client utcp.UtcpClientInterface) Option {
+	return func(kit *AgentDevelopmentKit) error {
+		kit.ChainMode = *chain.NewChainModeUTCP(client)
 		return nil
 	}
 }
