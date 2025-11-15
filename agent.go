@@ -128,6 +128,36 @@ func New(opts Options) (*Agent, error) {
 	return a, nil
 }
 
+// userLooksLikeToolCall returns true if the user *likely* meant to call a tool.
+func (a *Agent) userLooksLikeToolCall(s string) bool {
+	s = strings.TrimSpace(strings.ToLower(s))
+
+	// Looks like: echo {...}
+	if strings.Contains(s, "{") && strings.Contains(s, "}") {
+		parts := strings.Fields(s)
+		if len(parts) > 0 {
+			tool := parts[0]
+			for _, t := range a.ToolSpecs() {
+				if strings.ToLower(t.Name) == tool {
+					return true
+				}
+			}
+		}
+	}
+
+	// Looks like: tool: echo {...}
+	if strings.HasPrefix(s, "tool:") {
+		return true
+	}
+
+	// Looks like: {"tool": "echo", ...}
+	if strings.HasPrefix(s, "{") && strings.Contains(s, "\"tool\"") {
+		return true
+	}
+
+	return false
+}
+
 // codeModeOrchestrator decides whether CodeMode should execute userInput,
 // runs it, stores TOON-encoded memory, and returns the final output.
 func (a *Agent) codeModeOrchestrator(
@@ -142,61 +172,70 @@ func (a *Agent) codeModeOrchestrator(
 
 	tools := renderUtcpToolsForPrompt(a.ToolSpecs())
 
-	choicePrompt := fmt.Sprintf(`
-You are a Code Execution Decision Engine.
+	choicePrompt := fmt.Sprintf(`You are a Code Execution Decision Engine that determines whether a user query requires UTCP tool execution.
 
-A user asked:
+USER QUERY:
 %q
 
-You have access to these UTCP tools (to be called from Go code):
+AVAILABLE UTCP TOOLS:
 %s
 
-Your job: Decide whether the user intends to use one or more UTCP tools.
-You MUST base this decision strictly on the user message and the available UTCP tools.
+DECISION CRITERIA:
+Analyze if the user's request requires calling one or more UTCP tools listed above.
 
-Inside CodeMode, the following helper functions are available:
+CODE EXECUTION CONTEXT:
+When generating code snippets, use these helper functions:
 
-  // Non-streaming tool call
-  r, err := codemode.CallTool("<tool_name>", map[string]any{...})
-  // Streaming tool call
-  stream, err := codemode.CallToolStream("<tool_name>", map[string]any{...})
-  v, err := stream.Next()
+Non-streaming tool call:
+  result, err := codemode.CallTool("<tool_name>", map[string]any{
+    "param1": value1,
+    "param2": value2,
+  })
 
-These helpers internally call:
-  CallTool(ctx, toolName, args) (any, error)
-  CallToolStream(ctx, toolName, args) (transports.StreamResult, error)
+Streaming tool call:
+  stream, err := codemode.CallToolStream("<tool_name>", map[string]any{
+    "param": value,
+  })
+  for {
+    chunk, err := stream.Next()
+    if err != nil { break }
+    // process chunk
+  }
 
-If the user wants code execution:
-- Set "use_code" to true.
-- Inside "arguments.code", return ONLY a Go snippet (not a full program).
-- The snippet MUST call one or more UTCP tools that match the user's request.
-- You may chain results, for example:
-      r1, _ := codemode.CallTool("math.add", map[string]any{"a": 1, "b": 2})
-      r2, _ := codemode.CallTool("string.concat", map[string]any{
-          "prefix": "Result: ",
-          "value":  r1["sum"],
-      })
-- You may use streaming:
-      s, _ := codemode.CallToolStream("stream.echo", map[string]any{"input": "hello"})
-      v, _ := s.Next()
-- You MUST choose tool names and argument structures from the UTCP tool list above.
-- If ANY CallToolStream is used, set "stream" to true; otherwise false.
+RULES:
+1. Tool names and parameters MUST exactly match the UTCP tools listed above
+2. Generate ONLY code snippets, NOT complete programs (no package/main/imports)
+3. You may chain multiple tool calls and use their results
+4. Set "stream": true if ANY CallToolStream is used, otherwise false
+5. Set "timeout" in milliseconds (default: 20000)
+6. Tool calls can be composed, for example:
+   r1, _ := codemode.CallTool("math.multiply", map[string]any{"a": 5, "b": 3})
+   r2, _ := codemode.CallTool("math.add", map[string]any{"a": r1["result"], "b": 10})
 
-If the user does NOT want code execution:
-- Set "use_code" to false.
-- "arguments.code" MUST be "".
-- "stream" MUST be false.
+OUTPUT FORMAT:
+Return ONLY valid JSON with NO markdown, NO explanations, NO code blocks.
 
-Respond ONLY with JSON in EXACTLY this shape:
-
+If code execution is needed:
 {
-  "use_code": true|false,
-  "arguments": { "code": "...", "timeout": 20000 },
-  "stream": true|false
+  "use_code": true,
+  "arguments": {
+    "code": "<Go code snippet calling UTCP tools>",
+    "timeout": 20000
+  },
+  "stream": <true if any streaming call, false otherwise>
 }
 
-Return ONLY JSON. No explanations. No markdown.
-`, userInput, tools)
+If code execution is NOT needed:
+{
+  "use_code": false,
+  "arguments": {
+    "code": "",
+    "timeout": 20000
+  },
+  "stream": false
+}
+
+Respond now with ONLY the JSON object:`, userInput, tools)
 
 	raw, err := a.model.Generate(ctx, choicePrompt)
 	if err != nil {
@@ -1076,6 +1115,13 @@ func (a *Agent) Generate(ctx context.Context, sessionID, userInput string) (stri
 		return output, nil
 	}
 
+	// If the user input looks like a tool call, but wasn't handled above,
+	// we can reasonably assume it was a malformed/unrecognized tool call.
+	// We return an empty response rather than falling through to LLM completion.
+	if a.userLooksLikeToolCall(trimmed) {
+		return "", nil
+	}
+
 	// ---------------------------------------------
 	// 6. LLM COMPLETION
 	// ---------------------------------------------
@@ -1313,42 +1359,77 @@ func (a *Agent) codeChainOrchestrator(
 	toolList := a.ToolSpecs()
 	toolDesc := renderUtcpToolsForPrompt(toolList)
 
-	choicePrompt := fmt.Sprintf(`
-You are a UTCP chain planning engine.
+	choicePrompt := fmt.Sprintf(`You are a UTCP Chain Planning Engine that constructs multi-step tool execution plans.
 
-A user asked:
+USER REQUEST:
 %q
 
-You have access to these UTCP tools:
+AVAILABLE UTCP TOOLS:
 %s
 
-Your job is to decide whether a multi-step UTCP tool chain is required to answer the user.
+OBJECTIVE:
+Determine if the user's request requires a sequence of UTCP tool calls. If so, construct an optimal execution chain.
 
-Think step-by-step, but DO NOT reveal your reasoning.
-Base all decisions strictly on:
-- the user's request
-- the tools available above
+CHAIN CONSTRUCTION RULES:
+1. "tool_name" MUST exactly match a tool name from the list above
+2. "inputs" MUST be a JSON object containing all required parameters for that tool
+3. "use_previous" is true when this step consumes output from the previous step
+4. "stream" is true ONLY if:
+   - The tool explicitly supports streaming, AND
+   - Streaming is beneficial for this use case
+5. Steps should be ordered to satisfy data dependencies
+6. Each step's inputs can reference previous step outputs via "use_previous": true
+7. The first step always has "use_previous": false
 
-Rules for constructing the chain:
-- "tool_name" must be an exact match for a UTCP tool.
-- "inputs" must be a JSON object with arguments required by that tool.
-- "use_previous" is true when this step receives the previous step's output.
-- "stream" is true ONLY if the selected tool supports streaming AND streaming is desired.
-- If the user does not need any tools, set "use_chain" to false and "steps" must be an empty array.
+DECISION LOGIC:
+- Single tool call needed → Create a chain with one step
+- Multiple dependent tool calls → Create a chain with multiple steps ordered by dependency
+- No tools needed → Set "use_chain": false with empty "steps" array
 
-You MUST return ONLY a JSON object in EXACTLY this shape:
+CHAINING EXAMPLES:
+Example 1 - Sequential processing:
+  Step 1: fetch_data → outputs raw data
+  Step 2: process_data (use_previous: true) → receives raw data, outputs processed result
 
+Example 2 - Independent then merge:
+  Step 1: get_userinfo (use_previous: false)
+  Step 2: enrich_data (use_previous: true) → uses userinfo output
+
+Example 3 - Streaming final output:
+  Step 1: generate_text (use_previous: false, stream: false)
+  Step 2: format_output (use_previous: true, stream: true) → streams formatted result
+
+OUTPUT FORMAT:
+Respond with ONLY valid JSON. NO markdown code blocks. NO explanations. NO reasoning text.
+
+When tool chain is needed:
 {
-  "use_chain": true|false,
+  "use_chain": true,
   "steps": [
-    { "tool_name": "...", "inputs": { ... }, "use_previous": true|false, "stream": true|false }
+    {
+      "tool_name": "<exact_tool_name>",
+      "inputs": { "param1": "value1", "param2": "value2" },
+      "use_previous": false,
+      "stream": false
+    },
+    {
+      "tool_name": "<next_tool_name>",
+      "inputs": { "param": "value" },
+      "use_previous": true,
+      "stream": false
+    }
   ],
   "timeout": 20000
 }
 
-Return ONLY JSON. No explanations. No markdown.
-`, userInput, toolDesc)
+When NO tools needed:
+{
+  "use_chain": false,
+  "steps": [],
+  "timeout": 20000
+}
 
+Analyze the request and respond with ONLY the JSON object:`, userInput, toolDesc)
 	raw, err := a.model.Generate(ctx, choicePrompt)
 	if err != nil {
 		return false, "", nil
