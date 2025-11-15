@@ -1,9 +1,3 @@
-
-<p align="center">
-<img width="512" height="512" alt="ChatGPT Image 25 paź 2025 o 16_36_32" src="https://github.com/user-attachments/assets/4ab4ff1c-90a5-4351-a7d9-15b6d70a3db7" />
-</p>
-
-
 [![Go Version](https://img.shields.io/badge/Go-1.25-00ADD8?logo=go&logoColor=white)](https://go.dev/dl/)
 [![CI Status](https://github.com/Protocol-Lattice/go-agent/actions/workflows/go.yml/badge.svg)](https://github.com/Protocol-Lattice/go-agent/actions/workflows/go.yml)
 [![Go Reference](https://pkg.go.dev/badge/github.com/Protocol-Lattice/go-agent.svg)](https://pkg.go.dev/github.com/Protocol-Lattice/go-agent)
