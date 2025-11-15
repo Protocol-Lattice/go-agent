@@ -5,7 +5,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"log"
 	"strings"
 	"testing"
 
@@ -588,7 +587,6 @@ func TestCodeMode_ExecutesCallToolStreamInsideDSL(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Generate returned error: %v", err)
 	}
-	log.Println(utcpClient.lastToolName)
 	if utcpClient.lastToolName != "stream.echo" {
 		t.Fatalf("expected streaming tool to run")
 	}
@@ -689,5 +687,66 @@ func TestCodeMode_ComplexLogicAndToolChain(t *testing.T) {
 
 	if utcpClient.callCount != 3 {
 		t.Fatalf("expected 3 UTCP calls from inside the DSL loop, got %d", utcpClient.callCount)
+	}
+}
+
+func TestGenerate_ExecutesUTCPCalledTool(t *testing.T) {
+	ctx := context.Background()
+
+	// LLM returns JSON prompting the tool orchestrator to use the UTCP tool.
+	model := &stubModel{
+		response: `{
+			"use_tool": true,
+			"tool_name": "echo",
+			"arguments": { "input": "hi" }
+		}`,
+	}
+
+	mem := memory.NewSessionMemory(&memory.MemoryBank{}, 4).WithEmbedder(memory.DummyEmbedder{})
+
+	utcpClient := &stubUTCPClient{
+		searchTools: []utcpTools.Tool{
+			{Name: "echo", Description: "echo test"},
+		},
+	}
+
+	agent, err := New(Options{
+		Model:      model,
+		Memory:     mem,
+		UTCPClient: utcpClient,
+	})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+
+	out, err := agent.Generate(ctx, "s1", "hello")
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+
+	// Expect UTCP tool call to happen
+	if utcpClient.callCount != 1 {
+		t.Fatalf("expected UTCP client CallTool to be called once, got %d", utcpClient.callCount)
+	}
+	if utcpClient.lastToolName != "echo" {
+		t.Fatalf("expected UTCP tool 'echo', got %q", utcpClient.lastToolName)
+	}
+
+	// Returned output should be raw non-TOON tool result
+	if out != "utcp says echo" {
+		t.Fatalf("unexpected output: %q", out)
+	}
+
+	// Verify TOON memory stored
+	recs, _ := mem.RetrieveContext(ctx, "s1", "", 10)
+	foundToon := false
+	for _, r := range recs {
+		if strings.Contains(r.Content, ".toon:") {
+			foundToon = true
+			break
+		}
+	}
+	if !foundToon {
+		t.Fatalf("expected TOON-encoded assistant memory")
 	}
 }
