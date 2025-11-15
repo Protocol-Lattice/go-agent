@@ -651,3 +651,43 @@ func TestCodeMode_StoresToonMemory(t *testing.T) {
 		t.Fatalf("expected CodeMode output to be stored with TOON")
 	}
 }
+
+func TestCodeMode_ComplexLogicAndToolChain(t *testing.T) {
+	ctx := context.Background()
+
+	// This Go code snippet iterates three times, calling the "echo" tool in each loop.
+	codeSnippet := `
+		var result string
+		var out any
+		for i := 0; i < 3; i++ {
+			out, _ = codemode.CallTool("echo", map[string]any{"input": "ping"})
+		}
+		out
+	`
+
+	model := &stubModel{
+		response: fmt.Sprintf(`{"use_tool": true, "tool_name": "codemode.run_code", "arguments": { "code": %q }}`, codeSnippet),
+	}
+
+	mem := memory.NewSessionMemory(&memory.MemoryBank{}, 4)
+	utcpClient := &stubUTCPClient{}
+
+	agent, err := New(Options{
+		Model:      model,
+		Memory:     mem,
+		UTCPClient: utcpClient,
+		CodeMode:   codemode.NewCodeModeUTCP(utcpClient),
+	})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+
+	_, err = agent.Generate(ctx, "session1", "run complex code")
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+
+	if utcpClient.callCount != 3 {
+		t.Fatalf("expected 3 UTCP calls from inside the DSL loop, got %d", utcpClient.callCount)
+	}
+}
