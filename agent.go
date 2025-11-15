@@ -193,8 +193,19 @@ func (a *Agent) Flush(ctx context.Context, sessionID string) error {
 	return a.memory.FlushToLongTerm(ctx, sessionID)
 }
 
-func (a *Agent) executeTool(ctx context.Context, sessionID, toolName string, args map[string]any) (any, error) {
-	// 1. Try to find and invoke the tool locally first.
+func (a *Agent) executeTool(
+	ctx context.Context,
+	sessionID, toolName string,
+	args map[string]any,
+) (any, error) {
+
+	if args == nil {
+		args = map[string]any{}
+	}
+
+	// ---------------------------------------------
+	// 1. LOCAL tool
+	// ---------------------------------------------
 	if tool, _, ok := a.lookupTool(toolName); ok {
 		resp, err := tool.Invoke(ctx, ToolRequest{
 			SessionID: sessionID,
@@ -206,11 +217,47 @@ func (a *Agent) executeTool(ctx context.Context, sessionID, toolName string, arg
 		return resp.Content, nil
 	}
 
-	// 2. If not found locally, and a UTCP client exists, try calling it remotely.
+	// ---------------------------------------------
+	// 2. REMOTE UTCP TOOL
+	// If "stream": true → CallToolStream
+	// else → CallTool
+	// ---------------------------------------------
 	if a.UTCPClient != nil {
+
+		// streaming request?
+		if streamFlag, ok := args["stream"].(bool); ok && streamFlag {
+
+			stream, err := a.UTCPClient.CallToolStream(ctx, toolName, args)
+			if err != nil {
+				return nil, err
+			}
+			if stream == nil {
+				return nil, fmt.Errorf("CallToolStream returned nil stream for %s", toolName)
+			}
+
+			// Accumulate streamed chunks into a single string
+			var sb strings.Builder
+			for {
+				chunk, err := stream.Next()
+				if err != nil {
+					break
+				}
+
+				if chunk != nil {
+					sb.WriteString(fmt.Sprint(chunk))
+				}
+			}
+
+			return sb.String(), nil
+		}
+
+		// Non-streaming remote call
 		return a.UTCPClient.CallTool(ctx, toolName, args)
 	}
 
+	// ---------------------------------------------
+	// 3. Unknown tool
+	// ---------------------------------------------
 	return nil, fmt.Errorf("unknown tool: %s", toolName)
 }
 
