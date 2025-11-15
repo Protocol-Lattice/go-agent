@@ -112,6 +112,11 @@ func New(opts Options) (*Agent, error) {
 		}
 	}
 
+	codeMode := opts.CodeMode
+	if codeMode == nil && opts.UTCPClient != nil {
+		codeMode = codemode.NewCodeModeUTCP(opts.UTCPClient)
+	}
+
 	a := &Agent{
 		model:             opts.Model,
 		memory:            opts.Memory,
@@ -121,7 +126,7 @@ func New(opts Options) (*Agent, error) {
 		subAgentDirectory: subAgentDirectory,
 		UTCPClient:        opts.UTCPClient,
 		Shared:            opts.Shared,
-		CodeMode:          opts.CodeMode,
+		CodeMode:          codeMode,
 		CodeChain:         opts.CodeChain,
 	}
 
@@ -136,37 +141,70 @@ func (a *Agent) codeModeOrchestrator(
 	userInput string,
 ) (bool, string, error) {
 
-	// If CodeMode is not active, skip.
 	if a.CodeMode == nil {
 		return false, "", nil
 	}
 
-	// Decide if this input looks like “code to execute”.
-	// You can refine this heuristic over time.
-	trim := strings.TrimSpace(userInput)
-	if !strings.HasPrefix(trim, "```go") &&
-		!strings.Contains(trim, "main(") &&
-		!strings.Contains(trim, "{") {
-		// Not CodeMode input — let LLM handle normally.
+	// Build unified UTCP-style selection prompt
+	choicePrompt := fmt.Sprintf(`
+You are a Code Execution Decision Engine.
+
+Determine whether the user is asking to execute Go code via codemode.run_code.
+
+User message:
+%q
+
+Respond ONLY with JSON:
+
+{
+  "use_code": true|false,
+  "arguments": { "code": "...", "timeout": 20000 },
+  "stream": true|false,
+  "reason": "short explanation"
+}
+`, userInput)
+
+	raw, err := a.model.Generate(ctx, choicePrompt)
+	if err != nil {
 		return false, "", nil
 	}
 
-	// Strip code fences if present.
-	code := trim
-	if strings.HasPrefix(trim, "```") {
-		code = strings.TrimPrefix(trim, "```go")
-		code = strings.TrimPrefix(code, "```")
-		code = strings.TrimSuffix(code, "```")
-		code = strings.TrimSpace(code)
+	jsonStr := extractJSON(fmt.Sprint(raw))
+	if jsonStr == "" {
+		return false, "", nil
 	}
 
-	// Execute via CodeModeUTCP.
-	result, err := a.CodeMode.Execute(ctx, codemode.CodeModeArgs{
-		Code:    code,
-		Timeout: 20000,
+	var resp struct {
+		Use       bool           `json:"use_code"`
+		Arguments map[string]any `json:"arguments"`
+		Stream    bool           `json:"stream"`
+	}
+
+	if err := json.Unmarshal([]byte(jsonStr), &resp); err != nil {
+		return false, "", nil
+	}
+
+	if !resp.Use {
+		return false, "", nil
+	}
+
+	if resp.Arguments == nil {
+		resp.Arguments = map[string]any{}
+	}
+
+	if _, ok := resp.Arguments["code"]; !ok {
+		resp.Arguments["code"] = userInput
+	}
+	if _, ok := resp.Arguments["timeout"]; !ok {
+		resp.Arguments["timeout"] = 20000
+	}
+
+	// Execute via CodeModeUTCP
+	raw, err = a.CodeMode.Execute(ctx, codemode.CodeModeArgs{
+		Code:    fmt.Sprint(resp.Arguments["code"]),
+		Timeout: resp.Arguments["timeout"].(int),
 	})
 	if err != nil {
-		// Store error so LLM has context.
 		a.storeMemory(sessionID, "assistant",
 			fmt.Sprintf("CodeMode error: %v", err),
 			map[string]string{"source": "codemode"},
@@ -174,18 +212,19 @@ func (a *Agent) codeModeOrchestrator(
 		return true, "", err
 	}
 
-	output := fmt.Sprint(result.Value)
+	// Raw output (before TOON wrapper)
+	rawOut := fmt.Sprint(raw)
 
-	// Encode TOON output
-	toonBytes, _ := gotoon.Encode(result.Value)
-	full := fmt.Sprintf("%s\n\n.toon:\n%s", output, string(toonBytes))
+	// Store TOON-enhanced version
+	toonBytes, _ := gotoon.Encode(rawOut)
+	full := fmt.Sprintf("%s\n\n.toon:\n%s", rawOut, string(toonBytes))
 
-	// Store memory
-	a.storeMemory(sessionID, "assistant", full,
-		map[string]string{"source": "codemode"},
-	)
+	a.storeMemory(sessionID, "assistant", full, map[string]string{
+		"source": "codemode",
+	})
 
-	return true, full, nil
+	return true, rawOut, nil
+
 }
 
 // Flush persists session memory into the long-term store.
@@ -836,13 +875,54 @@ func (a *Agent) lookupSubAgent(name string) (SubAgent, bool) {
 func (a *Agent) ToolSpecs() []tools.Tool {
 	var allSpecs []tools.Tool
 	seen := make(map[string]bool)
+
+	// 1. Local tools registered via ToolCatalog
+	if a.toolCatalog != nil {
+		for _, spec := range a.toolCatalog.Specs() {
+			name := strings.TrimSpace(spec.Name)
+			if name == "" {
+				continue
+			}
+			key := strings.ToLower(name)
+			if seen[key] {
+				continue
+			}
+
+			allSpecs = append(allSpecs, tools.Tool{
+				Name:        name,
+				Description: spec.Description,
+				Inputs: tools.ToolInputOutputSchema{
+					Type:       "object",
+					Properties: spec.InputSchema,
+				},
+			})
+			seen[key] = true
+		}
+	}
+
+	// 2. Built-in CodeMode tool (if available)
+	if a.CodeMode != nil {
+		if cmTools, err := a.CodeMode.Tools(context.Background()); err == nil {
+			for _, t := range cmTools {
+				key := strings.ToLower(strings.TrimSpace(t.Name))
+				if key == "" || seen[key] {
+					continue
+				}
+				allSpecs = append(allSpecs, t)
+				seen[key] = true
+			}
+		}
+	}
+
 	limit, err := strconv.Atoi(os.Getenv("utcp_search_tools_limit"))
 	if err != nil {
 		limit = 50
 	}
 	if limit == 0 {
 		limit = 50
-	} // 2. Get UTCP tool specs and merge
+	}
+
+	// 3. Get UTCP tool specs and merge
 	if a.UTCPClient != nil {
 		utcpTools, _ := a.UTCPClient.SearchTools("", limit)
 		for _, tool := range utcpTools {
@@ -1295,6 +1375,8 @@ func (a *Agent) codeChainOrchestrator(
 	return true, full, nil
 }
 
+// In the toolOrchestrator function, modify the JSON parsing section:
+
 func (a *Agent) toolOrchestrator(
 	ctx context.Context,
 	sessionID string,
@@ -1307,15 +1389,29 @@ func (a *Agent) toolOrchestrator(
 		return false, "", nil
 	}
 
-	// -----------------------------
-	// 1. Build LLM tool-selection prompt
-	// -----------------------------
-	var sb strings.Builder
-	sb.WriteString("UTCP Tools:\n")
-	for _, t := range toolList {
-		sb.WriteString(fmt.Sprintf("- %s: %s\n", t.Name, t.Description))
+	// Add codemode.run_code as a discoverable tool if CodeMode is enabled
+	if a.CodeMode != nil {
+		toolList = append(toolList, tools.Tool{
+			Name:        "codemode.run_code",
+			Description: "Execute Go code with access to UTCP tools via CallTool() and CallToolStream()",
+			Inputs: tools.ToolInputOutputSchema{
+				Type: "object",
+				Properties: map[string]any{
+					"code": map[string]any{
+						"type":        "string",
+						"description": "Go code to execute",
+					},
+					"timeout": map[string]any{
+						"type":        "integer",
+						"description": "Timeout in milliseconds",
+					},
+				},
+				Required: []string{"code"},
+			},
+		})
 	}
 
+	// Build tool selection prompt
 	toolDesc := renderUtcpToolsForPrompt(toolList)
 
 	choicePrompt := fmt.Sprintf(`
@@ -1326,12 +1422,6 @@ A user asked:
 
 You have access to these UTCP tools:
 %s
-
-You can also discover tools dynamically using:
-search_tools("<query>", <limit>)
-
-Example:
-search_tools("file", 10)
 
 Think step-by-step whether ANY tool should be used.
 
@@ -1348,9 +1438,7 @@ Return ONLY a JSON object EXACTLY like this:
 Return ONLY JSON. No explanations.
 `, userInput, toolDesc)
 
-	// -----------------------------
-	// 2. Query LLM
-	// -----------------------------
+	// Query LLM
 	raw, err := a.model.Generate(ctx, choicePrompt)
 	if err != nil {
 		return false, "", err
@@ -1358,9 +1446,7 @@ Return ONLY JSON. No explanations.
 
 	response := strings.TrimSpace(fmt.Sprint(raw))
 
-	// -----------------------------
-	// 3. EXTRACT AND VALIDATE JSON
-	// -----------------------------
+	// Extract and validate JSON
 	jsonStr := extractJSON(response)
 	if jsonStr == "" {
 		return false, "", nil
@@ -1378,9 +1464,38 @@ Return ONLY JSON. No explanations.
 		return false, "", nil
 	}
 
-	// -----------------------------
-	// 4. Validate tool exists
-	// -----------------------------
+	// Handle codemode.run_code specially
+	if tc.ToolName == "codemode.run_code" && a.CodeMode != nil {
+		code, _ := tc.Arguments["code"].(string)
+		timeout, ok := tc.Arguments["timeout"].(float64)
+		if !ok {
+			timeout = 20000
+		}
+
+		result, err := a.CodeMode.Execute(ctx, codemode.CodeModeArgs{
+			Code:    code,
+			Timeout: int(timeout),
+		})
+		if err != nil {
+			a.storeMemory(sessionID, "assistant",
+				fmt.Sprintf("CodeMode error: %v", err),
+				map[string]string{"source": "codemode"},
+			)
+			return true, "", err
+		}
+
+		rawOut := fmt.Sprint(result)
+		toonBytes, _ := gotoon.Encode(rawOut)
+		full := fmt.Sprintf("%s\n\n.toon:\n%s", rawOut, string(toonBytes))
+
+		a.storeMemory(sessionID, "assistant", full, map[string]string{
+			"source": "codemode",
+		})
+
+		return true, rawOut, nil
+	}
+
+	// Validate tool exists
 	exists := false
 	for _, t := range toolList {
 		if t.Name == tc.ToolName {
@@ -1392,13 +1507,9 @@ Return ONLY JSON. No explanations.
 		return true, "", fmt.Errorf("UTCP tool unknown: %s", tc.ToolName)
 	}
 
-	// -----------------------------
-	// 5. Execute UTCP or local tool
-	// IMPORTANT: always return RAW result.
-	// -----------------------------
+	// Execute UTCP or local tool
 	result, err := a.executeTool(ctx, sessionID, tc.ToolName, tc.Arguments)
 	if err != nil {
-		// still store memory in TOON for context
 		a.storeMemory(sessionID, "assistant",
 			fmt.Sprintf("tool %s error: %v", tc.ToolName, err),
 			map[string]string{"source": "tool_orchestrator"},
@@ -1406,12 +1517,10 @@ Return ONLY JSON. No explanations.
 		return true, "", err
 	}
 
-	// -----------------------------
-	// 6. RAW OUTPUT (NO TOON FORMATTING!)
-	// -----------------------------
+	// Return RAW output
 	rawOut := fmt.Sprint(result)
 
-	// Store TOON version separately in memory (allowed)
+	// Store TOON version in memory
 	toonBytes, _ := gotoon.Encode(rawOut)
 	store := fmt.Sprintf("%s\n\n.toon:\n%s", rawOut, string(toonBytes))
 
@@ -1420,9 +1529,6 @@ Return ONLY JSON. No explanations.
 		"source": "tool_orchestrator",
 	})
 
-	// -----------------------------
-	// 7. Return RAW tool output (what UTCP tests expect)
-	// -----------------------------
 	return true, rawOut, nil
 }
 
