@@ -112,11 +112,6 @@ func New(opts Options) (*Agent, error) {
 		}
 	}
 
-	codeMode := opts.CodeMode
-	if codeMode == nil && opts.UTCPClient != nil {
-		codeMode = codemode.NewCodeModeUTCP(opts.UTCPClient)
-	}
-
 	a := &Agent{
 		model:             opts.Model,
 		memory:            opts.Memory,
@@ -126,7 +121,7 @@ func New(opts Options) (*Agent, error) {
 		subAgentDirectory: subAgentDirectory,
 		UTCPClient:        opts.UTCPClient,
 		Shared:            opts.Shared,
-		CodeMode:          codeMode,
+		CodeMode:          opts.CodeMode,
 		CodeChain:         opts.CodeChain,
 	}
 
