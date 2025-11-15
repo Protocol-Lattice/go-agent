@@ -750,3 +750,188 @@ func TestGenerate_ExecutesUTCPCalledTool(t *testing.T) {
 		t.Fatalf("expected TOON-encoded assistant memory")
 	}
 }
+
+func TestDirectJsonToolInvocationCallsUTCP(t *testing.T) {
+	ctx := context.Background()
+	model := &stubModel{response: "ignored"}
+	mem := memory.NewSessionMemory(&memory.MemoryBank{}, 0)
+	utcp := &stubUTCPClient{}
+
+	agent, _ := New(Options{
+		Model:      model,
+		Memory:     mem,
+		UTCPClient: utcp,
+	})
+
+	_, err := agent.Generate(ctx, "s1", `{
+		"tool": "echo",
+		"arguments": { "input": "hi" }
+	}`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if utcp.callCount != 1 {
+		t.Fatalf("expected UTCP CallTool once, got %d", utcp.callCount)
+	}
+	if utcp.lastToolName != "echo" {
+		t.Fatalf("expected UTCP call to echo, got %q", utcp.lastToolName)
+	}
+}
+func TestDSLToolInvocationCallsUTCP(t *testing.T) {
+	ctx := context.Background()
+	model := &stubModel{response: "ignored"}
+	mem := memory.NewSessionMemory(&memory.MemoryBank{}, 0)
+	utcp := &stubUTCPClient{}
+
+	agent, _ := New(Options{
+		Model:      model,
+		Memory:     mem,
+		UTCPClient: utcp,
+	})
+
+	_, err := agent.Generate(ctx, "s1", `tool: echo {"input":"hi"}`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if utcp.callCount != 1 {
+		t.Fatalf("expected UTCP CallTool once")
+	}
+	if utcp.lastToolName != "echo" {
+		t.Fatalf("expected echo, got %q", utcp.lastToolName)
+	}
+}
+
+func TestShorthandInvocationCallsUTCP(t *testing.T) {
+	ctx := context.Background()
+	model := &stubModel{}
+	mem := memory.NewSessionMemory(&memory.MemoryBank{}, 0)
+	utcp := &stubUTCPClient{}
+
+	agent, _ := New(Options{
+		Model:      model,
+		Memory:     mem,
+		UTCPClient: utcp,
+	})
+
+	_, _ = agent.Generate(ctx, "s1", `echo {"input":"hi"}`)
+
+	if utcp.callCount != 1 {
+		t.Fatalf("expected UTCP CallTool once")
+	}
+	if utcp.lastToolName != "echo" {
+		t.Fatalf("expected tool echo, got %q", utcp.lastToolName)
+	}
+}
+
+func TestDirectJsonStreamInvocationCallsUTCPStream(t *testing.T) {
+	ctx := context.Background()
+	model := &stubModel{}
+	mem := memory.NewSessionMemory(&memory.MemoryBank{}, 0)
+
+	stream := &FakeStream{
+		chunks: []any{"chunk1", nil},
+	}
+	utcp := &stubUTCPClient{fakeStream: stream}
+
+	agent, _ := New(Options{
+		Model:      model,
+		Memory:     mem,
+		UTCPClient: utcp,
+	})
+
+	_, err := agent.Generate(ctx, "s1", `{
+		"tool": "stream.echo",
+		"arguments": { "input": "x", "stream": true }
+	}`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if utcp.lastToolName != "stream.echo" {
+		t.Fatalf("expected stream.echo, got %q", utcp.lastToolName)
+	}
+	if utcp.callCount != 1 {
+		t.Fatalf("expected one stream call, got %d", utcp.callCount)
+	}
+}
+
+func TestToolOrchestratorSelectsStreamingUTCPTool(t *testing.T) {
+	ctx := context.Background()
+
+	model := &stubModel{
+		response: `{
+			"use_tool": true,
+			"tool_name": "stream.echo",
+			"arguments": { "input": "abc", "stream": true },
+			"stream": true
+		}`,
+	}
+
+	mem := memory.NewSessionMemory(&memory.MemoryBank{}, 0)
+
+	stream := &FakeStream{chunks: []any{"A", "B", nil}}
+	utcp := &stubUTCPClient{
+		fakeStream: stream,
+		searchTools: []utcpTools.Tool{
+			{Name: "stream.echo", Description: "streaming echo"},
+		},
+	}
+
+	agent, _ := New(Options{
+		Model:      model,
+		Memory:     mem,
+		UTCPClient: utcp,
+	})
+
+	_, err := agent.Generate(ctx, "s1", "stream something")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if utcp.lastToolName != "stream.echo" {
+		t.Fatalf("expected streaming tool echo, got %q", utcp.lastToolName)
+	}
+}
+
+func TestToolSpecsMergesAllSources(t *testing.T) {
+	model := &stubModel{}
+	mem := memory.NewSessionMemory(&memory.MemoryBank{}, 0)
+	utcp := &stubUTCPClient{
+		searchTools: []utcpTools.Tool{
+			{Name: "remote.echo"},
+		},
+	}
+
+	local := &stubTool{spec: ToolSpec{Name: "local.echo"}}
+
+	agent, _ := New(Options{
+		Model:      model,
+		Memory:     mem,
+		Tools:      []Tool{local},
+		UTCPClient: utcp,
+		CodeMode:   codemode.NewCodeModeUTCP(utcp),
+	})
+
+	tools := agent.ToolSpecs()
+
+	var names []string
+	for _, t := range tools {
+		names = append(names, t.Name)
+	}
+
+	wants := []string{"local.echo", "remote.echo", "codemode.run_code"}
+	for _, want := range wants {
+		found := false
+		for _, got := range names {
+			if got == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("expected tool %q in ToolSpecs, got %v", want, names)
+		}
+	}
+}
