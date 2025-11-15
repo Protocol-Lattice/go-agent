@@ -935,3 +935,82 @@ func TestToolSpecsMergesAllSources(t *testing.T) {
 		}
 	}
 }
+func TestCodeMode_SimpleExpression(t *testing.T) {
+	ctx := context.Background()
+
+	model := &stubModel{
+		response: `{"use_tool": true, "tool_name": "codemode.run_code",
+            "arguments": { "code": "1 + 2" }}`,
+	}
+
+	mem := memory.NewSessionMemory(&memory.MemoryBank{}, 4)
+
+	utcp := &stubUTCPClient{}
+
+	agent, _ := New(Options{
+		Model:      model,
+		Memory:     mem,
+		UTCPClient: utcp,
+		CodeMode:   codemode.NewCodeModeUTCP(utcp),
+	})
+
+	out, err := agent.Generate(ctx, "sess", "run code")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Current CodeMode returns a nil result because `1+2` is not wrapped
+	if !strings.Contains(out, "<nil>") {
+		t.Fatalf("expected nil Codemode result, got %q", out)
+	}
+}
+
+func TestCodeMode_ExecutesCallToolInsideDSL2(t *testing.T) {
+	ctx := context.Background()
+
+	// The LLM response triggers CodeMode
+	model := &stubModel{
+		response: `{
+			"use_tool": true,
+			"tool_name": "codemode.run_code",
+			"arguments": {
+				"code": "codemode.CallTool(\"echo\", map[string]any{\"input\": \"hi\"})"
+			}
+		}`,
+	}
+
+	mem := memory.NewSessionMemory(&memory.MemoryBank{}, 4)
+
+	// Our UTCP stub: tracks calls to CallTool
+	utcpClient := &stubUTCPClient{}
+
+	agent, err := New(Options{
+		Model:      model,
+		Memory:     mem,
+		UTCPClient: utcpClient,
+		CodeMode:   codemode.NewCodeModeUTCP(utcpClient),
+	})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+
+	out, err := agent.Generate(ctx, "session1", "run code")
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+
+	// We don’t care about the output — CodeMode returns a struct string.
+	if out == "" {
+		t.Fatalf("expected non-empty codemode output")
+	}
+
+	// This is the key assertion:
+	// CodeMode must trigger UTCP CallTool exactly once.
+	if utcpClient.callCount != 1 {
+		t.Fatalf("expected 1 UTCP call from DSL, got %d", utcpClient.callCount)
+	}
+
+	if utcpClient.lastToolName != "echo" {
+		t.Fatalf("expected last UTCP tool to be 'echo', got %q", utcpClient.lastToolName)
+	}
+}
