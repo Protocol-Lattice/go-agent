@@ -4,11 +4,14 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
+	"log"
 	"strings"
 	"testing"
 
 	"github.com/Protocol-Lattice/go-agent/src/memory"
 	"github.com/Protocol-Lattice/go-agent/src/models"
+	"github.com/universal-tool-calling-protocol/go-utcp/src/plugins/codemode"
 	"github.com/universal-tool-calling-protocol/go-utcp/src/providers/base"
 	"github.com/universal-tool-calling-protocol/go-utcp/src/repository"
 	"github.com/universal-tool-calling-protocol/go-utcp/src/tools"
@@ -49,6 +52,7 @@ type stubUTCPClient struct {
 	searchTools     []utcpTools.Tool
 	lastSearchQuery string
 	lastSearchLimit int
+	fakeStream      FakeStream
 }
 
 type stubTool struct {
@@ -77,10 +81,6 @@ func (c *stubUTCPClient) SearchTools(query string, limit int) ([]utcpTools.Tool,
 	c.lastSearchQuery = query
 	c.lastSearchLimit = limit
 	return c.searchTools, nil
-}
-
-func (c *stubUTCPClient) CallToolStream(ctx context.Context, toolName string, args map[string]any) (transports.StreamResult, error) {
-	return nil, nil
 }
 
 func (c *stubUTCPClient) DeregisterToolProvider(ctx context.Context, name string) error {
@@ -537,5 +537,155 @@ func TestAgentMergesUTCPSearchResults(t *testing.T) {
 	}
 	if utcpClient.lastToolName != "utcp_tool" {
 		t.Fatalf("expected UTCP client to be called with 'utcp_tool', got %q", utcpClient.lastToolName)
+	}
+}
+
+func TestCodeMode_ExecutesCallToolInsideDSL(t *testing.T) {
+	ctx := context.Background()
+
+	// stub model instructs to run CodeMode
+	model := &stubModel{
+		response: `{
+			"use_code": true,
+			"arguments": { "code": "codemode.CallTool(\"echo\", map[string]any{\"input\": \"hi\"})" },
+			"stream": false,
+			"reason": "test"
+		}`,
+	}
+
+	mem := memory.NewSessionMemory(&memory.MemoryBank{}, 4)
+
+	utcpClient := &stubUTCPClient{}
+
+	agent, err := New(Options{
+		Model:      model,
+		Memory:     mem,
+		UTCPClient: utcpClient,
+		CodeMode:   codemode.NewCodeModeUTCP(utcpClient),
+	})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+
+	out, err := agent.Generate(ctx, "session1", "run code")
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+
+	// CodeMode should return raw output
+	if out == "" {
+		t.Fatalf("expected non-empty output")
+	}
+
+	// First call: Agent calling codemode.run_code via UTCP
+	// Second call: Code calling CallTool("echo") inside DSL
+	if utcpClient.callCount != 2 {
+		t.Fatalf("expected 2 UTCP calls (orchestrator + DSL), got %d", utcpClient.callCount)
+	}
+
+	if utcpClient.lastToolName != "echo" {
+		t.Fatalf("expected last tool to be 'echo', got %q", utcpClient.lastToolName)
+	}
+}
+
+func TestCodeMode_ExecutesCallToolStreamInsideDSL(t *testing.T) {
+	ctx := context.Background()
+
+	model := &stubModel{
+		response: `{
+			"use_code": true,
+			"arguments": { "code": "s := codemode.CallToolStream(\"stream.echo\", map[string]any{\"input\": \"x\"}); s.Next()" },
+			"stream": false
+		}`,
+	}
+
+	mem := memory.NewSessionMemory(&memory.MemoryBank{}, 4)
+
+	// stub stream
+	stream := &FakeStream{
+		chunks: []any{"A", "B", nil},
+		pos:    0,
+	}
+
+	utcpClient := &stubUTCPClient{}
+	utcpClient.fakeStream = *stream
+
+	agent, err := New(Options{
+		Model:      model,
+		Memory:     mem,
+		UTCPClient: utcpClient,
+		CodeMode:   codemode.NewCodeModeUTCP(utcpClient),
+	})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+
+	_, err = agent.Generate(ctx, "s1", "run code")
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	log.Println(utcpClient.lastToolName)
+	if utcpClient.lastToolName != "stream.echo" {
+		t.Fatalf("expected streaming tool to run")
+	}
+}
+
+type FakeStream struct {
+	chunks []any
+	pos    int
+}
+
+func (f *FakeStream) Next() (any, error) {
+	if f.pos >= len(f.chunks) {
+		return nil, fmt.Errorf("EOF")
+	}
+	ch := f.chunks[f.pos]
+	f.pos++
+	return ch, nil
+}
+
+func (c *stubUTCPClient) CallToolStream(ctx context.Context, name string, args map[string]any) (transports.StreamResult, error) {
+	c.callCount++
+	c.lastToolName = name
+	return &c.fakeStream, nil
+
+}
+
+func (f *FakeStream) Close() error {
+	return nil
+}
+func TestCodeMode_StoresToonMemory(t *testing.T) {
+	ctx := context.Background()
+
+	model := &stubModel{
+		response: `{
+			"use_code": true,
+			"arguments": { "code": "1+1" },
+			"stream": false
+		}`,
+	}
+
+	mem := memory.NewSessionMemory(&memory.MemoryBank{}, 4)
+	mem = mem.WithEmbedder(memory.DummyEmbedder{})
+
+	agent, _ := New(Options{
+		Model:      model,
+		Memory:     mem,
+		UTCPClient: &stubUTCPClient{},
+		CodeMode:   codemode.NewCodeModeUTCP(&stubUTCPClient{}),
+	})
+
+	_, _ = agent.Generate(ctx, "sess", "run code")
+
+	recs, _ := mem.RetrieveContext(ctx, "sess", "", 10)
+	found := false
+	for _, r := range recs {
+		if strings.Contains(r.Content, ".toon:") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected CodeMode output to be stored with TOON")
 	}
 }
