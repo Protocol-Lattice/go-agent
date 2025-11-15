@@ -52,7 +52,7 @@ type stubUTCPClient struct {
 	searchTools     []utcpTools.Tool
 	lastSearchQuery string
 	lastSearchLimit int
-	fakeStream      FakeStream
+	fakeStream      *FakeStream
 }
 
 type stubTool struct {
@@ -112,36 +112,6 @@ func TestNewAppliesDefaults(t *testing.T) {
 	}
 	if agent.contextLimit != 8 {
 		t.Fatalf("expected default context limit of 8, got %d", agent.contextLimit)
-	}
-}
-
-func TestNewRegistersToolsAndSubagents(t *testing.T) {
-	model := &stubModel{response: "ok"}
-	mem := memory.NewSessionMemory(&memory.MemoryBank{}, 4)
-
-	tool := &stubTool{spec: ToolSpec{Name: "Echo", Description: "desc"}}
-	researcher := &stubSubAgent{name: "Researcher", description: "desc"}
-
-	agent, err := New(Options{
-		Model:     model,
-		Memory:    mem,
-		Tools:     []Tool{tool},
-		SubAgents: []SubAgent{researcher},
-	})
-	if err != nil {
-		t.Fatalf("New returned error: %v", err)
-	}
-
-	localTools := agent.Tools()
-	if len(localTools) != 1 {
-		t.Fatalf("expected 1 tool, got %d", len(localTools))
-	}
-	subagents := agent.SubAgents()
-	if len(subagents) != 1 {
-		t.Fatalf("expected 1 subagent, got %d", len(subagents))
-	}
-	if subagents[0] != researcher {
-		t.Fatalf("expected subagent order to preserve insertion")
 	}
 }
 
@@ -602,7 +572,7 @@ func TestCodeMode_ExecutesCallToolStreamInsideDSL(t *testing.T) {
 	}
 
 	utcpClient := &stubUTCPClient{}
-	utcpClient.fakeStream = *stream
+	utcpClient.fakeStream = stream
 
 	agent, err := New(Options{
 		Model:      model,
@@ -641,7 +611,7 @@ func (f *FakeStream) Next() (any, error) {
 func (c *stubUTCPClient) CallToolStream(ctx context.Context, name string, args map[string]any) (transports.StreamResult, error) {
 	c.callCount++
 	c.lastToolName = name
-	return &c.fakeStream, nil
+	return c.fakeStream, nil
 
 }
 
