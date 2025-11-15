@@ -537,10 +537,9 @@ func TestCodeMode_ExecutesCallToolInsideDSL(t *testing.T) {
 	utcpClient := &stubUTCPClient{}
 
 	agent, err := New(Options{
-		Model:      model,
-		Memory:     mem,
-		UTCPClient: utcpClient,
-		CodeMode:   codemode.NewCodeModeUTCP(utcpClient),
+		Model:    model,
+		Memory:   mem,
+		CodeMode: codemode.NewCodeModeUTCP(utcpClient),
 	})
 	if err != nil {
 		t.Fatalf("New returned error: %v", err)
@@ -1056,10 +1055,9 @@ func TestChainOrchestrator_ParsesToolNameAndInputs(t *testing.T) {
 	utcp := &stubUTCPClient{}
 
 	agent, _ := New(Options{
-		Model:      model,
-		Memory:     mem,
-		UTCPClient: utcp,
-		CodeChain:  chain.NewChainModeUTCP(utcp),
+		Model:     model,
+		Memory:    mem,
+		CodeChain: chain.NewChainModeUTCP(utcp),
 	})
 
 	_, err := agent.Generate(ctx, "sess", "run")
