@@ -330,6 +330,153 @@ For more details, see the [TOON specification](https://github.com/toon-format/sp
 
 **Bottom Line:** TOON helps your agents do more with less, turning token budgets into a competitive advantage rather than a constraint.
 
+## 🧠 Tool Orchestrator (LLM-Driven UTCP Tool Selection)
+
+The **Tool Orchestrator** is an intelligent decision engine that lets the LLM choose when and how to call UTCP tools.
+It analyzes user input, evaluates available tools, and returns a structured JSON plan describing the next action.
+
+> This brings `go-agent` to the same capability tier as OpenAI’s *tool choice*, but with fully pluggable **UTCP** backends and Go-native execution.
+
+---
+
+### 🎯 What It Does
+
+* Interprets the user’s request
+* Loads and renders all available UTCP tools
+* Allows the LLM to reason using **TOON-Go**
+* Produces a strict JSON decision object:
+
+  ```json
+  {
+    "use_tool": true,
+    "tool_name": "search.files",
+    "arguments": { "query": "config" },
+    "reason": "User asked to look for configuration files"
+  }
+  ```
+* Executes the chosen tool deterministically
+
+---
+
+### ⚙️ How It Works
+
+1. **Collect Tool Definitions**
+
+   ```go
+   rendered := a.renderUtcpToolsForPrompt()
+   ```
+
+2. **Build the Orchestration Prompt**
+
+   ```go
+   choicePrompt := fmt.Sprintf(`
+     You are a UTCP tool selection engine.
+
+     A user asked:
+     %q
+
+     You have access to these UTCP tools:
+     %s
+
+     You can also discover tools dynamically using:
+     search_tools("<query>", <limit>)
+
+     Return ONLY JSON:
+     { "use_tool": ..., "tool_name": "...", "arguments": { }, "reason": "..." }
+   `, userInput, rendered)
+   ```
+
+3. **LLM Makes a Decision (via TOON)**
+
+   * Coordinator executes reasoning
+   * Assistant returns the final JSON only
+
+4. **Agent Executes the Tool**
+
+   * `CallTool`
+   * `SearchTools`
+   * `CallToolStream`
+
+5. **The result becomes the agent’s final response**
+
+---
+
+## 🧩 Why TOON-Go Improves Tool Selection
+
+The orchestrator uses **TOON** as its structured reasoning layer:
+
+* Coordinator → analyzes tool options
+* Assistant → returns the strict JSON
+* No hallucinated formatting
+* Easy to debug via TOON traces
+* Session memory stores the entire reasoning trajectory
+
+This yields **stable, deterministic** tool choice behavior.
+
+---
+
+## 🚀 Example
+
+### **User**
+
+> find all files containing “db connection” in the workspace
+
+### **LLM Output**
+
+```json
+{
+  "use_tool": true,
+  "tool_name": "search.files",
+  "arguments": {
+    "query": "db connection",
+    "limit": 20
+  },
+  "reason": "User wants to search through the workspace files"
+}
+```
+
+### **Agent Execution**
+
+The `search.files` UTCP tool is invoked, and its direct output is returned to the user.
+
+---
+
+## 🛠 Adding New Tools
+
+Any UTCP tool becomes instantly available to the orchestrator:
+
+```go
+client := utcp.NewClient().
+    WithPlugins(chain.Plugin, codemode.Plugin).
+    RegisterTool("mytool", handler)
+```
+
+The orchestrator will automatically include it in the prompt and allow dynamic discovery via `search_tools()`.
+
+---
+
+## 🧵 Works Seamlessly with CodeMode + Chain
+
+### **CodeMode**
+
+UTCP tool calls can run inside the Go DSL:
+
+```go
+r, _ := codemode.CallTool("echo", map[string]any{"input": "hi"})
+```
+
+### **ChainStep**
+
+The orchestrator can:
+
+* call a tool
+* run a chain step
+* discover tools dynamically
+* combine reasoning + execution
+
+This makes `go-agent` one of the first Go frameworks with multi-step, LLM-driven tool-routing.
+
+
 ## Development
 
 ### Running Tests
