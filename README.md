@@ -84,7 +84,6 @@ func main() {
 				return models.NewGeminiLLM(ctx, "gemini-2.5-pro", "Swarm orchestration:")
 			}),
 			adkmodules.InQdrantMemory(100000, *qdrantURL, *qdrantCollection, memory.AutoEmbedder(), &memOpts),
-			adkmodules.NewToolModule("essentials", adkmodules.StaticToolProvider([]agent.Tool{&tools.EchoTool{}}, nil)),
 		),
 	)
 	if err != nil {

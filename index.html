@@ -172,11 +172,6 @@ func main() {
         return models.NewGeminiLLM(ctx, "gemini-2.5-pro", "Swarm orchestration:")
       }),
       adkmodules.InMemoryMemoryModule(64),
-      adkmodules.NewToolModule("default-tools",
-        adkmodules.StaticToolProvider([]tools.Tool{
-          &tools.EchoTool{},
-          &tools.CalculatorTool{},
-        }, nil)),
     ),
   )
   if err != nil { log.Fatal(err) }
@@ -460,11 +455,6 @@ func main() {
         return models.NewGeminiLLM(ctx, "gemini-2.5-pro", "Swarm orchestration:")
       }),
       adkmodules.InMemoryMemoryModule(64),
-      adkmodules.NewToolModule("default-tools",
-        adkmodules.StaticToolProvider([]tools.Tool{
-          &tools.EchoTool{},
-          &tools.CalculatorTool{},
-        }, nil)),
     ),
   )
   if err != nil { log.Fatal(err) }
@@ -497,11 +487,6 @@ func main() {
         return models.NewGeminiLLM(ctx, "gemini-2.5-pro", "Swarm orchestration:")
       }),
       adkmodules.InMemoryMemoryModule(64),
-      adkmodules.NewToolModule("default-tools",
-        adkmodules.StaticToolProvider([]tools.Tool{
-          &tools.EchoTool{},
-          &tools.CalculatorTool{},
-        }, nil)),
     ),
   )
   if err != nil { log.Fatal(err) }
