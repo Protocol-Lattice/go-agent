@@ -260,6 +260,7 @@ func (k *AgentDevelopmentKit) BuildAgent(ctx context.Context, opts ...AgentOptio
 	defaultLimit := k.defaultContextLimit
 	defaultAgentOptions := append([]AgentOption(nil), k.agentOptions...)
 	utcp := k.UTCP
+	codeMode := k.CodeMode
 	k.mu.RUnlock()
 
 	if modelProvider == nil {
@@ -315,6 +316,7 @@ func (k *AgentDevelopmentKit) BuildAgent(ctx context.Context, opts ...AgentOptio
 		SystemPrompt: defaultPrompt,
 		ContextLimit: defaultLimit,
 		UTCPClient:   utcp,
+		CodeMode:     &codeMode,
 	}
 
 	for _, opt := range defaultAgentOptions {
