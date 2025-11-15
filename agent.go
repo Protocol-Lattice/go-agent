@@ -140,23 +140,63 @@ func (a *Agent) codeModeOrchestrator(
 		return false, "", nil
 	}
 
-	// Build unified UTCP-style selection prompt
+	tools := renderUtcpToolsForPrompt(a.ToolSpecs())
+
 	choicePrompt := fmt.Sprintf(`
 You are a Code Execution Decision Engine.
 
-Determine whether the user is asking to execute Go code via codemode.run_code.
-
-User message:
+A user asked:
 %q
 
-Respond ONLY with JSON:
+You have access to these UTCP tools (to be called from Go code):
+%s
+
+Your job: Decide whether the user intends to use one or more UTCP tools.
+You MUST base this decision strictly on the user message and the available UTCP tools.
+
+Inside CodeMode, the following helper functions are available:
+
+  // Non-streaming tool call
+  r, err := codemode.CallTool("<tool_name>", map[string]any{...})
+  // Streaming tool call
+  stream, err := codemode.CallToolStream("<tool_name>", map[string]any{...})
+  v, err := stream.Next()
+
+These helpers internally call:
+  CallTool(ctx, toolName, args) (any, error)
+  CallToolStream(ctx, toolName, args) (transports.StreamResult, error)
+
+If the user wants code execution:
+- Set "use_code" to true.
+- Inside "arguments.code", return ONLY a Go snippet (not a full program).
+- The snippet MUST call one or more UTCP tools that match the user's request.
+- You may chain results, for example:
+      r1, _ := codemode.CallTool("math.add", map[string]any{"a": 1, "b": 2})
+      r2, _ := codemode.CallTool("string.concat", map[string]any{
+          "prefix": "Result: ",
+          "value":  r1["sum"],
+      })
+- You may use streaming:
+      s, _ := codemode.CallToolStream("stream.echo", map[string]any{"input": "hello"})
+      v, _ := s.Next()
+- You MUST choose tool names and argument structures from the UTCP tool list above.
+- If ANY CallToolStream is used, set "stream" to true; otherwise false.
+
+If the user does NOT want code execution:
+- Set "use_code" to false.
+- "arguments.code" MUST be "".
+- "stream" MUST be false.
+
+Respond ONLY with JSON in EXACTLY this shape:
 
 {
   "use_code": true|false,
   "arguments": { "code": "...", "timeout": 20000 },
   "stream": true|false
 }
-`, userInput)
+
+Return ONLY JSON. No explanations. No markdown.
+`, userInput, tools)
 
 	raw, err := a.model.Generate(ctx, choicePrompt)
 	if err != nil {
@@ -345,7 +385,6 @@ func (a *Agent) renderTools() string {
 	}
 
 	var sb strings.Builder
-	sb.WriteString("Available UTCP tools:\n")
 
 	for _, t := range toolList {
 		sb.WriteString(fmt.Sprintf("- %s: %s\n", t.Name, t.Description))
@@ -391,30 +430,6 @@ func (a *Agent) renderTools() string {
 			}
 		}
 	}
-
-	return sb.String()
-}
-
-func (a *Agent) buildFullPrompt(userInput string, records []memory.MemoryRecord) string {
-	var sb strings.Builder
-	sb.Grow(4096)
-
-	sb.WriteString(a.systemPrompt)
-	if tools := a.renderTools(); tools != "" {
-		sb.WriteString("\n\nAvailable Tools:\n")
-		sb.WriteString(tools)
-	}
-	if sub := a.renderSubAgents(); sub != "" {
-		sb.WriteString("\n\n")
-		sb.WriteString(sub)
-	}
-
-	sb.WriteString("\n\nConversation memory (TOON):\n")
-	sb.WriteString(a.renderMemory(records))
-
-	sb.WriteString("\n\nCurrent user message:\n")
-	sb.WriteString(strings.TrimSpace(userInput))
-	sb.WriteString("\n\nCompose the best possible assistant reply.\n")
 
 	return sb.String()
 }
@@ -772,7 +787,6 @@ func renderUtcpToolsForPrompt(list []tools.Tool) string {
 	})
 
 	var sb strings.Builder
-	sb.WriteString("Available UTCP tools:\n")
 
 	for _, t := range list {
 		// ---- Basic metadata ----
@@ -1308,25 +1322,31 @@ A user asked:
 You have access to these UTCP tools:
 %s
 
-You can also discover tools dynamically using:
-search_tools("<query>", <limit>)
+Your job is to decide whether a multi-step UTCP tool chain is required to answer the user.
 
-Example:
-search_tools("file", 10)
+Think step-by-step, but DO NOT reveal your reasoning.
+Base all decisions strictly on:
+- the user's request
+- the tools available above
 
-Think step-by-step whether ANY chain should be used.
+Rules for constructing the chain:
+- "tool_name" must be an exact match for a UTCP tool.
+- "inputs" must be a JSON object with arguments required by that tool.
+- "use_previous" is true when this step receives the previous step's output.
+- "stream" is true ONLY if the selected tool supports streaming AND streaming is desired.
+- If the user does not need any tools, set "use_chain" to false and "steps" must be an empty array.
 
-Return ONLY a JSON object EXACTLY like this:
+You MUST return ONLY a JSON object in EXACTLY this shape:
 
 {
   "use_chain": true|false,
   "steps": [
-    { "tool_name": "...", "inputs": {...}, "use_previous": true|false, "stream": true|false }
+    { "tool_name": "...", "inputs": { ... }, "use_previous": true|false, "stream": true|false }
   ],
   "timeout": 20000
 }
 
-Return ONLY JSON. No explanations.
+Return ONLY JSON. No explanations. No markdown.
 `, userInput, toolDesc)
 
 	raw, err := a.model.Generate(ctx, choicePrompt)
