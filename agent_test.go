@@ -545,12 +545,7 @@ func TestCodeMode_ExecutesCallToolInsideDSL(t *testing.T) {
 
 	// stub model instructs to run CodeMode
 	model := &stubModel{
-		response: `{
-			"use_code": true,
-			"arguments": { "code": "codemode.CallTool(\"echo\", map[string]any{\"input\": \"hi\"})" },
-			"stream": false,
-			"reason": "test"
-		}`,
+		response: `{"use_tool": true, "tool_name": "codemode.run_code", "arguments": { "code": "codemode.CallTool(\"echo\", map[string]any{\"input\": \"hi\"})" }}`,
 	}
 
 	mem := memory.NewSessionMemory(&memory.MemoryBank{}, 4)
@@ -567,6 +562,11 @@ func TestCodeMode_ExecutesCallToolInsideDSL(t *testing.T) {
 		t.Fatalf("New returned error: %v", err)
 	}
 
+	// The tool orchestrator will call `codemode.run_code`, which is not a real UTCP tool,
+	// so the first call won't go through the stub. The second call inside the code
+	// will. To simulate the orchestrator "calling" the tool, we can just check the end state.
+	// The logic in `toolOrchestrator` handles `codemode.run_code` as a special case.
+
 	out, err := agent.Generate(ctx, "session1", "run code")
 	if err != nil {
 		t.Fatalf("Generate returned error: %v", err)
@@ -577,10 +577,8 @@ func TestCodeMode_ExecutesCallToolInsideDSL(t *testing.T) {
 		t.Fatalf("expected non-empty output")
 	}
 
-	// First call: Agent calling codemode.run_code via UTCP
-	// Second call: Code calling CallTool("echo") inside DSL
-	if utcpClient.callCount != 2 {
-		t.Fatalf("expected 2 UTCP calls (orchestrator + DSL), got %d", utcpClient.callCount)
+	if utcpClient.callCount != 1 {
+		t.Fatalf("expected 1 UTCP call from inside the DSL, got %d", utcpClient.callCount)
 	}
 
 	if utcpClient.lastToolName != "echo" {
@@ -592,11 +590,7 @@ func TestCodeMode_ExecutesCallToolStreamInsideDSL(t *testing.T) {
 	ctx := context.Background()
 
 	model := &stubModel{
-		response: `{
-			"use_code": true,
-			"arguments": { "code": "s := codemode.CallToolStream(\"stream.echo\", map[string]any{\"input\": \"x\"}); s.Next()" },
-			"stream": false
-		}`,
+		response: `{"use_tool": true, "tool_name": "codemode.run_code", "arguments": { "code": "s := codemode.CallToolStream(\"stream.echo\", map[string]any{\"input\": \"x\"}); s.Next()" }}`,
 	}
 
 	mem := memory.NewSessionMemory(&memory.MemoryBank{}, 4)
@@ -658,21 +652,19 @@ func TestCodeMode_StoresToonMemory(t *testing.T) {
 	ctx := context.Background()
 
 	model := &stubModel{
-		response: `{
-			"use_code": true,
-			"arguments": { "code": "1+1" },
-			"stream": false
-		}`,
+		response: `{"use_tool": true, "tool_name": "codemode.run_code", "arguments": { "code": "1+1" }}`,
 	}
 
 	mem := memory.NewSessionMemory(&memory.MemoryBank{}, 4)
 	mem = mem.WithEmbedder(memory.DummyEmbedder{})
 
+	utcpClient := &stubUTCPClient{}
+
 	agent, _ := New(Options{
 		Model:      model,
 		Memory:     mem,
-		UTCPClient: &stubUTCPClient{},
-		CodeMode:   codemode.NewCodeModeUTCP(&stubUTCPClient{}),
+		UTCPClient: utcpClient,
+		CodeMode:   codemode.NewCodeModeUTCP(utcpClient),
 	})
 
 	_, _ = agent.Generate(ctx, "sess", "run code")
