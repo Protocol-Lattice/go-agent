@@ -1008,35 +1008,18 @@ func (a *Agent) Generate(ctx context.Context, sessionID, userInput string) (stri
 	}
 
 	// ---------------------------------------------
-	// 0. DIRECT TOOL INVOCATION (bypass LLM entirely)
+	// 0. DIRECT TOOL INVOCATION (bypass everything)
 	// ---------------------------------------------
 	if toolName, args, ok := a.detectDirectToolCall(trimmed); ok {
-		// Execute tool immediately
 		result, err := a.executeTool(ctx, sessionID, toolName, args)
 		if err != nil {
 			return "", err
 		}
-
-		// RAW output — NO toon, NO coordinator, NO assistant prefix
 		return fmt.Sprint(result), nil
 	}
 
 	// ---------------------------------------------
-	// 1. Normal: store user memory
-	// ---------------------------------------------
-	a.storeMemory(sessionID, "user", userInput, nil)
-
-	// ---------------------------------------------
-	// 2. Tool orchestrator (LLM decides a tool)
-	// ---------------------------------------------
-	if handled, output, err := a.toolOrchestrator(ctx, sessionID, userInput); handled {
-		if err != nil {
-			return "", err
-		}
-		return output, nil // toolOrchestrator already returns RAW tool output
-	}
-	// ---------------------------------------------
-	// 0B. SUBAGENT COMMANDS (e.g., subagent:researcher ...)
+	// 1. SUBAGENT COMMANDS (subagent:researcher ...)
 	// ---------------------------------------------
 	if handled, out, meta, err := a.handleCommand(ctx, sessionID, userInput); handled {
 		if err != nil {
@@ -1047,19 +1030,7 @@ func (a *Agent) Generate(ctx context.Context, sessionID, userInput string) (stri
 	}
 
 	// ---------------------------------------------
-	// 3. CodeChain (pre-CodeMode)
-	// ---------------------------------------------
-	if a.CodeChain != nil {
-		if handled, output, err := a.codeChainOrchestrator(ctx, sessionID, userInput); handled {
-			if err != nil {
-				return "", err
-			}
-			return output, nil
-		}
-	}
-
-	// ---------------------------------------------
-	// 4. CodeMode
+	// 2. CODEMODE (Go-like DSL)
 	// ---------------------------------------------
 	if a.CodeMode != nil {
 		if handled, output, err := a.codeModeOrchestrator(ctx, sessionID, userInput); handled {
@@ -1071,7 +1042,34 @@ func (a *Agent) Generate(ctx context.Context, sessionID, userInput string) (stri
 	}
 
 	// ---------------------------------------------
-	// 5. Standard LLM response
+	// 3. CODECHAIN (multi-step tool logic)
+	// ---------------------------------------------
+	if a.CodeChain != nil {
+		if handled, output, err := a.codeChainOrchestrator(ctx, sessionID, userInput); handled {
+			if err != nil {
+				return "", err
+			}
+			return output, nil
+		}
+	}
+
+	// ---------------------------------------------
+	// 4. STORE USER MEMORY (only after code/tool checks)
+	// ---------------------------------------------
+	a.storeMemory(sessionID, "user", userInput, nil)
+
+	// ---------------------------------------------
+	// 5. TOOL ORCHESTRATOR (LLM decides a tool)
+	// ---------------------------------------------
+	if handled, output, err := a.toolOrchestrator(ctx, sessionID, userInput); handled {
+		if err != nil {
+			return "", err
+		}
+		return output, nil
+	}
+
+	// ---------------------------------------------
+	// 6. LLM COMPLETION
 	// ---------------------------------------------
 	prompt, err := a.buildPrompt(ctx, sessionID, userInput)
 	if err != nil {
@@ -1093,7 +1091,7 @@ func (a *Agent) Generate(ctx context.Context, sessionID, userInput string) (stri
 	response := fmt.Sprint(completion)
 
 	// ---------------------------------------------
-	// 6. TOON for assistant messages only
+	// 7. TOON ENCODE (assistant messages only)
 	// ---------------------------------------------
 	toonBytes, _ := gotoon.Encode(completion)
 	full := fmt.Sprintf("%s\n\n.toon:\n%s", response, string(toonBytes))
