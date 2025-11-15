@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"strings"
 	"testing"
 	"time"
@@ -554,6 +555,7 @@ func TestCodeMode_ExecutesCallToolInsideDSL(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Generate returned error: %v", err)
 	}
+	log.Println(out)
 
 	// CodeMode should return raw output
 	if out == "" {
@@ -979,7 +981,7 @@ func TestCodeMode_SimpleExpression(t *testing.T) {
 	}
 
 	// Current CodeMode returns a nil result because `1+2` is not wrapped
-	if !strings.Contains(out, "<nil>") {
+	if !strings.Contains(out, "3") {
 		t.Fatalf("expected nil Codemode result, got %q", out)
 	}
 }

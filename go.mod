@@ -11,7 +11,7 @@ require (
 	github.com/neo4j/neo4j-go-driver/v5 v5.28.4
 	github.com/ollama/ollama v0.12.5
 	github.com/sashabaranov/go-openai v1.41.2
-	github.com/universal-tool-calling-protocol/go-utcp v1.7.6
+	github.com/universal-tool-calling-protocol/go-utcp v1.7.7
 	go.mongodb.org/mongo-driver v1.13.1
 	google.golang.org/api v0.252.0
 )
