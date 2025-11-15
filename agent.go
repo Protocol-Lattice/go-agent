@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -802,10 +803,15 @@ func (a *Agent) lookupSubAgent(name string) (SubAgent, bool) {
 func (a *Agent) ToolSpecs() []tools.Tool {
 	var allSpecs []tools.Tool
 	seen := make(map[string]bool)
-
-	// 2. Get UTCP tool specs and merge
+	limit, err := strconv.Atoi(os.Getenv("utcp_search_tools_limit"))
+	if err != nil {
+		limit = 50
+	}
+	if limit == 0 {
+		limit = 50
+	} // 2. Get UTCP tool specs and merge
 	if a.UTCPClient != nil {
-		utcpTools, _ := a.UTCPClient.SearchTools("", 50)
+		utcpTools, _ := a.UTCPClient.SearchTools("", limit)
 		for _, tool := range utcpTools {
 			key := strings.ToLower(tool.Name)
 			if !seen[key] {
