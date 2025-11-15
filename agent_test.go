@@ -1106,7 +1106,7 @@ func TestChainOrchestrator_ParsesStreamFlag(t *testing.T) {
 	if utcp.lastToolName != "stream.echo" {
 		t.Fatalf("expected streaming tool to run, got %q", utcp.lastToolName)
 	}
-	if utcp.callCount == 0 {
+	if utcp.callCount != 1 {
 		t.Fatalf("expected at least one tool call")
 	}
 }
