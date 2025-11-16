@@ -252,7 +252,7 @@ you MUST map it to the correct tool name EXACTLY as shown above.
         "timestamp": t,
       }
 
-6. Example of using the result of one tool as input to another:
+6. Example of passing a result from one tool as an argument to another:
 
       r1, err := codemode.CallTool("math.add", map[string]any{
         "a": 5,
@@ -260,12 +260,17 @@ you MUST map it to the correct tool name EXACTLY as shown above.
       })
       if err != nil { return err }
 
-      // tool results are maps → MUST type assert
+      // Tool results are often maps. You MUST use a type assertion
+      // to access values inside them.
       addMap, ok := r1.(map[string]any)
-      if !ok { return fmt.Errorf("unexpected result type from math.add") }
+      if !ok {
+        return fmt.Errorf("expected math.add to return a map")
+      }
+      // Then, extract the specific value you need.
+      sumValue := addMap["sum"]
 
       r2, err := codemode.CallTool("math.multiply", map[string]any{
-        "a": addMap["sum"],
+        "a": sumValue, // Pass the extracted value to the next tool.
         "b": 3,
       })
       if err != nil { return err }
