@@ -441,18 +441,6 @@ The `search.files` UTCP tool is invoked, and its direct output is returned to th
 
 ---
 
-## 🛠 Adding New Tools
-
-Any UTCP tool becomes instantly available to the orchestrator:
-
-```go
-client := utcp.NewClient().
-    WithPlugins(chain.Plugin, codemode.Plugin).
-    RegisterTool("mytool", handler)
-```
-
-The orchestrator will automatically include it in the prompt and allow dynamic discovery via `search_tools()`.
-
 ---
 
 ## 🧵 Works Seamlessly with CodeMode + Chain
