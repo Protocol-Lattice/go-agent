@@ -1,0 +1,71 @@
+{
+  "version": "1.0",
+  "tools": [
+    {
+      "name": "echo",
+      "description": "Echo back a message",
+      "inputs": {
+        "type": "object",
+        "properties": {
+          "message": { "type": "string" }
+        },
+        "required": ["message"]
+      }
+    },
+    {
+      "name": "timestamp",
+      "description": "Current server timestamp",
+      "inputs": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "math.add",
+      "description": "Add two numbers",
+      "inputs": {
+        "type": "object",
+        "properties": {
+          "a": { "type": "number" },
+          "b": { "type": "number" }
+        },
+        "required": ["a", "b"]
+      }
+    },
+    {
+      "name": "math.multiply",
+      "description": "Multiply two numbers",
+      "inputs": {
+        "type": "object",
+        "properties": {
+          "a": { "type": "number" },
+          "b": { "type": "number" }
+        },
+        "required": ["a", "b"]
+      }
+    },
+    {
+      "name": "string.concat",
+      "description": "Concatenate two strings",
+      "inputs": {
+        "type": "object",
+        "properties": {
+          "prefix": { "type": "string" },
+          "value": { "type": "string" }
+        },
+        "required": ["prefix", "value"]
+      }
+    },
+    {
+      "name": "stream.echo",
+      "description": "Stream back text input",
+      "inputs": {
+        "type": "object",
+        "properties": {
+          "input": { "type": "string" }
+        },
+        "required": ["input"]
+      }
+    }
+  ]
+}

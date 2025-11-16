@@ -39,8 +39,8 @@ type AgentDevelopmentKit struct {
 
 	agentOptions []AgentOption
 	UTCP         utcp.UtcpClientInterface
-	CodeMode     codemode.CodeModeUTCP
-	ChainMode    chain.UtcpChainClient
+	CodeMode     *codemode.CodeModeUTCP
+	ChainMode    *chain.UtcpChainClient
 }
 
 // New constructs a kit, applies the provided options and bootstraps registered
@@ -320,8 +320,8 @@ func (k *AgentDevelopmentKit) BuildAgent(ctx context.Context, opts ...AgentOptio
 		SystemPrompt: defaultPrompt,
 		ContextLimit: defaultLimit,
 		UTCPClient:   utcp,
-		CodeMode:     &codeMode,
-		CodeChain:    &chainMode,
+		CodeMode:     codeMode,
+		CodeChain:    chainMode,
 	}
 
 	for _, opt := range defaultAgentOptions {

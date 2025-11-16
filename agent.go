@@ -172,7 +172,8 @@ func (a *Agent) codeModeOrchestrator(
 
 	tools := renderUtcpToolsForPrompt(a.ToolSpecs())
 
-	choicePrompt := fmt.Sprintf(`You are a Code Execution Decision Engine that determines whether a user query requires UTCP tool execution.
+	choicePrompt := fmt.Sprintf(`You are a Code Execution Decision Engine that determines whether a user query
+requires UTCP tool execution using CodeMode.
 
 USER QUERY:
 %q
@@ -181,10 +182,12 @@ AVAILABLE UTCP TOOLS:
 %s
 
 DECISION CRITERIA:
-Analyze if the user's request requires calling one or more UTCP tools listed above.
+Analyze whether the user request requires calling one or more UTCP tools
+listed above. If so, you must produce a Go code snippet that uses CodeMode
+helpers to call those tools.
 
 CODE EXECUTION CONTEXT:
-When generating code snippets, use these helper functions:
+When generating Go snippets, you have access to these helpers:
 
 Non-streaming tool call:
   result, err := codemode.CallTool("<tool_name>", map[string]any{
@@ -203,26 +206,88 @@ Streaming tool call:
   }
 
 RULES:
-1. Tool names and parameters MUST exactly match the UTCP tools listed above
-2. Generate ONLY code snippets, NOT complete programs (no package/main/imports)
-3. You may chain multiple tool calls and use their results
-4. Set "stream": true if ANY CallToolStream is used, otherwise false
-5. Set "timeout" in milliseconds (default: 20000)
-6. Tool calls can be composed, for example:
-   r1, _ := codemode.CallTool("math.multiply", map[string]any{"a": 5, "b": 3})
-   r2, _ := codemode.CallTool("math.add", map[string]any{"a": r1["result"], "b": 10})
+1. Tool names and parameters MUST exactly match the UTCP tools listed above.
+
+IMPORTANT:
+The "tool_name" used in every codemode.CallTool and codemode.CallToolStream
+MUST match EXACTLY the tool names from AVAILABLE UTCP TOOLS — letter-for-letter.
+
+You MUST NOT:
+- shorten tool names (NO: "add")
+- rename tools (NO: "addition")
+- infer variants (NO: "mathAdd")
+- paraphrase names (NO: "concatStrings")
+- use aliases (NO: "multiply")
+
+You MUST use the exact tool names such as:
+- "math.add"
+- "math.multiply"
+- "string.concat"
+- "echo"
+- "timestamp"
+- "stream.echo"
+
+If the user mentions an informal or shorthand name (like “add” or “multiply“),
+you MUST map it to the correct tool name EXACTLY as shown above.
+
+2. Generate ONLY Go *snippets* — NOT full programs.
+   No: package statements, imports, func main(), or wrapper functions.
+
+3. You MUST assign the final result to the variable __out.
+
+4. You MAY call multiple tools, store intermediate values, and chain operations.
+
+5. Example of calling multiple tools and returning both:
+
+      e, err := codemode.CallTool("echo", map[string]any{
+        "message": "hello",
+      })
+      if err != nil { return err }
+
+      t, err := codemode.CallTool("timestamp", map[string]any{})
+      if err != nil { return err }
+
+      __out = map[string]any{
+        "echo":      e,
+        "timestamp": t,
+      }
+
+6. Example of using the result of one tool as input to another:
+
+      r1, err := codemode.CallTool("math.add", map[string]any{
+        "a": 5,
+        "b": 7,
+      })
+      if err != nil { return err }
+
+      // tool results are maps → MUST type assert
+      addMap, ok := r1.(map[string]any)
+      if !ok { return fmt.Errorf("unexpected result type from math.add") }
+
+      r2, err := codemode.CallTool("math.multiply", map[string]any{
+        "a": addMap["sum"],
+        "b": 3,
+      })
+      if err != nil { return err }
+
+      __out = r2
+
+7. If ANY streaming tool is used → "stream": true.
+   Otherwise → "stream": false.
+
+8. Default timeout: 20000 ms.
 
 OUTPUT FORMAT:
-Return ONLY valid JSON with NO markdown, NO explanations, NO code blocks.
+Return ONLY valid JSON (no markdown, no comments, no code fences).
 
-If code execution is needed:
+If code execution IS needed:
 {
   "use_code": true,
   "arguments": {
     "code": "<Go code snippet calling UTCP tools>",
     "timeout": 20000
   },
-  "stream": <true if any streaming call, false otherwise>
+  "stream": <true if using streaming tools, else false>
 }
 
 If code execution is NOT needed:
@@ -235,7 +300,8 @@ If code execution is NOT needed:
   "stream": false
 }
 
-Respond now with ONLY the JSON object:`, userInput, tools)
+Respond now with ONLY the JSON object, nothing else.
+`, userInput, tools)
 
 	raw, err := a.model.Generate(ctx, choicePrompt)
 	if err != nil {
@@ -271,11 +337,24 @@ Respond now with ONLY the JSON object:`, userInput, tools)
 	if _, ok := resp.Arguments["timeout"]; !ok {
 		resp.Arguments["timeout"] = 20000
 	}
+	timeout := 20000
+	if v, ok := resp.Arguments["timeout"]; ok {
+		switch n := v.(type) {
+		case float64:
+			timeout = int(n)
+		case int:
+			timeout = n
+		case int64:
+			timeout = int(n)
+		default:
+			// optional: ignore or set default
+		}
+	}
 
 	// Execute via CodeModeUTCP
 	raw, err = a.CodeMode.Execute(ctx, codemode.CodeModeArgs{
 		Code:    fmt.Sprint(resp.Arguments["code"]),
-		Timeout: resp.Arguments["timeout"].(int),
+		Timeout: timeout,
 	})
 	if err != nil {
 		a.storeMemory(sessionID, "assistant",
@@ -1099,21 +1178,21 @@ func (a *Agent) Generate(ctx context.Context, sessionID, userInput string) (stri
 	if handled, output, err := a.codeChainOrchestrator(ctx, sessionID, userInput); handled {
 		return output, err
 	}
-
 	// ---------------------------------------------
-	// 4. STORE USER MEMORY (only after code/tool checks)
-	// ---------------------------------------------
-	a.storeMemory(sessionID, "user", userInput, nil)
-
-	// ---------------------------------------------
-	// 5. TOOL ORCHESTRATOR (LLM decides a tool)
+	// 4. TOOL ORCHESTRATOR (normal UTCP tools)
 	// ---------------------------------------------
 	if handled, output, err := a.toolOrchestrator(ctx, sessionID, userInput); handled {
 		if err != nil {
 			return "", err
 		}
+		// Tool executed → do NOT store user memory
 		return output, nil
 	}
+
+	// ---------------------------------------------
+	// 5. STORE USER MEMORY (ONLY after toolOrchestrator failed)
+	// ---------------------------------------------
+	a.storeMemory(sessionID, "user", userInput, nil)
 
 	// If the user input looks like a tool call, but wasn't handled above,
 	// we can reasonably assume it was a malformed/unrecognized tool call.
@@ -1371,7 +1450,22 @@ OBJECTIVE:
 Determine if the user's request requires a sequence of UTCP tool calls. If so, construct an optimal execution chain.
 
 CHAIN CONSTRUCTION RULES:
-1. "tool_name" MUST exactly match a tool name from the list above
+RULES:
+1. Tool names and parameters MUST exactly match the UTCP tools listed above.
+
+You MUST use the exact tool names as discovered:
+
+- "http.echo"
+- "http.timestamp"
+- "http.math.add"
+- "http.math.multiply"
+- "http.string.concat"
+- "http.stream.echo"
+
+NEVER shorten or remove the provider prefix.
+NEVER use "echo" or "math.add" — they are INVALID.
+If a user mentions a shorthand name like “add”, you MUST map it to the correct
+fully-qualified tool name such as "http.math.add".
 2. "inputs" MUST be a JSON object containing all required parameters for that tool
 3. "use_previous" is true when this step consumes output from the previous step
 4. "stream" is true ONLY if:
@@ -1380,6 +1474,18 @@ CHAIN CONSTRUCTION RULES:
 5. Steps should be ordered to satisfy data dependencies
 6. Each step's inputs can reference previous step outputs via "use_previous": true
 7. The first step always has "use_previous": false
+IMPORTANT:
+The "tool_name" MUST exactly match the tool name from discovery.
+NEVER abbreviate, shorten, rename, or paraphrase tool names.
+
+For example:
+- Use "math.add", NOT "add"
+- Use "math.multiply", NOT "multiply"
+- Use "string.concat", NOT "concat"
+- Use "stream.echo", NOT "echo_stream" or "streamecho"
+
+If the user describes an operation using a shortened name,
+you MUST map it to the EXACT tool name from the discovery list.
 
 DECISION LOGIC:
 - Single tool call needed → Create a chain with one step
@@ -1515,7 +1621,9 @@ func (a *Agent) toolOrchestrator(
 	sessionID string,
 	userInput string,
 ) (bool, string, error) {
-
+	if strings.Contains(userInput, `"tool_name": "codemode.run_code"`) {
+		return false, "", nil
+	}
 	// Collect merged local + UTCP tools
 	toolList := a.ToolSpecs()
 	if len(toolList) == 0 {

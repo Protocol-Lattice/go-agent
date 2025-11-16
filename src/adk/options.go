@@ -2,6 +2,7 @@ package adk
 
 import (
 	"context"
+	"fmt"
 
 	agent "github.com/Protocol-Lattice/go-agent"
 	"github.com/universal-tool-calling-protocol/go-utcp"
@@ -88,14 +89,20 @@ func WithUTCP(client utcp.UtcpClientInterface) Option {
 
 func WithCodeModeUtcp(client utcp.UtcpClientInterface) Option {
 	return func(kit *AgentDevelopmentKit) error {
-		kit.CodeMode = *codemode.NewCodeModeUTCP(client)
+		if client == nil {
+			return fmt.Errorf("codemode UTCP client cannot be nil")
+		}
+		kit.CodeMode = codemode.NewCodeModeUTCP(client)
 		return nil
 	}
 }
 
 func WithChainModeUtcp(client utcp.UtcpClientInterface) Option {
 	return func(kit *AgentDevelopmentKit) error {
-		kit.ChainMode = *chain.NewChainModeUTCP(client)
+		if client == nil {
+			return fmt.Errorf("chain UTCP client cannot be nil")
+		}
+		kit.ChainMode = chain.NewChainModeUTCP(client)
 		return nil
 	}
 }
