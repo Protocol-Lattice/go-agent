@@ -574,7 +574,7 @@ func TestCodeMode_ExecutesCallToolStreamInsideDSL(t *testing.T) {
 	ctx := context.Background()
 
 	model := &stubModel{
-		response: `{"use_tool": true, "tool_name": "codemode.run_code", "arguments": { "code": "s := codemode.CallToolStream(\"stream.echo\", map[string]any{\"input\": \"x\"}); s.Next()" }}`,
+		response: `{"use_tool": true, "tool_name": "codemode.run_code", "arguments": { "code": "s, _ := codemode.CallToolStream(\"stream.echo\", map[string]any{\"input\": \"x\"}); __out, _ = s.Next()" }}`,
 	}
 
 	mem := memory.NewSessionMemory(&memory.MemoryBank{}, 4)
@@ -674,13 +674,12 @@ func TestCodeMode_ComplexLogicAndToolChain(t *testing.T) {
 	ctx := context.Background()
 
 	// This Go code snippet iterates three times, calling the "echo" tool in each loop.
-	codeSnippet := `
-		var result string
-		var out any
+	codeSnippet := `		
+		var out any 
 		for i := 0; i < 3; i++ {
 			out, _ = codemode.CallTool("echo", map[string]any{"input": "ping"})
 		}
-		out
+		__out = out
 	`
 
 	model := &stubModel{
