@@ -170,132 +170,171 @@ func (a *Agent) codeModeOrchestrator(
 		return false, "", nil
 	}
 
-	tools := renderUtcpToolsForPrompt(a.ToolSpecs())
-
-	choicePrompt := fmt.Sprintf(`You are a Code Execution Decision Engine that determines whether a user query
-requires UTCP tool execution using CodeMode.
+	detailed := renderUtcpToolsForPrompt(a.ToolSpecs())
+	choicePrompt := fmt.Sprintf(`
+You are a Code Execution Decision Engine...
 
 USER QUERY:
 %q
 
-AVAILABLE UTCP TOOLS:
+
+------------------------------------------------------------
+AVAILABLE UTCP TOOLS (detailed specs)
+------------------------------------------------------------
 %s
 
-DECISION CRITERIA:
-Analyze whether the user request requires calling one or more UTCP tools
-listed above. If so, you must produce a Go code snippet that uses CodeMode
-helpers to call those tools.
+------------------------------------------------------------
+YOUR TASK
+------------------------------------------------------------
+Read the user’s request carefully and determine whether their goal
+requires calling one or more UTCP tools.
 
-CODE EXECUTION CONTEXT:
-When generating Go snippets, you have access to these helpers:
+Your primary responsibility is to:
+- understand the meaning of the user’s natural language,
+- compare that meaning against all available tool descriptions,
+- select the tools whose purpose best matches the user's intent,
+- build a Go snippet that calls those tools with appropriate arguments,
+- chain multiple tools if needed,
+- place the final output in __out.
 
-Non-streaming tool call:
-  result, err := codemode.CallTool("<tool_name>", map[string]any{
-    "param1": value1,
-    "param2": value2,
-  })
+If several tools can help fulfill the request, you SHOULD call all of them
+in logical order and produce a combined final output.
 
-Streaming tool call:
-  stream, err := codemode.CallToolStream("<tool_name>", map[string]any{
-    "param": value,
-  })
-  for {
-    chunk, err := stream.Next()
-    if err != nil { break }
-    // process chunk
-  }
+If tools ARE required:
+- Set "use_code": true.
+- Produce Go statements only (no imports, no package).
+- Use EXACT tool names exactly as shown in AVAILABLE UTCP TOOLS.
+- Use map[string]any arguments inferred directly from user intent.
+- You may call many tools, reuse results, and chain values.
 
-RULES:
-1. Tool names and parameters MUST exactly match the UTCP tools listed above.
+If tools are NOT required:
+- Set "use_code": false.
 
-IMPORTANT:
-The "tool_name" used in every codemode.CallTool and codemode.CallToolStream
-MUST match EXACTLY the tool names from AVAILABLE UTCP TOOLS — letter-for-letter.
+------------------------------------------------------------
+DETERMINE ARGUMENTS FROM NATURAL LANGUAGE
+------------------------------------------------------------
+When the user refers to values in plain language (e.g. “add five and seven”,
+“multiply the sum by three”, “echo the message ‘hello’”), you must convert
+their words into the correct argument structure based on the tool spec.
 
-You MUST NOT:
-- shorten tool names (NO: "add")
-- rename tools (NO: "addition")
-- infer variants (NO: "mathAdd")
-- paraphrase names (NO: "concatStrings")
-- use aliases (NO: "multiply")
+Examples:
+- “add five and seven” → { "a": 5, "b": 7 }
+- “echo ‘hi there’” → { "message": "hi there" }
+- “prepend ‘Score: ’ to the result” → { "prefix": "Score: ", "value": <value> }
 
-You MUST use the exact tool names such as:
-- "math.add"
-- "math.multiply"
-- "string.concat"
-- "echo"
-- "timestamp"
-- "stream.echo"
+Always infer argument names from the tool’s schema, NEVER invent new fields.
 
-If the user mentions an informal or shorthand name (like “add” or “multiply“),
-you MUST map it to the correct tool name EXACTLY as shown above.
+------------------------------------------------------------
+CODEMODE EXECUTION CONTEXT
+------------------------------------------------------------
+Inside Go snippets, you may call tools using:
 
-2. Generate ONLY Go *snippets* — NOT full programs.
-   No: package statements, imports, func main(), or wrapper functions.
+Non-streaming:
+    r, err := codemode.CallTool("<tool_name>", map[string]any{
+        "param": value,
+    })
 
-3. You MUST assign the final result to the variable __out.
+Streaming:
+    stream, err := codemode.CallToolStream("<tool_name>", map[string]any{
+        "param": value,
+    })
+    for {
+        chunk, err := stream.Next()
+        if err != nil { break }
+        // process chunk
+    }
 
-4. You MAY call multiple tools, store intermediate values, and chain operations.
+------------------------------------------------------------
+TOOL NAME RULES (STRICT)
+------------------------------------------------------------
+- Use EXACT tool names from AVAILABLE UTCP TOOLS.
+- NEVER shorten, modify, or infer variants.
+- ALWAYS include provider prefixes (e.g., "http.math.add").
 
-5. Example of calling multiple tools and returning both:
+------------------------------------------------------------
+MULTI-TOOL EXECUTION — BEST PRACTICES
+------------------------------------------------------------
+You may call any number of tools in a single snippet.
 
-      e, err := codemode.CallTool("echo", map[string]any{
-        "message": "hello",
-      })
-      if err != nil { return err }
+You can:
+- read fields from previous tool responses,
+- convert values (e.g., fmt.Sprint),
+- feed results into later tool calls,
+- assemble maps and summaries.
 
-      t, err := codemode.CallTool("timestamp", map[string]any{})
-      if err != nil { return err }
+Examples:
 
-      __out = map[string]any{
+1. Calling several tools:
+
+    e, err := codemode.CallTool("http.echo", map[string]any{"message": "hi"})
+    if err != nil { return err }
+
+    t, err := codemode.CallTool("http.timestamp", map[string]any{})
+    if err != nil { return err }
+
+    m, err := codemode.CallTool("http.math.add", map[string]any{"a": 5, "b": 7})
+    if err != nil { return err }
+
+    __out = map[string]any{
         "echo":      e,
         "timestamp": t,
-      }
+        "math.add":  m,
+    }
 
-6. Example of passing a result from one tool as an argument to another:
+2. Chaining:
 
-      r1, err := codemode.CallTool("math.add", map[string]any{
-        "a": 5,
-        "b": 7,
-      })
-      if err != nil { return err }
+    r1, err := codemode.CallTool("http.math.add", map[string]any{"a": 1, "b": 2})
+    if err != nil { return err }
 
-      // Tool results are often maps. You MUST use a type assertion
-      // to access values inside them.
-      addMap, ok := r1.(map[string]any)
-      if !ok {
-        return fmt.Errorf("expected math.add to return a map")
-      }
-      // Then, extract the specific value you need.
-      sumValue := addMap["sum"]
+    var sum any
+    if r1 != nil {
+        if m, ok := r1.(map[string]any); ok {
+            sum = m["sum"]
+        }
+    }
 
-      r2, err := codemode.CallTool("math.multiply", map[string]any{
-        "a": sumValue, // Pass the extracted value to the next tool.
-        "b": 3,
-      })
-      if err != nil { return err }
+    r2, err := codemode.CallTool("http.math.multiply", map[string]any{"a": sum, "b": 10})
+    if err != nil { return err }
 
-      __out = r2
+    var product any
+    if r2 != nil {
+        if m, ok := r2.(map[string]any); ok {
+            product = m["product"]
+        }
+    }
 
-7. If ANY streaming tool is used → "stream": true.
-   Otherwise → "stream": false.
+    __out, err = codemode.CallTool("http.string.concat", map[string]any{"prefix": "Result: ", "value": fmt.Sprint(product)})
 
-8. Default timeout: 20000 ms.
+------------------------------------------------------------
+SNIPPET REQUIREMENTS
+------------------------------------------------------------
+1. Produce ONLY Go statements.
+2. The final result MUST be stored in: __out
+3. Snippets may include:
+   - multiple tool calls
+   - loops
+   - branching
+   - maps, slices, strings, formatted output
+4. If ANY streaming tool is used → "stream": true
+   else → "stream": false
+5. Default timeout = 20000.
 
-OUTPUT FORMAT:
-Return ONLY valid JSON (no markdown, no comments, no code fences).
+------------------------------------------------------------
+OUTPUT FORMAT — STRICT JSON ONLY
+------------------------------------------------------------
+If tools ARE required:
 
-If code execution IS needed:
 {
   "use_code": true,
   "arguments": {
-    "code": "<Go code snippet calling UTCP tools>",
+    "code": "<Go snippet>",
     "timeout": 20000
   },
-  "stream": <true if using streaming tools, else false>
+  "stream": <true|false>
 }
 
-If code execution is NOT needed:
+If tools are NOT required:
+
 {
   "use_code": false,
   "arguments": {
@@ -305,9 +344,8 @@ If code execution is NOT needed:
   "stream": false
 }
 
-Respond now with ONLY the JSON object, nothing else.
-`, userInput, tools)
-
+Respond ONLY with JSON. No explanations.
+`, userInput, detailed)
 	raw, err := a.model.Generate(ctx, choicePrompt)
 	if err != nil {
 		return false, "", nil
@@ -389,6 +427,25 @@ func (a *Agent) Flush(ctx context.Context, sessionID string) error {
 	return a.memory.FlushToLongTerm(ctx, sessionID)
 }
 
+func renderCanonicalToolNames(list []tools.Tool) string {
+	if len(list) == 0 {
+		return "- (no tools)"
+	}
+
+	sort.Slice(list, func(i, j int) bool {
+		return strings.ToLower(list[i].Name) < strings.ToLower(list[j].Name)
+	})
+
+	var sb strings.Builder
+	for _, t := range list {
+		sb.WriteString(fmt.Sprintf("- %s\n", t.Name))
+		sb.WriteString(fmt.Sprintf("description:", t.Description))
+		sb.WriteString(fmt.Sprintf("inputs:", t.Inputs))
+		sb.WriteString(fmt.Sprintf("outputs:", t.Outputs))
+		sb.WriteString("\n")
+	}
+	return sb.String()
+}
 func (a *Agent) executeTool(
 	ctx context.Context,
 	sessionID, toolName string,
@@ -949,14 +1006,11 @@ func renderUtcpToolsForPrompt(list []tools.Tool) string {
 				}
 			}
 		}
-
 		// ---- Output schema (TOON-encoded) ----
 		out := t.Outputs
 		if len(out.Properties) > 0 || out.Type != "" {
 			if toon := encodeTOONBlock(out); toon != "" {
-				sb.WriteString("  returns (TOON):\n")
 				sb.WriteString(indentBlock(toon, "    "))
-				sb.WriteString("\n")
 			}
 		}
 	}

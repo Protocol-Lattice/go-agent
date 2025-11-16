@@ -167,7 +167,7 @@ func main() {
 		log.Fatalf("client error: %v", err)
 	}
 
-	modelName := flag.String("model", "gemini-2.5-pro", "Gemini model ID")
+	modelName := flag.String("model", "gemini-2.5-flash", "Gemini model ID")
 	flag.Parse()
 
 	// --- Runtime (shared) ---
@@ -205,10 +205,9 @@ func main() {
 }
 
 var prompt = `
-Call echo with the text "hello world",
-then call timestamp,
-then add 5 and 7 using math.add,
-multiply the result by 3 with math.multiply,
-concat "Number: " with the final result using string.concat,
-and return everything as a map.
+Echo a greeting: Call the http.echo tool with the message "hello world"
+Get the current time: Call the http.timestamp tool to retrieve the current server timestamp
+Add two numbers: Use the http.math.add tool to add 5 and 7 together
+Multiply the result: Take the sum from step 3 and multiply it by 3 using the http.math.multiply tool
+Format as a string: Use the http.string.concat tool to prepend the text "Number: " to the multiplication result from step 4
 `
