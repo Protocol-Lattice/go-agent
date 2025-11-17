@@ -1,4 +1,4 @@
-package runtime
+package agent
 
 import (
 	"context"
@@ -6,8 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -170,233 +170,47 @@ func (a *Agent) codeModeOrchestrator(
 		return false, "", nil
 	}
 
-	detailed := renderUtcpToolsForPrompt(a.ToolSpecs())
-	choicePrompt := fmt.Sprintf(`
-You are a Code Execution Decision Engine...
+	toolSpecs := a.ToolSpecs()
+	detailed := renderUtcpToolsForPrompt(toolSpecs)
 
-USER QUERY:
-%q
-
-
-------------------------------------------------------------
-AVAILABLE UTCP TOOLS (detailed specs)
-------------------------------------------------------------
-%s
-
-------------------------------------------------------------
-YOUR TASK
-------------------------------------------------------------
-Read the user’s request carefully and determine whether their goal
-requires calling one or more UTCP tools.
-
-Your primary responsibility is to:
-- understand the meaning of the user’s natural language,
-- compare that meaning against all available tool descriptions,
-- select the tools whose purpose best matches the user's intent,
-- build a Go snippet that calls those tools with appropriate arguments,
-- chain multiple tools if needed,
-- place the final output in __out.
-
-If several tools can help fulfill the request, you SHOULD call all of them
-in logical order and produce a combined final output.
-
-If tools ARE required:
-- Set "use_code": true.
-- Produce Go statements only (no imports, no package).
-- Use EXACT tool names exactly as shown in AVAILABLE UTCP TOOLS.
-- Use map[string]any arguments inferred directly from user intent.
-- You may call many tools, reuse results, and chain values.
-
-If tools are NOT required:
-- Set "use_code": false.
-
-------------------------------------------------------------
-DETERMINE ARGUMENTS FROM NATURAL LANGUAGE
-------------------------------------------------------------
-When the user refers to values in plain language (e.g. “add five and seven”,
-“multiply the sum by three”, “echo the message ‘hello’”), you must convert
-their words into the correct argument structure based on the tool spec.
-
-Examples:
-- “add five and seven” → { "a": 5, "b": 7 }
-- “echo ‘hi there’” → { "message": "hi there" }
-- “prepend ‘Score: ’ to the result” → { "prefix": "Score: ", "value": <value> }
-
-Always infer argument names from the tool’s schema, NEVER invent new fields.
-
-------------------------------------------------------------
-CODEMODE EXECUTION CONTEXT
-------------------------------------------------------------
-Inside Go snippets, you may call tools using:
-
-Non-streaming:
-    r, err := codemode.CallTool("<tool_name>", map[string]any{
-        "param": value,
-    })
-
-Streaming:
-    stream, err := codemode.CallToolStream("<tool_name>", map[string]any{
-        "param": value,
-    })
-    for {
-        chunk, err := stream.Next()
-        if err != nil { break }
-        // process chunk
-    }
-
-------------------------------------------------------------
-TOOL NAME RULES (STRICT)
-------------------------------------------------------------
-- Use EXACT tool names from AVAILABLE UTCP TOOLS.
-- NEVER shorten, modify, or infer variants.
-- ALWAYS include provider prefixes (e.g., "http.math.add").
-
-------------------------------------------------------------
-MULTI-TOOL EXECUTION — BEST PRACTICES
-------------------------------------------------------------
-You may call any number of tools in a single snippet.
-
-You can:
-- read fields from previous tool responses,
-- convert values (e.g., fmt.Sprint),
-- feed results into later tool calls,
-- assemble maps and summaries.
-
-Examples:
-
-1. Calling several tools:
-
-    e, err := codemode.CallTool("http.echo", map[string]any{"message": "hi"})
-    if err != nil { return err }
-
-    t, err := codemode.CallTool("http.timestamp", map[string]any{})
-    if err != nil { return err }
-
-    m, err := codemode.CallTool("http.math.add", map[string]any{"a": 5, "b": 7})
-    if err != nil { return err }
-
-    __out = map[string]any{
-        "echo":      e,
-        "timestamp": t,
-        "math.add":  m,
-    }
-
-2. Chaining:
-
-    r1, err := codemode.CallTool("http.math.add", map[string]any{"a": 1, "b": 2})
-    if err != nil { return err }
-
-    var sum any
-    if r1 != nil {
-        if m, ok := r1.(map[string]any); ok {
-            sum = m["sum"]
-        }
-    }
-
-    r2, err := codemode.CallTool("http.math.multiply", map[string]any{"a": sum, "b": 10})
-    if err != nil { return err }
-
-    var product any
-    if r2 != nil {
-        if m, ok := r2.(map[string]any); ok {
-            product = m["product"]
-        }
-    }
-
-    __out, err = codemode.CallTool("http.string.concat", map[string]any{"prefix": "Result: ", "value": fmt.Sprint(product)})
-
-------------------------------------------------------------
-SNIPPET REQUIREMENTS
-------------------------------------------------------------
-1. Produce ONLY Go statements.
-2. The final result MUST be stored in: __out
-3. Snippets may include:
-   - multiple tool calls
-   - loops
-   - branching
-   - maps, slices, strings, formatted output
-4. If ANY streaming tool is used → "stream": true
-   else → "stream": false
-5. Default timeout = 20000.
-
-------------------------------------------------------------
-OUTPUT FORMAT — STRICT JSON ONLY
-------------------------------------------------------------
-If tools ARE required:
-
-{
-  "use_code": true,
-  "arguments": {
-    "code": "<Go snippet>",
-    "timeout": 20000
-  },
-  "stream": <true|false>
-}
-
-If tools are NOT required:
-
-{
-  "use_code": false,
-  "arguments": {
-    "code": "",
-    "timeout": 20000
-  },
-  "stream": false
-}
-
-Respond ONLY with JSON. No explanations.
-`, userInput, detailed)
-	raw, err := a.model.Generate(ctx, choicePrompt)
+	// --------------------------------------------
+	// 1) Decide whether tools are needed
+	// --------------------------------------------
+	need, err := a.decideIfToolsNeeded(ctx, userInput, detailed)
 	if err != nil {
+		return false, "", err
+	}
+	if !need {
 		return false, "", nil
 	}
 
-	jsonStr := extractJSON(fmt.Sprint(raw))
-	if jsonStr == "" {
+	// --------------------------------------------
+	// 2) Select tools (exact names)
+	// --------------------------------------------
+	selected, err := a.selectTools(ctx, userInput, detailed)
+	if err != nil {
+		return true, "", err
+	}
+	log.Println(selected)
+	if len(selected) == 0 {
 		return false, "", nil
 	}
 
-	var resp struct {
-		Use       bool           `json:"use_code"`
-		Arguments map[string]any `json:"arguments"`
-		Stream    bool           `json:"stream"`
+	// --------------------------------------------
+	// 3) Generate snippet using chosen tools only
+	// --------------------------------------------
+	snippet, ok, err := a.generateSnippet(ctx, userInput, selected, detailed)
+	if err != nil && !ok {
+		return true, "", err
 	}
 
-	if err := json.Unmarshal([]byte(jsonStr), &resp); err != nil {
-		return false, "", nil
-	}
-
-	if !resp.Use {
-		return false, "", nil
-	}
-
-	if resp.Arguments == nil {
-		resp.Arguments = map[string]any{}
-	}
-
-	if _, ok := resp.Arguments["code"]; !ok {
-		resp.Arguments["code"] = userInput
-	}
-	if _, ok := resp.Arguments["timeout"]; !ok {
-		resp.Arguments["timeout"] = 20000
-	}
+	// --------------------------------------------
+	// 4) Execute snippet via CodeMode UTCP
+	// --------------------------------------------
 	timeout := 20000
-	if v, ok := resp.Arguments["timeout"]; ok {
-		switch n := v.(type) {
-		case float64:
-			timeout = int(n)
-		case int:
-			timeout = n
-		case int64:
-			timeout = int(n)
-		default:
-			// optional: ignore or set default
-		}
-	}
-
-	// Execute via CodeModeUTCP
-	raw, err = a.CodeMode.Execute(ctx, codemode.CodeModeArgs{
-		Code:    fmt.Sprint(resp.Arguments["code"]),
+	log.Println(snippet)
+	raw, err := a.CodeMode.Execute(ctx, codemode.CodeModeArgs{
+		Code:    snippet,
 		Timeout: timeout,
 	})
 	if err != nil {
@@ -407,10 +221,9 @@ Respond ONLY with JSON. No explanations.
 		return true, "", err
 	}
 
-	// Raw output (before TOON wrapper)
 	rawOut := fmt.Sprint(raw)
 
-	// Store TOON-enhanced version
+	// TOON encoding
 	toonBytes, _ := gotoon.Encode(rawOut)
 	full := fmt.Sprintf("%s\n\n.toon:\n%s", rawOut, string(toonBytes))
 
@@ -419,7 +232,205 @@ Respond ONLY with JSON. No explanations.
 	})
 
 	return true, rawOut, nil
+}
 
+func (a *Agent) decideIfToolsNeeded(
+	ctx context.Context,
+	query string,
+	tools string,
+) (bool, error) {
+
+	prompt := fmt.Sprintf(`
+Decide if the following user query requires using ANY UTCP tools.
+
+USER QUERY:
+%q
+
+AVAILABLE UTCP TOOLS:
+%s
+
+Respond ONLY in JSON:
+{ "needs": true } or { "needs": false }
+`, query, tools)
+
+	raw, err := a.model.Generate(ctx, prompt)
+	if err != nil {
+		return false, err
+	}
+
+	jsonStr := extractJSON(fmt.Sprint(raw))
+	if jsonStr == "" {
+		return false, nil
+	}
+
+	var resp struct {
+		Needs bool `json:"needs"`
+	}
+
+	if err := json.Unmarshal([]byte(jsonStr), &resp); err != nil {
+		return false, nil
+	}
+
+	return resp.Needs, nil
+}
+
+func (a *Agent) selectTools(
+	ctx context.Context,
+	query string,
+	tools string,
+) ([]string, error) {
+
+	prompt := fmt.Sprintf(`
+Select ALL UTCP tools that match the user's intent.
+
+USER QUERY:
+%q
+
+AVAILABLE UTCP TOOLS:
+%s
+
+Respond ONLY in JSON:
+{
+  "tools": ["provider.tool", ...]
+}
+
+Rules:
+- Use ONLY names listed above.
+- NO modifications, NO guessing.
+- If multiple tools apply, include all.
+`, query, tools)
+
+	raw, err := a.model.Generate(ctx, prompt)
+	if err != nil {
+		return nil, err
+	}
+
+	jsonStr := extractJSON(fmt.Sprint(raw))
+	if jsonStr == "" {
+		return nil, nil
+	}
+
+	var resp struct {
+		Tools []string `json:"tools"`
+	}
+
+	_ = json.Unmarshal([]byte(jsonStr), &resp)
+	return resp.Tools, nil
+}
+
+func (a *Agent) generateSnippet(
+	ctx context.Context,
+	query string,
+	tools []string,
+	toolSpecs string,
+) (string, bool, error) {
+
+	toolsJSON, _ := json.Marshal(tools)
+
+	prompt := fmt.Sprintf(`
+Generate a Go snippet that uses ONLY the following UTCP tools:
+
+%v
+
+USER QUERY:
+%q
+
+TOOL SPECS:
+%s
+
+------------------------------------------------------------
+SNIPPET RULES
+------------------------------------------------------------
+- Use ONLY the tool names listed above.
+- Use EXACT input keys from the tool schemas. Do NOT invent new fields.
+- Use codemode.CallTool("<tool>", map[string]any{ ... }) for non-streaming tools.
+- Use codemode.CallToolStream("<tool>", map[string]any{ ... }) for streaming tools.
+- No imports, no package — ONLY Go statements.
+- The final result MUST be assigned to: __out
+- If ANY streaming tool is used, set "stream": true.
+
+------------------------------------------------------------
+CHAINING (NON-STREAMING) — STRICT RULES
+------------------------------------------------------------
+To pass output of one tool into another:
+
+1. Call the tool:
+    r1, err := codemode.CallTool("<tool>", map[string]any{
+        "a": 5,
+        "b": 7,
+    })
+    if err != nil { return err }
+
+2. Extract value using EXACT output-schema keys:
+    var sum any
+    if m, ok := r1.(map[string]any); ok {
+        sum = m["result"]   // key MUST match schema
+    }
+
+3. Use this value as input to the next tool:
+    r2, err := codemode.CallTool("<next_tool>", map[string]any{
+        "a": sum,
+        "b": 3,
+    })
+
+4. The final line must set:
+    __out = <result>
+
+------------------------------------------------------------
+STREAMING TOOLS — STRICT RULES
+------------------------------------------------------------
+When calling a streaming tool:
+
+1. Start the stream:
+    stream, err := codemode.CallToolStream("<stream_tool>", map[string]any{
+        "input": "hello",
+    })
+    if err != nil { return err }
+
+2. Read chunks in a loop:
+    var items []any
+    for {
+        chunk, err := stream.Next()
+        if err != nil { break }
+        items = append(items, chunk)
+    }
+
+3. You may chain streaming results into non-streaming tools:
+    r2, err := codemode.CallTool("provider.summarize", map[string]any{
+        "values": items,
+    })
+
+4. Or output directly:
+    __out = items
+
+------------------------------------------------------------
+Respond ONLY in JSON:
+{
+  "code": "<go snippet>",
+  "stream": false
+}
+`, string(toolsJSON), query, toolSpecs)
+
+	raw, err := a.model.Generate(ctx, prompt)
+	if err != nil {
+		return "", false, err
+	}
+
+	jsonStr := extractJSON(fmt.Sprint(raw))
+	if jsonStr == "" {
+		return "", false, fmt.Errorf("snippet empty")
+	}
+
+	var resp struct {
+		Code   string `json:"code"`
+		Stream bool   `json:"stream"`
+	}
+
+	if err := json.Unmarshal([]byte(jsonStr), &resp); err != nil {
+		return "", false, err
+	}
+
+	return resp.Code, resp.Stream, nil
 }
 
 // Flush persists session memory into the long-term store.
@@ -427,25 +438,6 @@ func (a *Agent) Flush(ctx context.Context, sessionID string) error {
 	return a.memory.FlushToLongTerm(ctx, sessionID)
 }
 
-func renderCanonicalToolNames(list []tools.Tool) string {
-	if len(list) == 0 {
-		return "- (no tools)"
-	}
-
-	sort.Slice(list, func(i, j int) bool {
-		return strings.ToLower(list[i].Name) < strings.ToLower(list[j].Name)
-	})
-
-	var sb strings.Builder
-	for _, t := range list {
-		sb.WriteString(fmt.Sprintf("- %s\n", t.Name))
-		sb.WriteString(fmt.Sprintf("description:", t.Description))
-		sb.WriteString(fmt.Sprintf("inputs:", t.Inputs))
-		sb.WriteString(fmt.Sprintf("outputs:", t.Outputs))
-		sb.WriteString("\n")
-	}
-	return sb.String()
-}
 func (a *Agent) executeTool(
 	ctx context.Context,
 	sessionID, toolName string,
@@ -686,22 +678,73 @@ func (a *Agent) detectDirectToolCall(s string) (string, map[string]any, bool) {
 	s = strings.TrimSpace(s)
 	lower := strings.ToLower(s)
 
-	// ---------------------------------------------
-	// Case 1: Raw JSON: {"tool": "...", "arguments": {...}}
-	// ---------------------------------------------
+	// Build a lowercase lookup of all registered tool names
+	valid := make(map[string]string)      // lowerName → exactName
+	prefixes := make(map[string]struct{}) // provider prefixes
+	bases := make(map[string][]string)    // short name → list of full names
+
+	for _, spec := range a.ToolSpecs() {
+		exact := spec.Name
+		lowerName := strings.ToLower(exact)
+		valid[lowerName] = exact
+
+		// Collect prefix (provider)
+		if parts := strings.Split(lowerName, "."); len(parts) >= 2 {
+			prefixes[parts[0]] = struct{}{}
+			short := parts[len(parts)-1]
+			bases[short] = append(bases[short], exact)
+		}
+	}
+
+	// helper: try matching tool name dynamically using full registry
+	normalize := func(name string) (string, bool) {
+		nameLower := strings.ToLower(strings.TrimSpace(name))
+
+		// 1) Exact match
+		if exact, ok := valid[nameLower]; ok {
+			return exact, true
+		}
+
+		// 2) Match by fully-qualified suffix (e.g. "math.add")
+		for fullLower, exact := range valid {
+			if strings.HasSuffix(fullLower, "."+nameLower) {
+				return exact, true
+			}
+		}
+
+		// 3) Match by base (last segment only)
+		if list, ok := bases[nameLower]; ok && len(list) > 0 {
+			// if multiple tools share the same short name, choose the first or return false
+			return list[0], true
+		}
+
+		return "", false
+	}
+
+	// ---------------------------------------------------------
+	// Case 1: Raw JSON {"tool":"...", "arguments":{...}}
+	// ---------------------------------------------------------
 	if strings.HasPrefix(s, "{") && strings.Contains(s, "\"tool\"") {
 		var payload struct {
 			Tool      string         `json:"tool"`
 			Arguments map[string]any `json:"arguments"`
 		}
 		if err := json.Unmarshal([]byte(s), &payload); err == nil && payload.Tool != "" {
-			return payload.Tool, payload.Arguments, true
+			if real, ok := normalize(payload.Tool); ok {
+				return real, payload.Arguments, ok
+			}
+			// Fallback: if UTCP client exists, accept raw tool name
+			if a.UTCPClient != nil {
+				return payload.Tool, payload.Arguments, true
+			}
+
+			return "", nil, false
 		}
 	}
 
-	// ---------------------------------------------
+	// ---------------------------------------------------------
 	// Case 2: DSL: tool: echo { ... }
-	// ---------------------------------------------
+	// ---------------------------------------------------------
 	if strings.HasPrefix(lower, "tool:") {
 		rest := strings.TrimSpace(s[len("tool:"):])
 		parts := strings.Fields(rest)
@@ -710,15 +753,22 @@ func (a *Agent) detectDirectToolCall(s string) (string, map[string]any, bool) {
 			argsStr := strings.TrimSpace(rest[len(tool):])
 
 			var args map[string]any
-			_ = json.Unmarshal([]byte(argsStr), &args) // best-effort
+			_ = json.Unmarshal([]byte(argsStr), &args)
 
-			return tool, args, true
+			if real, ok := normalize(tool); ok {
+				return real, args, ok
+			}
+			// Fallback for UTCP client
+			if a.UTCPClient != nil {
+				return tool, args, true
+			}
+			return "", nil, false
 		}
 	}
 
-	// ---------------------------------------------
+	// ---------------------------------------------------------
 	// Case 3: Shorthand: echo { ... }
-	// ---------------------------------------------
+	// ---------------------------------------------------------
 	parts := strings.Fields(s)
 	if len(parts) >= 2 {
 		tool := strings.TrimSpace(parts[0])
@@ -726,7 +776,14 @@ func (a *Agent) detectDirectToolCall(s string) (string, map[string]any, bool) {
 
 		var args map[string]any
 		if err := json.Unmarshal([]byte(argsStr), &args); err == nil {
-			return tool, args, true
+			if real, ok := normalize(tool); ok {
+				return real, args, ok
+			}
+			// Fallback for UTCP client
+			if a.UTCPClient != nil {
+				return tool, args, true
+			}
+			return "", nil, false
 		}
 	}
 
@@ -956,63 +1013,74 @@ func isTextAttachment(mime string, data []byte) bool {
 	return utf8.Valid(data)
 }
 
-func renderUtcpToolsForPrompt(list []tools.Tool) string {
-	if len(list) == 0 {
-		return "No UTCP tools available.\n"
-	}
-
-	// Deterministic ordering
-	sort.Slice(list, func(i, j int) bool {
-		return strings.ToLower(list[i].Name) < strings.ToLower(list[j].Name)
-	})
-
+func renderUtcpToolsForPrompt(specs []tools.Tool) string {
 	var sb strings.Builder
 
-	for _, t := range list {
-		// ---- Basic metadata ----
-		sb.WriteString(fmt.Sprintf("- %s: %s\n", t.Name, t.Description))
+	sb.WriteString("------------------------------------------------------------\n")
+	sb.WriteString("UTCP TOOL REFERENCE (INPUT + OUTPUT SCHEMAS)\n")
+	sb.WriteString("Use EXACT field names listed below. Do NOT invent new keys.\n")
+	sb.WriteString("------------------------------------------------------------\n\n")
 
-		// ---- Input schema ----
-		props := t.Inputs.Properties
-		required := map[string]bool{}
-		for _, r := range t.Inputs.Required {
-			required[r] = true
-		}
+	for _, t := range specs {
 
-		if len(props) > 0 {
-			sb.WriteString("  args:\n")
+		sb.WriteString(fmt.Sprintf("TOOL: %s\n", t.Name))
+		sb.WriteString(fmt.Sprintf("DESCRIPTION: %s\n\n", t.Description))
 
-			// deterministic order of args
-			keys := make([]string, 0, len(props))
-			for k := range props {
-				keys = append(keys, k)
-			}
-			sort.Strings(keys)
+		// -------------------------------
+		// INPUT FIELD LIST
+		// -------------------------------
+		sb.WriteString("INPUT FIELDS (USE EXACTLY THESE KEYS):\n")
 
-			for _, name := range keys {
-				spec := props[name]
+		if len(t.Inputs.Properties) == 0 {
+			sb.WriteString("- (no fields)\n")
+		} else {
+			for key, raw := range t.Inputs.Properties {
 
-				typ := "any"
-				if mm, ok := spec.(map[string]any); ok {
-					if tt, ok := mm["type"].(string); ok {
-						typ = tt
+				// Try to extract "type" from nested schema if present
+				propType := "any"
+				if m, ok := raw.(map[string]any); ok {
+					if v, ok := m["type"]; ok {
+						if s, ok := v.(string); ok {
+							propType = s
+						}
 					}
 				}
 
-				if required[name] {
-					sb.WriteString(fmt.Sprintf("    - %s (%s, required)\n", name, typ))
-				} else {
-					sb.WriteString(fmt.Sprintf("    - %s (%s)\n", name, typ))
-				}
+				sb.WriteString(fmt.Sprintf("- %s: %s\n", key, propType))
 			}
 		}
-		// ---- Output schema (TOON-encoded) ----
-		out := t.Outputs
-		if len(out.Properties) > 0 || out.Type != "" {
-			if toon := encodeTOONBlock(out); toon != "" {
-				sb.WriteString(indentBlock(toon, "    "))
+
+		// Required field list
+		if len(t.Inputs.Required) > 0 {
+			sb.WriteString("\nREQUIRED FIELDS:\n")
+			for _, r := range t.Inputs.Required {
+				sb.WriteString(fmt.Sprintf("- %s\n", r))
 			}
 		}
+
+		sb.WriteString("\n")
+
+		// Full JSON schema for LLM clarity
+		inBytes, _ := json.MarshalIndent(t.Inputs, "", "  ")
+		sb.WriteString("FULL INPUT SCHEMA (JSON):\n")
+		sb.WriteString(string(inBytes))
+		sb.WriteString("\n\n")
+
+		// -------------------------------
+		// OUTPUT SCHEMA
+		// -------------------------------
+		sb.WriteString("OUTPUT SCHEMA (EXACT SHAPE RETURNED BY TOOL):\n")
+
+		if t.Outputs.Type != "" || len(t.Outputs.Properties) > 0 {
+			outBytes, _ := json.MarshalIndent(t.Outputs, "", "  ")
+			sb.WriteString(string(outBytes))
+		} else {
+			// Generic fallback
+			sb.WriteString("{ \"result\": <any> }\n")
+		}
+
+		sb.WriteString("\n")
+		sb.WriteString("------------------------------------------------------------\n\n")
 	}
 
 	return sb.String()
@@ -1765,6 +1833,7 @@ Return ONLY JSON. No explanations.
 
 	// Handle codemode.run_code specially
 	if tc.ToolName == "codemode.run_code" && a.CodeMode != nil {
+		log.Println(tc.Arguments)
 		code, _ := tc.Arguments["code"].(string)
 		timeout, ok := tc.Arguments["timeout"].(float64)
 		if !ok {
