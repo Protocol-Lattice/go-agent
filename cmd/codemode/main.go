@@ -60,14 +60,6 @@ func startServer(addr string) {
 			return
 		}
 
-		// Empty-body after discovery => timestamp call
-		if len(raw) == 0 {
-			log.Printf("Empty body – timestamp call")
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]any{"result": time.Now().Format(time.RFC3339)})
-			return
-		}
-
 		// Try to parse the JSON
 		var probe map[string]interface{}
 		if err := json.Unmarshal(raw, &probe); err != nil {
@@ -77,6 +69,14 @@ func startServer(addr string) {
 
 		// Standard tool call (has "tool" field)
 		if toolName, hasToolField := probe["tool"].(string); hasToolField && toolName != "" {
+			// Empty-body after discovery => timestamp call
+			if len(raw) == 0 {
+				log.Printf("Empty body – timestamp call")
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(map[string]any{"result": time.Now().Format(time.RFC3339)})
+				return
+			}
+
 			var req struct {
 				Tool string                 `json:"tool"`
 				Args map[string]interface{} `json:"args"`
@@ -92,26 +92,46 @@ func startServer(addr string) {
 			switch req.Tool {
 
 			case "http.echo":
-				msg, _ := req.Args["message"].(string)
+				msg, ok := req.Args["message"].(string)
+				if !ok {
+					http.Error(w, "missing 'message' argument for http.echo", http.StatusBadRequest)
+					return
+				}
 				json.NewEncoder(w).Encode(map[string]any{"result": msg})
 
 			case "http.timestamp":
 				json.NewEncoder(w).Encode(map[string]any{"result": time.Now().Format(time.RFC3339)})
 
 			case "http.math.add":
-				a, _ := req.Args["a"].(float64)
-				b, _ := req.Args["b"].(float64)
+				a, aOk := req.Args["a"].(float64)
+				b, bOk := req.Args["b"].(float64)
+				if !aOk || !bOk {
+					http.Error(w, "missing 'a' or 'b' arguments for http.math.add", http.StatusBadRequest)
+					return
+				}
 				json.NewEncoder(w).Encode(map[string]any{"result": a + b})
 
 			case "http.math.multiply":
-				a, _ := req.Args["a"].(float64)
-				b, _ := req.Args["b"].(float64)
+				a, aOk := req.Args["a"].(float64)
+				b, bOk := req.Args["b"].(float64)
+				if !aOk || !bOk {
+					http.Error(w, "missing 'a' or 'b' arguments for http.math.multiply", http.StatusBadRequest)
+					return
+				}
 				json.NewEncoder(w).Encode(map[string]any{"result": a * b})
 
 			case "http.string.concat":
-				prefix, _ := req.Args["prefix"].(string)
-				value, _ := req.Args["value"].(string)
+				prefix, pOk := req.Args["prefix"].(string)
+				value, vOk := req.Args["value"].(string)
+				if !pOk || !vOk {
+					http.Error(w, "missing 'prefix' or 'value' arguments for http.string.concat", http.StatusBadRequest)
+					return
+				}
 				json.NewEncoder(w).Encode(map[string]any{"result": prefix + value})
+
+			default:
+				http.Error(w, fmt.Sprintf("unknown tool: %s", req.Tool), http.StatusBadRequest)
+				return
 			}
 
 			return
@@ -195,9 +215,9 @@ func main() {
 }
 
 var prompt = `
-Echo a greeting: Call the http.echo tool with the message "hello world"
-Get the current time: Call the http.timestamp tool to retrieve the current server timestamp
-Add two numbers: Use the http.math.add tool to add 5 and 7 together
-Multiply the result: Take the sum from step 3 and multiply it by 3 using the http.math.multiply tool
-Format as a string: Use the http.string.concat tool to prepend the text "Number: " to the multiplication result from step 4
+Echo a greeting: Call the http.echo tool with the message "hello world"\n
+Get the current time: Call the http.timestamp tool to retrieve the current server timestamp\n
+Add two numbers: Use the http.math.add tool to add 5 and 7 together\n
+Multiply the result: Take the sum from step 3 and multiply it by 3 using the http.math.multiply tool\n
+Format as a string: Use the http.string.concat tool to prepend the text "Number: " to the multiplication result from step 4\n
 `

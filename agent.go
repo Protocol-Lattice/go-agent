@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"strconv"
 	"strings"
@@ -201,6 +202,7 @@ func (a *Agent) codeModeOrchestrator(
 	if err != nil && !ok {
 		return true, "", err
 	}
+	log.Println(snippet)
 
 	// --------------------------------------------
 	// 4) Execute snippet via CodeMode UTCP
@@ -425,6 +427,10 @@ Respond ONLY in JSON:
 
 	if err := json.Unmarshal([]byte(jsonStr), &resp); err != nil {
 		return "", false, err
+	}
+	if !isValidSnippet(resp.Code) {
+		log.Println("Skipping invalid snippet:", resp.Code)
+		return "", false, fmt.Errorf("snippet validation failed")
 	}
 
 	return resp.Code, resp.Stream, nil
@@ -1977,4 +1983,18 @@ func extractJSON(response string) string {
 	}
 
 	return ""
+}
+
+func isValidSnippet(code string) bool {
+	// invalid if LLM emits standalone maps like: map[value:hello world]
+	if strings.Contains(code, "map[value:") {
+		return false
+	}
+
+	// invalid if no __out assignment exists
+	if !strings.Contains(code, "__out") {
+		return false
+	}
+
+	return true
 }
