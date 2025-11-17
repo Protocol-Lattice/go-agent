@@ -91,37 +91,27 @@ func startServer(addr string) {
 
 			switch req.Tool {
 
-			case "echo":
+			case "http.echo":
 				msg, _ := req.Args["message"].(string)
 				json.NewEncoder(w).Encode(map[string]any{"result": msg})
 
-			case "timestamp":
+			case "http.timestamp":
 				json.NewEncoder(w).Encode(map[string]any{"result": time.Now().Format(time.RFC3339)})
 
-			case "math.add":
+			case "http.math.add":
 				a, _ := req.Args["a"].(float64)
 				b, _ := req.Args["b"].(float64)
-				json.NewEncoder(w).Encode(map[string]any{"sum": a + b})
+				json.NewEncoder(w).Encode(map[string]any{"result": a + b})
 
-			case "math.multiply":
+			case "http.math.multiply":
 				a, _ := req.Args["a"].(float64)
 				b, _ := req.Args["b"].(float64)
-				json.NewEncoder(w).Encode(map[string]any{"product": a * b})
+				json.NewEncoder(w).Encode(map[string]any{"result": a * b})
 
-			case "string.concat":
+			case "http.string.concat":
 				prefix, _ := req.Args["prefix"].(string)
 				value, _ := req.Args["value"].(string)
 				json.NewEncoder(w).Encode(map[string]any{"result": prefix + value})
-
-			case "stream.echo":
-				// streaming: return chunks in sequence
-				// You can simplify and return single chunk
-				json.NewEncoder(w).Encode(map[string]any{
-					"stream": []any{"A", "B", "C"},
-				})
-
-			default:
-				http.Error(w, "unknown tool", http.StatusNotFound)
 			}
 
 			return
@@ -171,7 +161,7 @@ func main() {
 	flag.Parse()
 
 	// --- Runtime (shared) ---
-	researcherModel, err := models.NewGeminiLLM(ctx, *modelName, "Research summary:")
+	researcherModel, err := models.NewGeminiLLM(ctx, *modelName, "")
 	if err != nil {
 		log.Fatalf("failed to create researcher model: %v", err)
 	}
