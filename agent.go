@@ -173,13 +173,32 @@ func (a *Agent) codeModeOrchestrator(
 	toolSpecs := a.ToolSpecs()
 	detailed := renderUtcpToolsForPrompt(toolSpecs)
 
-	// Generate snippet directly. The model can decide if tools are needed.
-	// We pass an empty list of selected tools to `generateSnippet` and let it use all available specs.
-	snippet, ok, err := a.generateSnippet(ctx, userInput, []string{}, detailed)
-	if !ok || err != nil || strings.TrimSpace(snippet) == "" {
-		return false, "", err // Not handled or error
+	// --------------------------------------------
+	// 1) Decide whether tools are needed
+	// --------------------------------------------
+	need, err := a.decideIfToolsNeeded(ctx, userInput, detailed)
+	if err != nil {
+		return false, "", err
+	}
+	if !need {
+		return false, "", nil
 	}
 
+	// --------------------------------------------
+	// 2) Select tools (exact names)
+	// --------------------------------------------
+	selected, err := a.selectTools(ctx, userInput, detailed)
+	if err != nil {
+		return true, "", err
+	}
+	if len(selected) == 0 {
+		return false, "", nil
+	}
+
+	// --------------------------------------------
+	// 3) Generate snippet using chosen tools only
+	// --------------------------------------------
+	snippet, ok, err := a.generateSnippet(ctx, userInput, selected, detailed)
 	if err != nil && !ok {
 		return true, "", err
 	}
@@ -188,7 +207,7 @@ func (a *Agent) codeModeOrchestrator(
 	// --------------------------------------------
 	// 4) Execute snippet via CodeMode UTCP
 	// --------------------------------------------
-	timeout := 30000 // Increased timeout for multi-step chains
+	timeout := 20000
 	raw, err := a.CodeMode.Execute(ctx, codemode.CodeModeArgs{
 		Code:    snippet,
 		Timeout: timeout,
@@ -532,6 +551,78 @@ func (a *Agent) buildPrompt(
 	}
 
 	return sb.String(), nil
+}
+
+func (a *Agent) renderTools() string {
+	toolList := a.ToolSpecs()
+	if len(toolList) == 0 {
+		return ""
+	}
+
+	var sb strings.Builder
+
+	for _, t := range toolList {
+		sb.WriteString(fmt.Sprintf("- %s: %s\n", t.Name, t.Description))
+
+		// -----------------------------
+		// Input arguments (InputSchema)
+		// -----------------------------
+		props := t.Inputs.Properties
+		required := map[string]bool{}
+		for _, r := range t.Inputs.Required {
+			required[r] = true
+		}
+
+		if len(props) > 0 {
+			sb.WriteString("  args:\n")
+
+			for name, spec := range props {
+				typ := "any"
+
+				if m, ok := spec.(map[string]any); ok {
+					if tval, ok := m["type"].(string); ok {
+						typ = tval
+					}
+				}
+
+				if required[name] {
+					sb.WriteString(fmt.Sprintf("    - %s (%s, required)\n", name, typ))
+				} else {
+					sb.WriteString(fmt.Sprintf("    - %s (%s)\n", name, typ))
+				}
+			}
+		}
+
+		// -----------------------------
+		// Output schema (optional)
+		// -----------------------------
+		out := t.Outputs
+		if len(out.Properties) > 0 || out.Type != "" {
+			if toon := encodeTOONBlock(out); toon != "" {
+				sb.WriteString("  returns (TOON):\n")
+				sb.WriteString(indentBlock(toon, "    "))
+				sb.WriteString("\n")
+			}
+		}
+	}
+
+	return sb.String()
+}
+
+// renderSubAgents formats specialist sub-agents into a prompt-friendly block.
+func (a *Agent) renderSubAgents() string {
+	subagents := a.SubAgents()
+	if len(subagents) == 0 {
+		return ""
+	}
+
+	var sb strings.Builder
+	sb.WriteString("Specialist sub-agents:\n")
+	for _, sa := range subagents {
+		sb.WriteString(fmt.Sprintf("- %s: %s\n", sa.Name(), sa.Description()))
+	}
+	sb.WriteString("Delegate with: `subagent:<name> <task>`\n")
+	return sb.String()
 }
 
 // renderMemory formats retrieved memory records into a clean, token-efficient list.
@@ -1040,26 +1131,32 @@ func (a *Agent) lookupSubAgent(name string) (SubAgent, bool) {
 func (a *Agent) ToolSpecs() []tools.Tool {
 	var allSpecs []tools.Tool
 	seen := make(map[string]bool)
-	limit, err := strconv.Atoi(os.Getenv("utcp_search_tools_limit"))
-	if err != nil {
-		limit = 50
-	}
-	if limit == 0 {
-		limit = 50
-	}
-	// 1. Get UTCP tool specs and merge
-	if a.UTCPClient != nil {
-		utcpTools, _ := a.UTCPClient.SearchTools("", limit)
-		for _, tool := range utcpTools {
-			key := strings.ToLower(tool.Name)
-			if !seen[key] {
-				allSpecs = append(allSpecs, tool)
-				seen[key] = true
+
+	// 1. Local tools registered via ToolCatalog
+	if a.toolCatalog != nil {
+		for _, spec := range a.toolCatalog.Specs() {
+			name := strings.TrimSpace(spec.Name)
+			if name == "" {
+				continue
 			}
+			key := strings.ToLower(name)
+			if seen[key] {
+				continue
+			}
+
+			allSpecs = append(allSpecs, tools.Tool{
+				Name:        name,
+				Description: spec.Description,
+				Inputs: tools.ToolInputOutputSchema{
+					Type:       "object",
+					Properties: spec.InputSchema,
+				},
+			})
+			seen[key] = true
 		}
 	}
-	// 2. Built-in CodeMode tool (if available)
 
+	// 2. Built-in CodeMode tool (if available)
 	if a.CodeMode != nil {
 		if cmTools, err := a.CodeMode.Tools(context.Background()); err == nil {
 			for _, t := range cmTools {
@@ -1068,6 +1165,26 @@ func (a *Agent) ToolSpecs() []tools.Tool {
 					continue
 				}
 				allSpecs = append(allSpecs, t)
+				seen[key] = true
+			}
+		}
+	}
+
+	limit, err := strconv.Atoi(os.Getenv("utcp_search_tools_limit"))
+	if err != nil {
+		limit = 50
+	}
+	if limit == 0 {
+		limit = 50
+	}
+
+	// 3. Get UTCP tool specs and merge
+	if a.UTCPClient != nil {
+		utcpTools, _ := a.UTCPClient.SearchTools("", limit)
+		for _, tool := range utcpTools {
+			key := strings.ToLower(tool.Name)
+			if !seen[key] {
+				allSpecs = append(allSpecs, tool)
 				seen[key] = true
 			}
 		}
