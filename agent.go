@@ -1066,7 +1066,19 @@ func (a *Agent) ToolSpecs() []tools.Tool {
 	if limit == 0 {
 		limit = 50
 	}
-	// 1. Built-in CodeMode tool (if available)
+	// 1. Get UTCP tool specs and merge
+	if a.UTCPClient != nil {
+		utcpTools, _ := a.UTCPClient.SearchTools("", limit)
+		for _, tool := range utcpTools {
+			key := strings.ToLower(tool.Name)
+			if !seen[key] {
+				allSpecs = append(allSpecs, tool)
+				seen[key] = true
+			}
+		}
+	}
+	// 2. Built-in CodeMode tool (if available)
+
 	if a.CodeMode != nil {
 		if cmTools, err := a.CodeMode.Tools(context.Background()); err == nil {
 			for _, t := range cmTools {
@@ -1075,17 +1087,6 @@ func (a *Agent) ToolSpecs() []tools.Tool {
 					continue
 				}
 				allSpecs = append(allSpecs, t)
-				seen[key] = true
-			}
-		}
-	}
-	// 2. Get UTCP tool specs and merge
-	if a.UTCPClient != nil {
-		utcpTools, _ := a.UTCPClient.SearchTools("", limit)
-		for _, tool := range utcpTools {
-			key := strings.ToLower(tool.Name)
-			if !seen[key] {
-				allSpecs = append(allSpecs, tool)
 				seen[key] = true
 			}
 		}
