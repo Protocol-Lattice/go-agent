@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"os"
 	"strconv"
 	"strings"
@@ -191,7 +190,6 @@ func (a *Agent) codeModeOrchestrator(
 	if err != nil {
 		return true, "", err
 	}
-	log.Println(selected)
 	if len(selected) == 0 {
 		return false, "", nil
 	}
@@ -208,7 +206,6 @@ func (a *Agent) codeModeOrchestrator(
 	// 4) Execute snippet via CodeMode UTCP
 	// --------------------------------------------
 	timeout := 20000
-	log.Println(snippet)
 	raw, err := a.CodeMode.Execute(ctx, codemode.CodeModeArgs{
 		Code:    snippet,
 		Timeout: timeout,
@@ -1833,7 +1830,6 @@ Return ONLY JSON. No explanations.
 
 	// Handle codemode.run_code specially
 	if tc.ToolName == "codemode.run_code" && a.CodeMode != nil {
-		log.Println(tc.Arguments)
 		code, _ := tc.Arguments["code"].(string)
 		timeout, ok := tc.Arguments["timeout"].(float64)
 		if !ok {

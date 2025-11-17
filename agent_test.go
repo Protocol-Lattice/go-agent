@@ -49,6 +49,31 @@ func (m *fileEchoModel) GenerateWithFiles(ctx context.Context, prompt string, fi
 	return m.response, nil
 }
 
+type dynamicStubModel struct {
+	responses  map[string]string
+	err        error
+	lastPrompt string // To track the last prompt received by the model
+}
+
+func (m *dynamicStubModel) GenerateWithFiles(ctx context.Context, prompt string, files []models.File) (any, error) {
+	m.lastPrompt = prompt
+	return m.Generate(ctx, prompt)
+}
+
+func (m *dynamicStubModel) Generate(ctx context.Context, prompt string) (any, error) {
+	m.lastPrompt = prompt
+	if m.err != nil {
+		return nil, m.err
+	}
+	for key, val := range m.responses {
+		if strings.Contains(prompt, key) {
+			return val, nil
+		}
+	}
+	// Default response if no specific match
+	return "default model response for: " + prompt, nil
+}
+
 type stubUTCPClient struct {
 	callCount       int
 	lastToolName    string
@@ -982,6 +1007,220 @@ func TestCodeMode_SimpleExpression(t *testing.T) {
 	if !strings.Contains(out, "3") {
 		t.Fatalf("expected nil Codemode result, got %q", out)
 	}
+}
+
+func TestCodeModeOrchestrator_NoToolsNeeded(t *testing.T) {
+	ctx := context.Background()
+
+	model := &dynamicStubModel{
+		responses: map[string]string{
+			"Decide if the following user query requires using ANY UTCP tools.": `{"needs": false}`,
+		},
+	}
+	mem := memory.NewSessionMemory(&memory.MemoryBank{}, 4)
+	utcpClient := &stubUTCPClient{
+		searchTools: []utcpTools.Tool{
+			{
+				Name:        "echo",
+				Description: "Echoes the input",
+				Inputs: utcpTools.ToolInputOutputSchema{
+					Type: "object",
+					Properties: map[string]any{
+						"input": map[string]any{"type": "string"},
+					},
+					Required: []string{"input"},
+				},
+			},
+		},
+	}
+
+	agent, err := New(Options{
+		Model:      model,
+		Memory:     mem,
+		UTCPClient: utcpClient,
+		CodeMode:   codemode.NewCodeModeUTCP(utcpClient),
+	})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+
+	userInput := "What is the capital of France?"
+	_, err = agent.Generate(ctx, "session1", userInput)
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+
+	// Verify that CodeMode was not triggered to execute a snippet
+	if utcpClient.callCount != 0 {
+		t.Fatalf("expected 0 UTCP calls, got %d", utcpClient.callCount)
+	}
+
+	// Verify that the model was asked to generate a normal response (after the "decide if tools needed" prompt)
+	if !strings.Contains(model.lastPrompt, userInput) {
+		t.Fatalf("expected model to generate normal response for user input, last prompt: %s", model.lastPrompt)
+	}
+}
+
+func TestCodeModeOrchestrator_ToolsNeededButNoneSelected(t *testing.T) {
+	ctx := context.Background()
+
+	model := &dynamicStubModel{
+		responses: map[string]string{
+			"Decide if the following user query requires using ANY UTCP tools.": `{"needs": true}`,
+			"Select ALL UTCP tools that match the user's intent.":               `{"tools": []}`, // No tools selected
+		},
+	}
+	mem := memory.NewSessionMemory(&memory.MemoryBank{}, 4)
+	utcpClient := &stubUTCPClient{
+		searchTools: []utcpTools.Tool{
+			{
+				Name:        "echo",
+				Description: "Echoes the input",
+				Inputs: utcpTools.ToolInputOutputSchema{
+					Type: "object",
+					Properties: map[string]any{
+						"input": map[string]any{"type": "string"},
+					},
+					Required: []string{"input"},
+				},
+			},
+		},
+	}
+
+	agent, err := New(Options{
+		Model:      model,
+		Memory:     mem,
+		UTCPClient: utcpClient,
+		CodeMode:   codemode.NewCodeModeUTCP(utcpClient),
+	})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+
+	userInput := "Use a tool to do something."
+	_, err = agent.Generate(ctx, "session1", userInput)
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+
+	// Verify that CodeMode.Execute was not called
+	if utcpClient.callCount != 0 {
+		t.Fatalf("expected 0 UTCP calls, got %d", utcpClient.callCount)
+	}
+
+	// Verify that the model was asked to generate a normal response (after the "select tools" prompt)
+	if !strings.Contains(model.lastPrompt, userInput) {
+		t.Fatalf("expected model to generate normal response for user input, last prompt: %s", model.lastPrompt)
+	}
+}
+
+func TestCodeModeOrchestrator_SnippetGenerationError(t *testing.T) {
+	ctx := context.Background()
+
+	model := &dynamicStubModel{
+		responses: map[string]string{
+			"Decide if the following user query requires using ANY UTCP tools.": `{"needs": true}`,
+			"Select ALL UTCP tools that match the user's intent.":               `{"tools": ["echo"]}`,
+			"Generate a Go snippet that uses ONLY the following UTCP tools:":    `invalid json`, // Simulate bad snippet generation
+		},
+	}
+	mem := memory.NewSessionMemory(&memory.MemoryBank{}, 4)
+	utcpClient := &stubUTCPClient{
+		searchTools: []utcpTools.Tool{
+			{
+				Name:        "echo",
+				Description: "Echoes the input",
+				Inputs: utcpTools.ToolInputOutputSchema{
+					Type: "object",
+					Properties: map[string]any{
+						"input": map[string]any{"type": "string"},
+					},
+					Required: []string{"input"},
+				},
+			},
+		},
+	}
+
+	agent, err := New(Options{
+		Model:      model,
+		Memory:     mem,
+		UTCPClient: utcpClient,
+		CodeMode:   codemode.NewCodeModeUTCP(utcpClient),
+	})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+
+	_, err = agent.Generate(ctx, "session1", "Run the echo tool.")
+	if err == nil {
+		t.Fatalf("expected error due to invalid snippet JSON, got nil")
+	}
+	if !strings.Contains(err.Error(), "snippet empty") {
+		t.Fatalf("expected 'snippet empty' error, got: %v", err)
+	}
+
+	// Verify that CodeMode.Execute was not called
+	if utcpClient.callCount != 0 {
+		t.Fatalf("expected 0 UTCP calls, got %d", utcpClient.callCount)
+	}
+}
+
+func TestCodeModeOrchestrator_SnippetExecutionSuccess(t *testing.T) {
+	ctx := context.Background()
+
+	codeSnippet := `__out = codemode.CallTool("echo", map[string]any{"input": "hello"})`
+	model := &dynamicStubModel{
+		responses: map[string]string{
+			"Decide if the following user query requires using ANY UTCP tools.": `{"needs": true}`,
+			"Select ALL UTCP tools that match the user's intent.":               `{"tools": ["echo"]}`,
+			"Generate a Go snippet that uses ONLY the following UTCP tools:":    fmt.Sprintf(`{"code": %q, "stream": false}`, codeSnippet),
+		},
+	}
+	mem := memory.NewSessionMemory(&memory.MemoryBank{}, 4)
+	utcpClient := &stubUTCPClient{ // This stub will be called by CodeMode.Execute
+		searchTools: []utcpTools.Tool{
+			{
+				Name:        "echo",
+				Description: "Echoes the input",
+				Inputs: utcpTools.ToolInputOutputSchema{
+					Type: "object",
+					Properties: map[string]any{
+						"input": map[string]any{"type": "string"},
+					},
+					Required: []string{"input"},
+				},
+			},
+		},
+	}
+
+	agent, err := New(Options{
+		Model:      model,
+		Memory:     mem,
+		UTCPClient: utcpClient,
+		CodeMode:   codemode.NewCodeModeUTCP(utcpClient),
+	})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+
+	out, err := agent.Generate(ctx, "session1", "Run the echo tool with 'hello'.")
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+
+	// CodeMode should return raw output from the executed snippet
+	if !strings.Contains(out, "utcp says echo") {
+		t.Fatalf("expected output to contain 'utcp says echo', got %q", out)
+	}
+
+	// Verify that CodeMode.Execute called the UTCP client
+	if utcpClient.callCount != 1 {
+		t.Fatalf("expected 1 UTCP call from inside the DSL, got %d", utcpClient.callCount)
+	}
+	if utcpClient.lastToolName != "echo" {
+		t.Fatalf("expected last tool to be 'echo', got %q", utcpClient.lastToolName)
+	}
+
 }
 
 func TestCodeMode_ExecutesCallToolInsideDSL2(t *testing.T) {
