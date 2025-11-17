@@ -173,32 +173,13 @@ func (a *Agent) codeModeOrchestrator(
 	toolSpecs := a.ToolSpecs()
 	detailed := renderUtcpToolsForPrompt(toolSpecs)
 
-	// --------------------------------------------
-	// 1) Decide whether tools are needed
-	// --------------------------------------------
-	need, err := a.decideIfToolsNeeded(ctx, userInput, detailed)
-	if err != nil {
-		return false, "", err
-	}
-	if !need {
-		return false, "", nil
+	// Generate snippet directly. The model can decide if tools are needed.
+	// We pass an empty list of selected tools to `generateSnippet` and let it use all available specs.
+	snippet, ok, err := a.generateSnippet(ctx, userInput, []string{}, detailed)
+	if !ok || err != nil || strings.TrimSpace(snippet) == "" {
+		return false, "", err // Not handled or error
 	}
 
-	// --------------------------------------------
-	// 2) Select tools (exact names)
-	// --------------------------------------------
-	selected, err := a.selectTools(ctx, userInput, detailed)
-	if err != nil {
-		return true, "", err
-	}
-	if len(selected) == 0 {
-		return false, "", nil
-	}
-
-	// --------------------------------------------
-	// 3) Generate snippet using chosen tools only
-	// --------------------------------------------
-	snippet, ok, err := a.generateSnippet(ctx, userInput, selected, detailed)
 	if err != nil && !ok {
 		return true, "", err
 	}
@@ -207,7 +188,7 @@ func (a *Agent) codeModeOrchestrator(
 	// --------------------------------------------
 	// 4) Execute snippet via CodeMode UTCP
 	// --------------------------------------------
-	timeout := 20000
+	timeout := 30000 // Increased timeout for multi-step chains
 	raw, err := a.CodeMode.Execute(ctx, codemode.CodeModeArgs{
 		Code:    snippet,
 		Timeout: timeout,
