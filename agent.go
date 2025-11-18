@@ -340,7 +340,7 @@ TOOL SPECS:
 ------------------------------------------------------------
 SNIPPET RULES
 ------------------------------------------------------------
-- include ctx = context.Background()
+- include ctx := context.Background()
 - Use ONLY the tool names listed above.
 - Use EXACT input keys from the tool schemas. Do NOT invent new fields.
 - Use codemode.CallTool(ctx, "<tool>", map[string]any{ ... }) for non-streaming tools.
