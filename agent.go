@@ -342,8 +342,8 @@ SNIPPET RULES
 ------------------------------------------------------------
 - Use ONLY the tool names listed above.
 - Use EXACT input keys from the tool schemas. Do NOT invent new fields.
-- Use codemode.CallTool(ctx, "<tool>", map[string]any{ ... }) for non-streaming tools.
-- Use codemode.CallToolStream(ctx, "<tool>", map[string]any{ ... }) for streaming tools, assigning the result to a variable.
+- Use codemode.CallTool("<tool>", map[string]any{ ... }) for non-streaming tools.
+- Use codemode.CallToolStream("<tool>", map[string]any{ ... }) for streaming tools, assigning the result to a variable.
 - No imports, no package — ONLY Go statements.
 - The final result MUST be map[string]any assigned to '__out', containing all intermediate and final results.
 - If ANY streaming tool is used, set "stream": true.
@@ -354,7 +354,7 @@ CHAINING (NON-STREAMING) — STRICT RULES
 To pass output of one tool into another:
 
 1. Call the tool:
-    r1, err := codemode.CallTool(ctx, "<tool>", map[string]any{
+    r1, err := codemode.CallTool("<tool>", map[string]any{
         "a": 5,
         "b": 7,
     })
@@ -367,7 +367,7 @@ To pass output of one tool into another:
     }
 
 3. Use this value as input to the next tool:
-    r2, err := codemode.CallTool(ctx, "<next_tool>", map[string]any{
+    r2, err := codemode.CallTool("<next_tool>", map[string]any{
         "a": sum,
         "b": 3,
     })
@@ -384,7 +384,7 @@ STREAMING TOOLS — STRICT RULES
 When calling a streaming tool:
 
 1. Start the stream:
-    stream, err := codemode.CallToolStream(ctx, "<stream_tool>", map[string]any{
+    stream, err := codemode.CallToolStream("<stream_tool>", map[string]any{
         "input": "hello",
     })
     if err != nil { return err }
@@ -398,7 +398,7 @@ When calling a streaming tool:
     }
 
 3. You may chain streaming results into non-streaming tools:
-    r2, err := codemode.CallTool(ctx, "provider.summarize", map[string]any{
+    r2, err := codemode.CallTool("provider.summarize", map[string]any{
         "values": items,
     })
 
