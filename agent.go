@@ -340,7 +340,6 @@ TOOL SPECS:
 ------------------------------------------------------------
 SNIPPET RULES
 ------------------------------------------------------------
-- __out is declared, don't declare it.
 - Use ONLY the tool names listed above.
 - Use EXACT input keys from the tool schemas. Do NOT invent new fields.
 - Use these exact helper functions:
