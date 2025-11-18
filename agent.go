@@ -340,7 +340,6 @@ TOOL SPECS:
 ------------------------------------------------------------
 SNIPPET RULES
 ------------------------------------------------------------
-- The 'ctx context.Context' variable is already available.
 - Use ONLY the tool names listed above.
 - Use EXACT input keys from the tool schemas. Do NOT invent new fields.
 - Use codemode.CallTool(ctx, "<tool>", map[string]any{ ... }) for non-streaming tools.
