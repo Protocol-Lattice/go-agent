@@ -341,7 +341,7 @@ TOOL SPECS:
 SNIPPET RULES
 ------------------------------------------------------------
 - Use ONLY the tool names listed above.
-- declar var __out any
+- declare var __out any
 - Use EXACT input keys from the tool schemas. Do NOT invent new fields.
 - Use these exact helper functions:
   - codemode.CallTool(name, args)
