@@ -341,7 +341,6 @@ TOOL SPECS:
 SNIPPET RULES
 ------------------------------------------------------------
 - Use ONLY the tool names listed above.
-- declare var __out any
 - Use EXACT input keys from the tool schemas. Do NOT invent new fields.
 - Use these exact helper functions:
   - codemode.CallTool(name, args)
@@ -349,7 +348,8 @@ SNIPPET RULES
   - codemode.SearchTools(query, limit)
   - codemode.Sprintf(format, ...), codemode.Errorf(format, ...)
 - No imports, no package — ONLY Go statements.
-- The final result MUST be map[string]any assigned to '__out', containing all intermediate and final results.
+- Declare 'var __out map[string]any' at the very beginning of the snippet.
+- The final result MUST be assigned to '__out', containing all intermediate and final results.
 - If ANY streaming tool is used, set "stream": true.
 
 ------------------------------------------------------------
