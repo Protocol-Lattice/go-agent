@@ -342,10 +342,10 @@ SNIPPET RULES
 ------------------------------------------------------------
 - Use ONLY the tool names listed above.
 - Use EXACT input keys from the tool schemas. Do NOT invent new fields.
-- Use codemode.CallTool("<tool>", map[string]any{ ... }) for non-streaming tools.
-- Use codemode.CallToolStream("<tool>", map[string]any{ ... }) for streaming tools.
+- Use codemode.CallTool(ctx, "<tool>", map[string]any{ ... }) for non-streaming tools.
+- Use codemode.CallToolStream(ctx, "<tool>", map[string]any{ ... }) for streaming tools.
 - No imports, no package — ONLY Go statements.
-- The final result MUST be assigned to: __out
+- The final result MUST be any assigned to '__out', containing all intermediate and final results.
 - If ANY streaming tool is used, set "stream": true.
 
 ------------------------------------------------------------
@@ -354,7 +354,7 @@ CHAINING (NON-STREAMING) — STRICT RULES
 To pass output of one tool into another:
 
 1. Call the tool:
-    r1, err := codemode.CallTool("<tool>", map[string]any{
+    r1, err := codemode.CallTool(ctx, "<tool>", map[string]any{
         "a": 5,
         "b": 7,
     })
@@ -367,13 +367,16 @@ To pass output of one tool into another:
     }
 
 3. Use this value as input to the next tool:
-    r2, err := codemode.CallTool("<next_tool>", map[string]any{
+    r2, err := codemode.CallTool(ctx, "<next_tool>", map[string]any{
         "a": sum,
         "b": 3,
     })
 
 4. The final line must set:
-    __out = <result>
+    __out = map[string]any{
+        "sum": sum,
+        "product": r2,
+    }
 
 ------------------------------------------------------------
 STREAMING TOOLS — STRICT RULES
@@ -381,7 +384,7 @@ STREAMING TOOLS — STRICT RULES
 When calling a streaming tool:
 
 1. Start the stream:
-    stream, err := codemode.CallToolStream("<stream_tool>", map[string]any{
+    stream, err := codemode.CallToolStream(ctx, "<stream_tool>", map[string]any{
         "input": "hello",
     })
     if err != nil { return err }
@@ -395,7 +398,7 @@ When calling a streaming tool:
     }
 
 3. You may chain streaming results into non-streaming tools:
-    r2, err := codemode.CallTool("provider.summarize", map[string]any{
+    r2, err := codemode.CallTool(ctx, "provider.summarize", map[string]any{
         "values": items,
     })
 
@@ -1272,11 +1275,20 @@ func (a *Agent) Generate(ctx context.Context, sessionID, userInput string) (stri
 	// 0. DIRECT TOOL INVOCATION (bypass everything)
 	// ---------------------------------------------
 	if toolName, args, ok := a.detectDirectToolCall(trimmed); ok {
+		// It's a direct tool call, execute it.
 		result, err := a.executeTool(ctx, sessionID, toolName, args)
 		if err != nil {
 			return "", err
 		}
 		return fmt.Sprint(result), nil
+	}
+
+	// If the input is JSON but not a direct tool call, we should treat it as a normal prompt.
+	// We can detect this by checking if it's a JSON object but `detectDirectToolCall` failed.
+	var jsonData map[string]any
+	if strings.HasPrefix(trimmed, "{") && json.Unmarshal([]byte(trimmed), &jsonData) == nil {
+		// It's a JSON object but not a tool call, so we proceed to treat it as a regular prompt.
+		// The logic below will handle storing it and sending it to the LLM.
 	}
 
 	// ---------------------------------------------
