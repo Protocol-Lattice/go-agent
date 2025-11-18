@@ -343,7 +343,7 @@ SNIPPET RULES
 - Use ONLY the tool names listed above.
 - Use EXACT input keys from the tool schemas. Do NOT invent new fields.
 - Use codemode.CallTool(ctx, "<tool>", map[string]any{ ... }) for non-streaming tools.
-- Use codemode.CallToolStream(ctx, "<tool>", map[string]any{ ... }) for streaming tools.
+- Use codemode.CallToolStream(ctx, "<tool>", map[string]any{ ... }) for streaming tools, assigning the result to a variable.
 - No imports, no package — ONLY Go statements.
 - The final result MUST be map[string]any assigned to '__out', containing all intermediate and final results.
 - If ANY streaming tool is used, set "stream": true.
