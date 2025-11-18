@@ -348,7 +348,7 @@ SNIPPET RULES
   - codemode.SearchTools(query, limit)
   - codemode.Sprintf(format, ...), codemode.Errorf(format, ...)
 - No imports, no package — ONLY Go statements.
-- Declare 'var __out map[string]any' at the very beginning of the snippet.
+- Don't Declare 'var __out'
 - The final result MUST be assigned to '__out', containing all intermediate and final results.
 - If ANY streaming tool is used, set "stream": true.
 
