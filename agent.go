@@ -340,6 +340,7 @@ TOOL SPECS:
 ------------------------------------------------------------
 SNIPPET RULES
 ------------------------------------------------------------
+- __out is declared, don't declare it.
 - Use ONLY the tool names listed above.
 - Use EXACT input keys from the tool schemas. Do NOT invent new fields.
 - Use these exact helper functions:
@@ -376,7 +377,7 @@ To pass output of one tool into another:
     })
 
 4. The final line must set:
-    __out = map[string]any{
+    __out = map[string]any{ // USE = NOT :=
         "sum": sum,
         "product": r2,
     }
@@ -557,78 +558,6 @@ func (a *Agent) buildPrompt(
 	}
 
 	return sb.String(), nil
-}
-
-func (a *Agent) renderTools() string {
-	toolList := a.ToolSpecs()
-	if len(toolList) == 0 {
-		return ""
-	}
-
-	var sb strings.Builder
-
-	for _, t := range toolList {
-		sb.WriteString(fmt.Sprintf("- %s: %s\n", t.Name, t.Description))
-
-		// -----------------------------
-		// Input arguments (InputSchema)
-		// -----------------------------
-		props := t.Inputs.Properties
-		required := map[string]bool{}
-		for _, r := range t.Inputs.Required {
-			required[r] = true
-		}
-
-		if len(props) > 0 {
-			sb.WriteString("  args:\n")
-
-			for name, spec := range props {
-				typ := "any"
-
-				if m, ok := spec.(map[string]any); ok {
-					if tval, ok := m["type"].(string); ok {
-						typ = tval
-					}
-				}
-
-				if required[name] {
-					sb.WriteString(fmt.Sprintf("    - %s (%s, required)\n", name, typ))
-				} else {
-					sb.WriteString(fmt.Sprintf("    - %s (%s)\n", name, typ))
-				}
-			}
-		}
-
-		// -----------------------------
-		// Output schema (optional)
-		// -----------------------------
-		out := t.Outputs
-		if len(out.Properties) > 0 || out.Type != "" {
-			if toon := encodeTOONBlock(out); toon != "" {
-				sb.WriteString("  returns (TOON):\n")
-				sb.WriteString(indentBlock(toon, "    "))
-				sb.WriteString("\n")
-			}
-		}
-	}
-
-	return sb.String()
-}
-
-// renderSubAgents formats specialist sub-agents into a prompt-friendly block.
-func (a *Agent) renderSubAgents() string {
-	subagents := a.SubAgents()
-	if len(subagents) == 0 {
-		return ""
-	}
-
-	var sb strings.Builder
-	sb.WriteString("Specialist sub-agents:\n")
-	for _, sa := range subagents {
-		sb.WriteString(fmt.Sprintf("- %s: %s\n", sa.Name(), sa.Description()))
-	}
-	sb.WriteString("Delegate with: `subagent:<name> <task>`\n")
-	return sb.String()
 }
 
 // renderMemory formats retrieved memory records into a clean, token-efficient list.
