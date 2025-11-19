@@ -1209,7 +1209,7 @@ func TestCodeModeOrchestrator_SnippetExecutionSuccess(t *testing.T) {
 	}
 
 	// CodeMode should return raw output from the executed snippet
-	if !strings.Contains(out.(string), "utcp says echo") {
+	if !strings.Contains(out.(codemode.CodeModeResult).Value.(string), "utcp says echo") {
 		t.Fatalf("expected output to contain 'utcp says echo', got %q", out)
 	}
 

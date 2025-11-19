@@ -1163,7 +1163,7 @@ func (a *Agent) Generate(ctx context.Context, sessionID, userInput string) (any,
 	// 2. CODEMODE (Go-like DSL)
 	// ---------------------------------------------
 	if a.CodeMode != nil {
-		if handled, output, err := a.codeModeOrchestrator(ctx, sessionID, userInput); handled {
+		if handled, output, err := a.CodeMode.CallTool(ctx, userInput); handled {
 			if err != nil {
 				return "", err
 			}

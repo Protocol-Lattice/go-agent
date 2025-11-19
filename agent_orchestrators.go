@@ -4,87 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"time"
 
 	"github.com/alpkeskin/gotoon"
 	"github.com/universal-tool-calling-protocol/go-utcp/src/plugins/chain"
-	"github.com/universal-tool-calling-protocol/go-utcp/src/plugins/codemode"
 )
-
-// runs it, stores TOON-encoded memory, and returns the final output.
-func (a *Agent) codeModeOrchestrator(
-	ctx context.Context,
-	sessionID string,
-	userInput string,
-) (bool, string, error) {
-
-	if a.CodeMode == nil {
-		return false, "", nil
-	}
-
-	toolSpecs := a.ToolSpecs()
-	detailed := renderUtcpToolsForPrompt(toolSpecs)
-
-	// --------------------------------------------
-	// 1) Decide whether tools are needed
-	// --------------------------------------------
-	need, err := a.decideIfToolsNeeded(ctx, userInput, detailed)
-	if err != nil {
-		return false, "", err
-	}
-	if !need {
-		return false, "", nil
-	}
-
-	// --------------------------------------------
-	// 2) Select tools (exact names)
-	// --------------------------------------------
-	selected, err := a.selectTools(ctx, userInput, detailed)
-	if err != nil {
-		return true, "", err
-	}
-	if len(selected) == 0 {
-		return false, "", nil
-	}
-
-	// --------------------------------------------
-	// 3) Generate snippet using chosen tools only
-	// --------------------------------------------
-	snippet, ok, err := a.generateSnippet(ctx, userInput, selected, detailed)
-	if err != nil && !ok {
-		return true, "", err
-	}
-	log.Println(snippet)
-
-	// --------------------------------------------
-	// 4) Execute snippet via CodeMode UTCP
-	// --------------------------------------------
-	timeout := 20000
-	raw, err := a.CodeMode.Execute(ctx, codemode.CodeModeArgs{
-		Code:    snippet,
-		Timeout: timeout,
-	})
-	if err != nil {
-		a.storeMemory(sessionID, "assistant",
-			fmt.Sprintf("CodeMode error: %v", err),
-			map[string]string{"source": "codemode"},
-		)
-		return true, "", err
-	}
-
-	rawOut := fmt.Sprint(raw)
-
-	// TOON encoding
-	toonBytes, _ := gotoon.Encode(rawOut)
-	full := fmt.Sprintf("%s\n\n.toon:\n%s", rawOut, string(toonBytes))
-
-	a.storeMemory(sessionID, "assistant", full, map[string]string{
-		"source": "codemode",
-	})
-
-	return true, rawOut, nil
-}
 
 // codeChainOrchestrator lets the LLM decide whether to execute a multi-step UTCP chain.
 // It mirrors the design and behavior of toolOrchestrator, but produces a []ChainStep
