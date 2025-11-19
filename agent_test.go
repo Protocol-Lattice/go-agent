@@ -564,7 +564,7 @@ func TestCodeMode_ExecutesCallToolInsideDSL(t *testing.T) {
 	agent, err := New(Options{
 		Model:    model,
 		Memory:   mem,
-		CodeMode: codemode.NewCodeModeUTCP(utcpClient),
+		CodeMode: codemode.NewCodeModeUTCP(utcpClient, model),
 	})
 	if err != nil {
 		t.Fatalf("New returned error: %v", err)
@@ -617,7 +617,7 @@ func TestCodeMode_ExecutesCallToolStreamInsideDSL(t *testing.T) {
 		Model:      model,
 		Memory:     mem,
 		UTCPClient: utcpClient,
-		CodeMode:   codemode.NewCodeModeUTCP(utcpClient),
+		CodeMode:   codemode.NewCodeModeUTCP(utcpClient, model),
 	})
 	if err != nil {
 		t.Fatalf("New returned error: %v", err)
@@ -677,7 +677,7 @@ func TestCodeMode_StoresToonMemory(t *testing.T) {
 		Model:      model,
 		Memory:     mem,
 		UTCPClient: utcpClient,
-		CodeMode:   codemode.NewCodeModeUTCP(utcpClient),
+		CodeMode:   codemode.NewCodeModeUTCP(utcpClient, model),
 	})
 
 	_, _ = agent.Generate(ctx, "sess", "run code")
@@ -718,7 +718,7 @@ func TestCodeMode_ComplexLogicAndToolChain(t *testing.T) {
 		Model:      model,
 		Memory:     mem,
 		UTCPClient: utcpClient,
-		CodeMode:   codemode.NewCodeModeUTCP(utcpClient),
+		CodeMode:   codemode.NewCodeModeUTCP(utcpClient, model),
 	})
 	if err != nil {
 		t.Fatalf("New returned error: %v", err)
@@ -955,7 +955,7 @@ func TestToolSpecsMergesAllSources(t *testing.T) {
 		Memory:     mem,
 		Tools:      []Tool{local},
 		UTCPClient: utcp,
-		CodeMode:   codemode.NewCodeModeUTCP(utcp),
+		CodeMode:   codemode.NewCodeModeUTCP(utcp, model),
 	})
 
 	tools := agent.ToolSpecs()
@@ -995,16 +995,16 @@ func TestCodeMode_SimpleExpression(t *testing.T) {
 		Model:      model,
 		Memory:     mem,
 		UTCPClient: utcp,
-		CodeMode:   codemode.NewCodeModeUTCP(utcp),
+		CodeMode:   codemode.NewCodeModeUTCP(utcp, model),
 	})
 
 	out, err := agent.Generate(ctx, "sess", "run code")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-
+	result := out.(string)
 	// Current CodeMode returns a nil result because `1+2` is not wrapped
-	if !strings.Contains(out, "3") {
+	if !strings.Contains(result, "3") {
 		t.Fatalf("expected nil Codemode result, got %q", out)
 	}
 }
@@ -1038,7 +1038,7 @@ func TestCodeModeOrchestrator_NoToolsNeeded(t *testing.T) {
 		Model:      model,
 		Memory:     mem,
 		UTCPClient: utcpClient,
-		CodeMode:   codemode.NewCodeModeUTCP(utcpClient),
+		CodeMode:   codemode.NewCodeModeUTCP(utcpClient, model),
 	})
 	if err != nil {
 		t.Fatalf("New returned error: %v", err)
@@ -1091,7 +1091,7 @@ func TestCodeModeOrchestrator_ToolsNeededButNoneSelected(t *testing.T) {
 		Model:      model,
 		Memory:     mem,
 		UTCPClient: utcpClient,
-		CodeMode:   codemode.NewCodeModeUTCP(utcpClient),
+		CodeMode:   codemode.NewCodeModeUTCP(utcpClient, model),
 	})
 	if err != nil {
 		t.Fatalf("New returned error: %v", err)
@@ -1145,7 +1145,7 @@ func TestCodeModeOrchestrator_SnippetGenerationError(t *testing.T) {
 		Model:      model,
 		Memory:     mem,
 		UTCPClient: utcpClient,
-		CodeMode:   codemode.NewCodeModeUTCP(utcpClient),
+		CodeMode:   codemode.NewCodeModeUTCP(utcpClient, model),
 	})
 	if err != nil {
 		t.Fatalf("New returned error: %v", err)
@@ -1197,7 +1197,7 @@ func TestCodeModeOrchestrator_SnippetExecutionSuccess(t *testing.T) {
 		Model:      model,
 		Memory:     mem,
 		UTCPClient: utcpClient,
-		CodeMode:   codemode.NewCodeModeUTCP(utcpClient),
+		CodeMode:   codemode.NewCodeModeUTCP(utcpClient, model),
 	})
 	if err != nil {
 		t.Fatalf("New returned error: %v", err)
@@ -1209,7 +1209,7 @@ func TestCodeModeOrchestrator_SnippetExecutionSuccess(t *testing.T) {
 	}
 
 	// CodeMode should return raw output from the executed snippet
-	if !strings.Contains(out, "utcp says echo") {
+	if !strings.Contains(out.(string), "utcp says echo") {
 		t.Fatalf("expected output to contain 'utcp says echo', got %q", out)
 	}
 
@@ -1246,7 +1246,7 @@ func TestCodeMode_ExecutesCallToolInsideDSL2(t *testing.T) {
 		Model:      model,
 		Memory:     mem,
 		UTCPClient: utcpClient,
-		CodeMode:   codemode.NewCodeModeUTCP(utcpClient),
+		CodeMode:   codemode.NewCodeModeUTCP(utcpClient, model),
 	})
 	if err != nil {
 		t.Fatalf("New returned error: %v", err)

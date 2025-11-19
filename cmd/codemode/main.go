@@ -186,17 +186,20 @@ func main() {
 		log.Fatalf("failed to create researcher model: %v", err)
 	}
 	memOpts := engine.DefaultOptions()
-
+	model, err := models.NewGeminiLLM(ctx, *modelName, "")
+	if err != nil {
+		log.Fatalf("failed to create model: %v", err)
+	}
 	kit, err := adk.New(ctx,
 		adk.WithDefaultSystemPrompt(""),
 		adk.WithSubAgents(subagents.NewResearcher(researcherModel)),
 		adk.WithModules(
 			adkmodules.NewModelModule("gemini-model", func(_ context.Context) (models.Agent, error) {
-				return models.NewGeminiLLM(ctx, *modelName, "")
+				return model, nil
 			}),
 			adkmodules.InMemoryMemoryModule(100000, memory.AutoEmbedder(), &memOpts),
 		),
-		adk.WithCodeModeUtcp(client),
+		adk.WithCodeModeUtcp(client, model),
 		adk.WithUTCP(client),
 	)
 

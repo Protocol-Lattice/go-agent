@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	agent "github.com/Protocol-Lattice/go-agent"
+	"github.com/Protocol-Lattice/go-agent/src/models"
 	"github.com/universal-tool-calling-protocol/go-utcp"
 	"github.com/universal-tool-calling-protocol/go-utcp/src/plugins/chain"
 	"github.com/universal-tool-calling-protocol/go-utcp/src/plugins/codemode"
@@ -87,12 +88,12 @@ func WithUTCP(client utcp.UtcpClientInterface) Option {
 	}
 }
 
-func WithCodeModeUtcp(client utcp.UtcpClientInterface) Option {
+func WithCodeModeUtcp(client utcp.UtcpClientInterface, model models.Agent) Option {
 	return func(kit *AgentDevelopmentKit) error {
 		if client == nil {
 			return fmt.Errorf("codemode UTCP client cannot be nil")
 		}
-		kit.CodeMode = codemode.NewCodeModeUTCP(client)
+		kit.CodeMode = codemode.NewCodeModeUTCP(client, model)
 		return nil
 	}
 }

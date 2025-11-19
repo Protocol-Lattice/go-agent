@@ -90,7 +90,7 @@ func TestKitBuildAgent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Respond: %v", err)
 	}
-	if !strings.Contains(response, "Coordinator:") {
+	if !strings.Contains(response.(string), "Coordinator:") {
 		t.Fatalf("expected coordinator prefix, got %q", response)
 	}
 
@@ -101,7 +101,7 @@ func TestKitBuildAgent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("subagent invocation failed: %v", err)
 	}
-	if !strings.Contains(saResponse, "Researcher reply:") {
+	if !strings.Contains(saResponse.(string), "Researcher reply:") {
 		t.Fatalf("expected researcher prefix in %q", saResponse)
 	}
 }
