@@ -23,7 +23,10 @@ import (
 	"github.com/universal-tool-calling-protocol/go-utcp/src/tools"
 )
 
-const defaultSystemPrompt = "You are the primary coordinator for an AI agent team. Provide concise, accurate answers and explain when you call tools or delegate work to specialist sub-agents."
+const (
+	defaultSystemPrompt = "You are the primary coordinator for an AI agent team. Provide concise, accurate answers and explain when you call tools or delegate work to specialist sub-agents."
+	defaultToolCacheTTL = 30 * time.Second
+)
 
 // Agent orchestrates model calls, memory, tools, and sub-agents.
 type Agent struct {
@@ -35,10 +38,19 @@ type Agent struct {
 	toolCatalog       ToolCatalog
 	subAgentDirectory SubAgentDirectory
 	UTCPClient        utcp.UtcpClientInterface
-	mu                sync.Mutex
-	Shared            *memory.SharedSession
-	CodeMode          *codemode.CodeModeUTCP
-	CodeChain         *chain.UtcpChainClient
+
+	mu sync.Mutex
+
+	toolMu           sync.RWMutex
+	toolSpecsCache   []tools.Tool
+	toolSpecsExpiry  time.Time
+	toolPromptCache  string
+	toolPromptKey    string
+	toolPromptExpiry time.Time
+
+	Shared    *memory.SharedSession
+	CodeMode  *codemode.CodeModeUTCP
+	CodeChain *chain.UtcpChainClient
 }
 
 // Options configure a new Agent.
@@ -876,6 +888,73 @@ func isTextAttachment(mime string, data []byte) bool {
 	return utf8.Valid(data)
 }
 
+func toolCacheTTL() time.Duration {
+	raw := strings.TrimSpace(os.Getenv("utcp_tool_cache_ttl_ms"))
+	if raw == "" {
+		return defaultToolCacheTTL
+	}
+	ms, err := strconv.Atoi(raw)
+	if err != nil || ms <= 0 {
+		return defaultToolCacheTTL
+	}
+	return time.Duration(ms) * time.Millisecond
+}
+
+func toolListSignature(specs []tools.Tool) string {
+	if len(specs) == 0 {
+		return ""
+	}
+
+	var sb strings.Builder
+	sb.Grow(len(specs) * 32)
+
+	for _, t := range specs {
+		sb.WriteString(strings.ToLower(strings.TrimSpace(t.Name)))
+		sb.WriteByte('|')
+		sb.WriteString(strings.TrimSpace(t.Description))
+		sb.WriteByte('|')
+		sb.WriteString(strconv.Itoa(len(t.Inputs.Properties)))
+		sb.WriteByte('|')
+		sb.WriteString(strconv.Itoa(len(t.Inputs.Required)))
+		sb.WriteByte(';')
+	}
+	return sb.String()
+}
+
+func (a *Agent) cachedToolPrompt(specs []tools.Tool) string {
+	if len(specs) == 0 {
+		return ""
+	}
+
+	key := toolListSignature(specs)
+	now := time.Now()
+
+	a.toolMu.RLock()
+	prompt := a.toolPromptCache
+	cacheKey := a.toolPromptKey
+	promptExpiry := a.toolPromptExpiry
+	specExpiry := a.toolSpecsExpiry
+	a.toolMu.RUnlock()
+
+	if prompt != "" && key == cacheKey && (promptExpiry.IsZero() || now.Before(promptExpiry)) {
+		return prompt
+	}
+
+	rendered := renderUtcpToolsForPrompt(specs)
+	expiry := specExpiry
+	if expiry.IsZero() || now.After(expiry) {
+		expiry = now.Add(toolCacheTTL())
+	}
+
+	a.toolMu.Lock()
+	a.toolPromptCache = rendered
+	a.toolPromptKey = key
+	a.toolPromptExpiry = expiry
+	a.toolMu.Unlock()
+
+	return rendered
+}
+
 func renderUtcpToolsForPrompt(specs []tools.Tool) string {
 	var sb strings.Builder
 
@@ -989,6 +1068,16 @@ func (a *Agent) lookupSubAgent(name string) (SubAgent, bool) {
 
 // ToolSpecs returns the registered tool specifications in deterministic order.
 func (a *Agent) ToolSpecs() []tools.Tool {
+	now := time.Now()
+
+	a.toolMu.RLock()
+	if a.toolSpecsCache != nil && (a.toolSpecsExpiry.IsZero() || now.Before(a.toolSpecsExpiry)) {
+		specs := append([]tools.Tool(nil), a.toolSpecsCache...)
+		a.toolMu.RUnlock()
+		return specs
+	}
+	a.toolMu.RUnlock()
+
 	var allSpecs []tools.Tool
 	seen := make(map[string]bool)
 
@@ -1049,7 +1138,16 @@ func (a *Agent) ToolSpecs() []tools.Tool {
 			}
 		}
 	}
-	return allSpecs
+
+	a.toolMu.Lock()
+	a.toolSpecsCache = append([]tools.Tool(nil), allSpecs...)
+	a.toolSpecsExpiry = now.Add(toolCacheTTL())
+	a.toolPromptCache = ""
+	a.toolPromptKey = ""
+	a.toolPromptExpiry = time.Time{}
+	a.toolMu.Unlock()
+
+	return append([]tools.Tool(nil), allSpecs...)
 }
 
 // Tools returns the registered tools in deterministic order.
@@ -1448,7 +1546,7 @@ func (a *Agent) toolOrchestrator(
 	}
 
 	// Build tool selection prompt
-	toolDesc := renderUtcpToolsForPrompt(toolList)
+	toolDesc := a.cachedToolPrompt(toolList)
 
 	choicePrompt := fmt.Sprintf(`
 You are a UTCP tool selection engine.

@@ -28,7 +28,7 @@ func (a *Agent) codeChainOrchestrator(
 	// 1. Build chain-selection prompt (LLM chain planning engine)
 	// ----------------------------------------------------------
 	toolList := a.ToolSpecs()
-	toolDesc := renderUtcpToolsForPrompt(toolList)
+	toolDesc := a.cachedToolPrompt(toolList)
 
 	choicePrompt := fmt.Sprintf(`You are a UTCP Chain Planning Engine that constructs multi-step tool execution plans.
 
