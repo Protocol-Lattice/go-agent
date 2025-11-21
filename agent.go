@@ -1107,7 +1107,7 @@ func (a *Agent) ToolSpecs() []tools.Tool {
 
 	// 2. Built-in CodeMode tool (if available)
 	if a.CodeMode != nil {
-		if cmTools, err := a.CodeMode.Tools(context.Background()); err == nil {
+		if cmTools, err := a.CodeMode.Tools(); err == nil {
 			for _, t := range cmTools {
 				key := strings.ToLower(strings.TrimSpace(t.Name))
 				if key == "" || seen[key] {
