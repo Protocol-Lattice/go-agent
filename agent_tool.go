@@ -191,7 +191,7 @@ func (a *Agent) AsUTCPTool(name, description string) tools.Tool {
 		Description: description,
 		Provider: &base.BaseProvider{
 			Name:         providerName,
-			ProviderType: base.ProviderText, // in-process handler, no remote transport
+			ProviderType: base.ProviderCLI, // in-process handler, no remote transport
 		},
 		Inputs: tools.ToolInputOutputSchema{
 			Type: "object",
@@ -261,7 +261,7 @@ func (a *Agent) RegisterAsUTCPProvider(ctx context.Context, client utcp.UtcpClie
 	tp := &cli.CliProvider{
 		BaseProvider: base.BaseProvider{
 			Name:         providerName,
-			ProviderType: base.ProviderText,
+			ProviderType: base.ProviderCLI,
 		},
 	}
 
@@ -270,13 +270,13 @@ func (a *Agent) RegisterAsUTCPProvider(ctx context.Context, client utcp.UtcpClie
 		return fmt.Errorf("utcp client transports map is nil")
 	}
 
-	existing := transportsMap[string(base.ProviderText)]
+	existing := transportsMap[string(base.ProviderCLI)]
 	var shim *agentCLITransport
 	if maybe, ok := existing.(*agentCLITransport); ok {
 		shim = maybe
 	} else {
 		shim = &agentCLITransport{inner: existing}
-		transportsMap[string(base.ProviderText)] = shim
+		transportsMap[string(base.ProviderCLI)] = shim
 	}
 	if shim.tools == nil {
 		shim.tools = make(map[string][]tools.Tool)

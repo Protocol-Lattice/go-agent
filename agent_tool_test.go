@@ -114,7 +114,7 @@ func TestAgent_AsUTCPTool(t *testing.T) {
 	if utcpTool.Name != "agent.utcp" {
 		t.Fatalf("expected tool name agent.utcp, got %q", utcpTool.Name)
 	}
-	if utcpTool.Provider == nil || utcpTool.Provider.Type() != base.ProviderText {
+	if utcpTool.Provider == nil || utcpTool.Provider.Type() != base.ProviderCLI {
 		t.Fatalf("expected ProviderText provider, got %#v", utcpTool.Provider)
 	}
 
