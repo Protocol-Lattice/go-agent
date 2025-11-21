@@ -33,7 +33,8 @@ func main() {
 	ctx := context.Background()
 
 	fmt.Println("=== CodeMode + Agent as UTCP Tool Example ===")
-	fmt.Println("Demonstrates how CodeMode orchestrates UTCP tools\n")
+	fmt.Println("Demonstrates how CodeMode orchestrates UTCP tools")
+	fmt.Println()
 
 	// 1. Create UTCP Client
 	client, err := utcp.NewUTCPClient(ctx, &utcp.UtcpClientConfig{}, nil, nil)

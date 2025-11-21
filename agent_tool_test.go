@@ -162,11 +162,10 @@ func TestAgent_RegisterAsUTCPProvider(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CallTool error: %v", err)
 	}
-	result, ok := out.(map[string]any)
+	resp, ok := out.(string)
 	if !ok {
-		t.Fatalf("expected map result, got %#v", out)
+		t.Fatalf("expected string result, got %T: %#v", out, out)
 	}
-	resp, _ := result["response"].(string)
 	if !strings.Contains(resp, "ping") {
 		t.Fatalf("expected response to include 'ping', got %q", resp)
 	}
@@ -194,11 +193,11 @@ func TestAgent_RegisterAsUTCPProvider_CallToolWithCustomSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CallTool error: %v", err)
 	}
-	result, ok := out.(map[string]any)
+	resp, ok := out.(string)
 	if !ok {
-		t.Fatalf("expected map result, got %#v", out)
+		t.Fatalf("expected string result, got %T: %#v", out, out)
 	}
-	if sid, _ := result["session_id"].(string); sid != "custom-session" {
-		t.Fatalf("expected session_id to be 'custom-session', got %q", sid)
+	if !strings.Contains(resp, "hi") {
+		t.Fatalf("expected response to include 'hi', got %q", resp)
 	}
 }

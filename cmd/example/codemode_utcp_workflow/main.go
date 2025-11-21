@@ -31,7 +31,8 @@ func main() {
 	ctx := context.Background()
 
 	fmt.Println("=== CodeMode Workflow Orchestration Example ===")
-	fmt.Println("Demonstrates how CodeMode orchestrates UTCP tools via natural language prompts\n")
+	fmt.Println("Demonstrates how CodeMode orchestrates UTCP tools via natural language prompts")
+	fmt.Println()
 
 	// 1. Setup UTCP Client
 	client, err := utcp.NewUTCPClient(ctx, &utcp.UtcpClientConfig{}, nil, nil)
@@ -108,7 +109,8 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to build orchestrator: %v", err)
 	}
-	fmt.Println("✅ Built orchestrator agent with CodeMode\n")
+	fmt.Println("✅ Built orchestrator agent with CodeMode")
+	fmt.Println()
 
 	// 4. Demonstrate workflow orchestration via natural language prompt
 	fmt.Println("--- Workflow Orchestration via CodeMode ---")
