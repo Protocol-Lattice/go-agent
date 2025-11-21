@@ -99,7 +99,7 @@ func (t *agentCLITransport) DeregisterToolProvider(ctx context.Context, prov bas
 }
 
 func (t *agentCLITransport) CallTool(ctx context.Context, toolName string, args map[string]any, prov base.Provider, _ *string) (any, error) {
-	if p, ok := prov.(*text.TextProvider); ok {
+	if p, ok := prov.(*cli.CliProvider); ok {
 		for _, tool := range t.tools[p.Name] {
 			if tool.Name == toolName || strings.HasSuffix(tool.Name, "."+toolName) {
 				if tool.Handler == nil {
@@ -117,7 +117,7 @@ func (t *agentCLITransport) CallTool(ctx context.Context, toolName string, args 
 }
 
 func (t *agentCLITransport) CallToolStream(ctx context.Context, toolName string, args map[string]any, prov base.Provider) (transports.StreamResult, error) {
-	if p, ok := prov.(*text.TextProvider); ok {
+	if p, ok := prov.(*cli.CliProvider); ok {
 		return nil, fmt.Errorf("streaming not supported for tool %s (provider %s)", toolName, p.Name)
 	}
 	if t.inner != nil {
