@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 
+	"github.com/Protocol-Lattice/go-agent"
 	"github.com/Protocol-Lattice/go-agent/src/adk"
 	"github.com/Protocol-Lattice/go-agent/src/adk/modules"
 	"github.com/Protocol-Lattice/go-agent/src/memory"
@@ -13,63 +14,117 @@ import (
 	"github.com/universal-tool-calling-protocol/go-utcp"
 )
 
-// DummyCodeModeModel simulates an LLM.
-type DummyCodeModeModel struct{}
-
-func (m *DummyCodeModeModel) Generate(ctx context.Context, prompt string) (any, error) {
-	return "I am a dummy model configured with CodeMode.", nil
+// DemoModel simulates an LLM that can generate Go code calling codemode.CallTool
+type DemoModel struct {
+	Name string
 }
 
-func (m *DummyCodeModeModel) GenerateWithFiles(ctx context.Context, prompt string, files []models.File) (any, error) {
+func (m *DemoModel) Generate(ctx context.Context, prompt string) (any, error) {
+	// In a real LLM, it would analyze the prompt and generate Go code
+	// For this demo, we simulate the response
+	return fmt.Sprintf("[%s] Processed: %s", m.Name, prompt), nil
+}
+
+func (m *DemoModel) GenerateWithFiles(ctx context.Context, prompt string, files []models.File) (any, error) {
 	return m.Generate(ctx, prompt)
 }
 
 func main() {
 	ctx := context.Background()
 
-	// 1. Setup UTCP Client
-	// In a real application, you would configure this with providers (e.g. via a JSON config file)
-	// so the agent can access external tools.
+	fmt.Println("=== CodeMode + Agent as UTCP Tool Example ===")
+	fmt.Println("Demonstrates how CodeMode orchestrates UTCP tools\n")
+
+	// 1. Create UTCP Client
 	client, err := utcp.NewUTCPClient(ctx, &utcp.UtcpClientConfig{}, nil, nil)
 	if err != nil {
 		log.Fatalf("Failed to create UTCP client: %v", err)
 	}
 
-	// 2. Setup Model
-	model := &DummyCodeModeModel{}
+	// 2. Create and register a specialist agent as a UTCP tool
+	analyst, err := agent.New(agent.Options{
+		Model:        &DemoModel{Name: "Analyst"},
+		Memory:       memory.NewSessionMemory(memory.NewMemoryBankWithStore(memory.NewInMemoryStore()), 8),
+		SystemPrompt: "You are a data analyst.",
+	})
+	if err != nil {
+		log.Fatalf("Failed to create analyst: %v", err)
+	}
 
-	// 3. Build ADK with CodeModeUtcp
-	// This configures the agent to use the UTCP client for tool execution.
-	// The 'CodeModeUtcp' option integrates the UTCP client with the agent's tool usage loop.
+	// Register as "local.analyst" (provider.toolname format)
+	err = analyst.RegisterAsUTCPProvider(ctx, client, "local.analyst", "Analyzes data")
+	if err != nil {
+		log.Fatalf("Failed to register analyst: %v", err)
+	}
+	fmt.Println("✅ Registered agent as 'local.analyst'")
+
+	// 3. Verify direct tool call works
+	fmt.Println("\n--- Direct UTCP Tool Call ---")
+	result, err := client.CallTool(ctx, "local.analyst", map[string]any{
+		"instruction": "Analyze Q4 sales data",
+	})
+	if err != nil {
+		log.Fatalf("Direct tool call failed: %v", err)
+	}
+	fmt.Printf("Result: %v\n", result)
+
+	// 4. Create an orchestrator agent with CodeMode enabled
+	fmt.Println("\n--- Building Orchestrator with CodeMode ---")
+
+	orchestratorModel := &DemoModel{Name: "Orchestrator"}
 	memOpts := engine.DefaultOptions()
 	kit, err := adk.New(ctx,
-		adk.WithDefaultSystemPrompt("You are a helpful assistant."),
+		adk.WithDefaultSystemPrompt("You orchestrate workflows using UTCP tools."),
 		adk.WithModules(
 			modules.NewModelModule("model", func(_ context.Context) (models.Agent, error) {
-				return model, nil
+				return orchestratorModel, nil
 			}),
 			modules.InMemoryMemoryModule(10000, memory.AutoEmbedder(), &memOpts),
 		),
-		// Enable CodeMode with the UTCP client
-		adk.WithCodeModeUtcp(client, model),
+		// WithCodeModeUtcp enables the agent to execute Go code that calls tools
+		adk.WithCodeModeUtcp(client, orchestratorModel),
 	)
 	if err != nil {
-		log.Fatalf("Failed to initialise kit: %v", err)
+		log.Fatalf("Failed to initialize ADK: %v", err)
 	}
 
-	// 4. Build Agent
-	ag, err := kit.BuildAgent(ctx)
+	orchestrator, err := kit.BuildAgent(ctx)
 	if err != nil {
-		log.Fatalf("Failed to build agent: %v", err)
+		log.Fatalf("Failed to build orchestrator: %v", err)
 	}
+	fmt.Println("✅ Orchestrator with CodeMode created")
 
-	fmt.Println("Agent with CodeMode created successfully.")
+	// 5. Use the orchestrator with a natural language workflow
+	fmt.Println("\n--- Workflow Execution ---")
+	fmt.Println("User Input: \"Analyze Q4 sales and provide insights\"")
+	fmt.Println()
+	fmt.Println("With a real LLM, CodeMode would generate and execute:")
+	fmt.Println("  result, _ := codemode.CallTool(\"local.analyst\", map[string]any{")
+	fmt.Println("    \"instruction\": \"Analyze Q4 sales and provide insights\",")
+	fmt.Println("  })")
+	fmt.Println()
 
-	// 5. Run Agent
-	resp, err := ag.Generate(ctx, "session-1", "Hello CodeMode!")
+	// Simulate the orchestrator processing the request
+	response, err := orchestrator.Generate(ctx, "workflow-session", "Analyze Q4 sales and provide insights")
 	if err != nil {
-		log.Fatalf("Generate failed: %v", err)
+		log.Fatalf("Orchestrator failed: %v", err)
 	}
+	fmt.Printf("Orchestrator Response: %v\n", response)
 
-	fmt.Printf("Agent response: %v\n", resp)
+	// Summary
+	fmt.Println("\n--- Summary ---")
+	fmt.Println("✓ Agents exposed as UTCP tools using RegisterAsUTCPProvider()")
+	fmt.Println("✓ Tools can be called directly: client.CallTool(ctx, \"local.analyst\", args)")
+	fmt.Println("✓ CodeMode enables agents to orchestrate tools via generated Go code")
+	fmt.Println("✓ User provides natural language → CodeMode generates tool calls")
+	fmt.Println()
+	fmt.Println("--- Key Pattern ---")
+	fmt.Println("User Input (Natural Language)")
+	fmt.Println("  ↓")
+	fmt.Println("LLM with CodeMode generates Go code:")
+	fmt.Println("  codemode.CallTool(\"local.analyst\", {\"instruction\": userInput})")
+	fmt.Println("  ↓")
+	fmt.Println("UTCP executes the agent tool")
+	fmt.Println("  ↓")
+	fmt.Println("Result returned to user")
 }

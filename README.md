@@ -110,7 +110,25 @@ go run cmd/team/main.go
 
 # Quick start example
 go run cmd/quickstart/main.go
+
+# CodeMode + Agent as UTCP Tool
+go run cmd/example/codemode/main.go
+
+# Multi-Agent Workflow Orchestration
+go run cmd/example/codemode_utcp_workflow/main.go
+
+# Agent-to-Agent Communication via UTCP
+go run cmd/example/agent_as_tool/main.go
 ```
+
+#### Example Descriptions
+
+- **`cmd/example/codemode/main.go`**: Demonstrates how to use CodeMode to enable agents to call UTCP tools (including other agents) via generated Go code. Shows the pattern: User Input → LLM generates `codemode.CallTool()` → UTCP executes tool.
+
+- **`cmd/example/codemode_utcp_workflow/main.go`**: Shows orchestrating multi-step workflows where multiple specialist agents (analyst, writer, reviewer) work together through UTCP tool calls.
+
+- **`cmd/example/agent_as_tool/main.go`**: Demonstrates exposing agents as UTCP tools using `RegisterAsUTCPProvider()`, enabling agent-to-agent communication and hierarchical agent architectures.
+
 
 ## Project Structure
 

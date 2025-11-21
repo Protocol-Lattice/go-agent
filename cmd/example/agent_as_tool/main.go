@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 
 	"github.com/Protocol-Lattice/go-agent"
 	"github.com/Protocol-Lattice/go-agent/src/memory"
@@ -11,65 +12,92 @@ import (
 	"github.com/universal-tool-calling-protocol/go-utcp"
 )
 
-// DummyModel simulates an LLM.
-type DummyModel struct {
+// MockModel simulates an LLM that can decide to call tools.
+type MockModel struct {
 	Name string
 }
 
-func (m *DummyModel) Generate(ctx context.Context, prompt string) (any, error) {
-	// In a real agent, this would use an LLM to generate a response.
-	return fmt.Sprintf("Hello from %s! I received your request: %s", m.Name, prompt), nil
+func (m *MockModel) Generate(ctx context.Context, prompt string) (any, error) {
+	// Simulate Manager logic: if asked about "facts", call the researcher.
+	if m.Name == "Manager" && strings.Contains(prompt, "fact") {
+		// In a real LLM, this would be a structured tool call request.
+		// Here we just simulate the decision logic for the example.
+		return "I need to ask the researcher about this.", nil
+	}
+
+	// Simulate Researcher logic
+	if m.Name == "Researcher" {
+		return "Research complete: The sky is blue because of Rayleigh scattering.", nil
+	}
+
+	return fmt.Sprintf("[%s] I received: %s", m.Name, prompt), nil
 }
 
-func (m *DummyModel) GenerateWithFiles(ctx context.Context, prompt string, files []models.File) (any, error) {
+func (m *MockModel) GenerateWithFiles(ctx context.Context, prompt string, files []models.File) (any, error) {
 	return m.Generate(ctx, prompt)
 }
 
 func main() {
 	ctx := context.Background()
 
-	// 1. Create the Agent
-	// We use a dummy model here, but you would normally use models.NewLLMProvider(...)
-	ag, err := agent.New(agent.Options{
-		Model:        &DummyModel{Name: "InternalAgent"},
-		Memory:       memory.NewSessionMemory(memory.NewMemoryBankWithStore(memory.NewInMemoryStore()), 8),
-		SystemPrompt: "You are a helpful assistant.",
-	})
-	if err != nil {
-		log.Fatalf("Failed to create agent: %v", err)
-	}
-
-	// 2. Create a UTCP Client
-	// This client will be used to "call" the agent as a tool.
-	// In a real scenario, this client might be connected to other remote tools as well.
+	// 1. Setup UTCP Client
+	// This client will act as the "tool bus" connecting agents.
 	client, err := utcp.NewUTCPClient(ctx, &utcp.UtcpClientConfig{}, nil, nil)
 	if err != nil {
 		log.Fatalf("Failed to create UTCP client: %v", err)
 	}
 
-	// 3. Register the Agent as a UTCP Provider
-	// This exposes the agent as a tool named "my-agent-tool" on the UTCP client.
-	// The tool takes an "instruction" argument and returns the agent's response.
-	toolName := "helper.ask"
-	err = ag.RegisterAsUTCPProvider(ctx, client, toolName, "An agent that can answer questions.")
+	// 2. Create the "Researcher" Agent
+	researcher, err := agent.New(agent.Options{
+		Model:        &MockModel{Name: "Researcher"},
+		Memory:       memory.NewSessionMemory(memory.NewMemoryBankWithStore(memory.NewInMemoryStore()), 8),
+		SystemPrompt: "You are a researcher. You find facts.",
+	})
 	if err != nil {
-		log.Fatalf("Failed to register agent as provider: %v", err)
+		log.Fatalf("Failed to create researcher: %v", err)
 	}
 
-	fmt.Printf("Agent registered as tool '%s'.\n", toolName)
-
-	// 4. Call the Agent via the UTCP Client
-	// This simulates another part of the system (or another agent) calling this agent as a tool.
-	fmt.Println("Calling agent tool via UTCP...")
-
-	args := map[string]any{
-		"instruction": "What is the meaning of life?",
-	}
-
-	result, err := client.CallTool(ctx, toolName, args)
+	// 3. Expose Researcher as a UTCP Tool
+	// This registers the researcher agent on the UTCP client as "agent.researcher".
+	err = researcher.RegisterAsUTCPProvider(ctx, client, "agent.researcher", "A specialist agent that performs research.")
 	if err != nil {
-		log.Fatalf("CallTool failed: %v", err)
+		log.Fatalf("Failed to register researcher: %v", err)
+	}
+	fmt.Println("✅ Researcher agent registered as UTCP tool: 'agent.researcher'")
+
+	// 4. Verify the tool works directly
+	fmt.Println("\n--- Direct Tool Call Test ---")
+	result, err := client.CallTool(ctx, "agent.researcher", map[string]any{
+		"instruction": "Find facts about the sky.",
+	})
+	if err != nil {
+		log.Fatalf("Tool call failed: %v", err)
+	}
+	fmt.Printf("Tool Output: %v\n", result)
+
+	// 5. Create the "Manager" Agent
+	// In a real app, you would give the Manager the 'client' so it can call tools.
+	// Here we just demonstrate the setup.
+	manager, err := agent.New(agent.Options{
+		Model:        &MockModel{Name: "Manager"},
+		Memory:       memory.NewSessionMemory(memory.NewMemoryBankWithStore(memory.NewInMemoryStore()), 8),
+		SystemPrompt: "You are a manager. Delegate tasks to the researcher.",
+	})
+	if err != nil {
+		log.Fatalf("Failed to create manager: %v", err)
 	}
 
-	fmt.Printf("Tool Result: %v\n", result)
+	// 6. Simulate Manager Workflow
+	fmt.Println("\n--- Manager Agent Workflow ---")
+	prompt := "Tell me a fact about the sky."
+	fmt.Printf("User: %s\n", prompt)
+
+	resp, err := manager.Generate(ctx, "session-manager", prompt)
+	if err != nil {
+		log.Fatalf("Manager failed: %v", err)
+	}
+	fmt.Printf("Manager: %s\n", resp)
+
+	// In a real scenario with a real LLM, the Manager would output a tool call request
+	// for "agent.researcher", which the system would execute using 'client.CallTool'.
 }
