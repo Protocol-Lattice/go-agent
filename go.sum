@@ -198,6 +198,8 @@ github.com/universal-tool-calling-protocol/go-utcp v1.7.5-0.20251119115722-1b97b
 github.com/universal-tool-calling-protocol/go-utcp v1.7.5-0.20251119115722-1b97b50b44ec/go.mod h1:cUtuDZi5YOJsZEqfjt1tb9rgmFL03vLI+OWthuDrkT8=
 github.com/universal-tool-calling-protocol/go-utcp v1.7.5-0.20251119201420-b6e702e01bd4 h1:3uDm7+XVgr89g08YHfNTNkhd4BkSB31ju731E6WJZ5g=
 github.com/universal-tool-calling-protocol/go-utcp v1.7.5-0.20251119201420-b6e702e01bd4/go.mod h1:cUtuDZi5YOJsZEqfjt1tb9rgmFL03vLI+OWthuDrkT8=
+github.com/universal-tool-calling-protocol/go-utcp v1.7.5-0.20251121143300-143eaff821f3 h1:+kirQNxo80cfBrJEClo5VUpBxrBjfGNYsVkH2dpKlfk=
+github.com/universal-tool-calling-protocol/go-utcp v1.7.5-0.20251121143300-143eaff821f3/go.mod h1:cUtuDZi5YOJsZEqfjt1tb9rgmFL03vLI+OWthuDrkT8=
 github.com/universal-tool-calling-protocol/go-utcp v1.7.5 h1:hmgWrAgOGBUYyZ8M6nr7+JyG8BtVbWYG3OBjEB3ZW9M=
 github.com/universal-tool-calling-protocol/go-utcp v1.7.5/go.mod h1:JXha8vzmC6LOv9jCBYDhNMkSgKdsbuy3Wx0wkZUYqTQ=
 github.com/universal-tool-calling-protocol/go-utcp v1.7.6 h1:dm+nppZD9GVAtMuGLXjiKDCQ+odxqvRqP7aQzszC4MY=
