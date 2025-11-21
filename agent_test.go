@@ -17,7 +17,6 @@ import (
 	"github.com/universal-tool-calling-protocol/go-utcp/src/plugins/codemode"
 	"github.com/universal-tool-calling-protocol/go-utcp/src/providers/base"
 	"github.com/universal-tool-calling-protocol/go-utcp/src/repository"
-	"github.com/universal-tool-calling-protocol/go-utcp/src/tools"
 	utcpTools "github.com/universal-tool-calling-protocol/go-utcp/src/tools"
 	"github.com/universal-tool-calling-protocol/go-utcp/src/transports"
 )
@@ -496,11 +495,11 @@ func TestAgentCallsUTCPClientForRemoteTools(t *testing.T) {
 	}
 }
 
-func (u *stubUTCPClient) RegisterToolProvider(ctx context.Context, prov base.Provider) ([]tools.Tool, error) {
+func (u *stubUTCPClient) RegisterToolProvider(ctx context.Context, prov base.Provider) ([]utcpTools.Tool, error) {
 	return nil, nil
 }
 
-func (u *stubUTCPClientV2) RegisterToolProvider(ctx context.Context, prov base.Provider) ([]tools.Tool, error) {
+func (u *stubUTCPClientV2) RegisterToolProvider(ctx context.Context, prov base.Provider) ([]utcpTools.Tool, error) {
 	return nil, nil
 }
 
