@@ -234,6 +234,13 @@ Lattice treats Agents as first-class Tools. This allows you to expose any agent 
 - **Encapsulation**: Hide complex multi-step workflows behind a simple natural language interface.
 - **Scalability**: Build complex systems by composing simple, testable agents.
 
+### How It Works
+
+When you wrap an agent as a tool:
+1. **Context Isolation**: The sub-agent runs in its own session (namespaced like `parent_session.sub.tool_name`). It has its own memory and history, preventing the parent's context window from being polluted with the sub-agent's internal thought process.
+2. **Recursive Capability**: Since a sub-agent is just a tool, it can have its own tools—including *other* agents. This allows for arbitrarily deep hierarchies (e.g., CEO -> CTO -> Lead Dev -> Coder).
+3. **Standard Interface**: The parent agent doesn't know it's talking to another AI. It simply sees a tool that takes an instruction and returns a result. This means you can swap a "Researcher Agent" with a "Google Search Tool" without changing the parent's logic.
+
 ```go
 // 1. Create a specialist agent
 researcher, _ := agent.New(agent.Options{
