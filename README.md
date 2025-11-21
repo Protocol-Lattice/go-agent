@@ -262,6 +262,47 @@ manager, _ := agent.New(agent.Options{
 // Manager -> calls tool "researcher" -> Researcher Agent runs -> returns result -> Manager answers
 ```
 
+### Exposing Agents as UTCP Tools
+
+In addition to the internal `Tool` interface, Lattice agents can be exposed as **Universal Tool Calling Protocol (UTCP)** tools. This allows them to be consumed by any UTCP-compliant client, enabling cross-language and cross-platform agent orchestration.
+
+**Key Functions:**
+
+- `agent.AsUTCPTool(name, description)`: Wraps an agent as a standalone UTCP `tools.Tool` struct.
+- `agent.RegisterAsUTCPProvider(ctx, client, name, description)`: Automatically registers the agent as a tool provider on a UTCP client.
+
+**Example:**
+
+```go
+// 1. Create your specialist agent
+researcher, _ := agent.New(agent.Options{
+    SystemPrompt: "You are a researcher.",
+})
+
+// 2. Initialize a UTCP client
+client := utcp.NewClient()
+
+// 3. Register the agent as a UTCP provider
+// This makes the agent available as a tool named "researcher.agent"
+err := researcher.RegisterAsUTCPProvider(ctx, client, "researcher.agent", "Deep research agent")
+if err != nil {
+    log.Fatal(err)
+}
+
+// 4. Call the agent via UTCP
+// The tool accepts 'instruction' and optional 'session_id'
+result, err := client.CallTool(ctx, "researcher.agent", map[string]any{
+    "instruction": "Analyze the latest trends in AI agents",
+}, "researcher", nil)
+
+fmt.Println(result["response"])
+```
+
+**Benefits:**
+- **Interoperability**: Your Go agents can be called by Python scripts, CLI tools, or other systems using UTCP.
+- **Standardization**: Uses the standard UTCP schema for inputs and outputs.
+- **Zero Overhead**: Uses an in-process transport when running within the same Go application, avoiding network latency.
+
 ## Why Use TOON?
 
 **Token-Oriented Object Notation (TOON)** is integrated into Lattice to dramatically reduce token consumption when passing structured data to and from LLMs. This is especially critical for AI agent workflows where context windows are precious and API costs scale with token usage.
