@@ -213,7 +213,7 @@ func (a *Agent) AsUTCPTool(name, description string) tools.Tool {
 				"session_id": map[string]any{"type": "string"},
 			},
 		},
-		Handler: tools.ToolHandler(func(ctx context.Context, inputs map[string]interface{}) (map[string]interface{}, error) {
+		Handler: tools.ToolHandler(func(ctx context.Context, inputs map[string]interface{}) (any, error) {
 			rawInstruction, ok := inputs["instruction"].(string)
 			if !ok || strings.TrimSpace(rawInstruction) == "" {
 				return nil, fmt.Errorf("missing or invalid 'instruction'")
@@ -235,10 +235,7 @@ func (a *Agent) AsUTCPTool(name, description string) tools.Tool {
 				return nil, err
 			}
 
-			return map[string]interface{}{
-				"response":   fmt.Sprint(out),
-				"session_id": sessionID,
-			}, nil
+			return fmt.Sprint(out), nil
 		}),
 	}
 }

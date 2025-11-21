@@ -122,15 +122,12 @@ func TestAgent_AsUTCPTool(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected handler error: %v", err)
 	}
-	resp, ok := out["response"].(string)
+	resp, ok := out.(string)
 	if !ok {
-		t.Fatalf("expected response string, got %#v", out["response"])
+		t.Fatalf("expected response string, got %#v", out)
 	}
 	if !strings.Contains(resp, "handle this") {
 		t.Fatalf("expected agent output to include instruction, got %q", resp)
-	}
-	if session := out["session_id"]; session == "" {
-		t.Fatalf("expected session_id to be populated, got %#v", session)
 	}
 }
 

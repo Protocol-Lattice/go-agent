@@ -76,7 +76,7 @@ require (
 	github.com/tidwall/pretty v1.2.1 // indirect
 	github.com/tidwall/sjson v1.2.5 // indirect
 	github.com/traefik/yaegi v0.16.1 // indirect
-	github.com/universal-tool-calling-protocol/go-utcp v1.7.5-0.20251121143300-143eaff821f3 // indirect
+	github.com/universal-tool-calling-protocol/go-utcp v1.7.5-0.20251121205150-bbc1fca17054 // indirect
 	github.com/wlynxg/anet v0.0.3 // indirect
 	github.com/xdg-go/pbkdf2 v1.0.0 // indirect
 	github.com/xdg-go/scram v1.1.2 // indirect
