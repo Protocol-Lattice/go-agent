@@ -280,7 +280,10 @@ researcher, _ := agent.New(agent.Options{
 })
 
 // 2. Initialize a UTCP client
-client := utcp.NewClient()
+client, err := utcp.NewUTCPClient(ctx, nil, nil, nil)
+if err != nil {
+    log.Fatal(err)
+}
 
 // 3. Register the agent as a UTCP provider
 // This makes the agent available as a tool named "researcher.agent"
