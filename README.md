@@ -225,6 +225,36 @@ Perfect for:
 - Complex tasks requiring specialist coordination
 - Projects with explicit access control requirements
 
+### Agent Composability
+
+Lattice treats Agents as first-class Tools. This allows you to expose any agent as a tool to another agent, enabling powerful hierarchical or mesh architectures.
+
+**Why use this?**
+- **Specialization**: Create small, focused agents (e.g., "Researcher", "Coder", "Reviewer") and orchestrate them with a "Manager" agent.
+- **Encapsulation**: Hide complex multi-step workflows behind a simple natural language interface.
+- **Scalability**: Build complex systems by composing simple, testable agents.
+
+```go
+// 1. Create a specialist agent
+researcher, _ := agent.New(agent.Options{
+    SystemPrompt: "You are a researcher. Search for facts.",
+    // ...
+})
+
+// 2. Create a manager agent that uses the researcher
+manager, _ := agent.New(agent.Options{
+    SystemPrompt: "You are a manager. Delegate tasks.",
+    Tools: []agent.Tool{
+        // Expose the researcher as a tool!
+        researcher.AsTool("researcher", "Delegates research tasks to the specialist."),
+    },
+})
+
+// 3. The manager can now call the researcher tool
+// User: "Find out why the sky is blue"
+// Manager -> calls tool "researcher" -> Researcher Agent runs -> returns result -> Manager answers
+```
+
 ## Why Use TOON?
 
 **Token-Oriented Object Notation (TOON)** is integrated into Lattice to dramatically reduce token consumption when passing structured data to and from LLMs. This is especially critical for AI agent workflows where context windows are precious and API costs scale with token usage.
