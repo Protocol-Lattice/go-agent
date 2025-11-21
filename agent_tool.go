@@ -8,7 +8,6 @@ import (
 	utcp "github.com/universal-tool-calling-protocol/go-utcp"
 	"github.com/universal-tool-calling-protocol/go-utcp/src/providers/base"
 	"github.com/universal-tool-calling-protocol/go-utcp/src/providers/cli"
-	"github.com/universal-tool-calling-protocol/go-utcp/src/providers/text"
 	"github.com/universal-tool-calling-protocol/go-utcp/src/repository"
 	"github.com/universal-tool-calling-protocol/go-utcp/src/tools"
 	"github.com/universal-tool-calling-protocol/go-utcp/src/transports"
@@ -88,7 +87,7 @@ func (t *agentCLITransport) RegisterToolProvider(ctx context.Context, prov base.
 }
 
 func (t *agentCLITransport) DeregisterToolProvider(ctx context.Context, prov base.Provider) error {
-	if p, ok := prov.(*text.TextProvider); ok {
+	if p, ok := prov.(*cli.CliProvider); ok {
 		delete(t.tools, p.Name)
 		return nil
 	}
