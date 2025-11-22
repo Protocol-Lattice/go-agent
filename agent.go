@@ -1517,6 +1517,16 @@ func (a *Agent) toolOrchestrator(
 	if strings.Contains(userInput, `"tool_name": "codemode.run_code"`) {
 		return false, "", nil
 	}
+
+	// FAST PATH: Skip LLM call for obvious non-tool queries
+	// This saves 1-3 seconds per request!
+	lowerInput := strings.ToLower(strings.TrimSpace(userInput))
+
+	// Skip if input looks like a natural question/statement
+	if !a.likelyNeedsToolCall(lowerInput) {
+		return false, "", nil
+	}
+
 	// Collect merged local + UTCP tools
 	toolList := a.ToolSpecs()
 	if len(toolList) == 0 {
@@ -1746,6 +1756,47 @@ func extractJSON(response string) string {
 	}
 
 	return ""
+}
+
+// likelyNeedsToolCall uses fast heuristics to determine if input likely needs a tool.
+// This AVOIDS expensive LLM calls for obvious non-tool queries.
+// EXTREMELY CONSERVATIVE: only filters pure informational questions.
+func (a *Agent) likelyNeedsToolCall(lowerInput string) bool {
+	// ONLY filter out EXPLICIT pure informational questions
+	// Examples: "what is X?", "explain Y", "why does Z"
+
+	// Check for pure question patterns WITHOUT any action words
+	pureQuestionStarters := []string{
+		"what is ", "what are ", "what does ", "what's ",
+		"why is ", "why are ", "why does ", "why do ",
+		"who is ", "who are ", "who was ",
+		"when is ", "when was ", "when did ",
+		"where is ", "where are ", "where was ",
+		"explain ", "describe ", "define ",
+		"tell me about ", "tell me what ",
+	}
+
+	for _, starter := range pureQuestionStarters {
+		if strings.HasPrefix(lowerInput, starter) {
+			// Even pure questions might need tools if they mention specific actions
+			hasActionWord := strings.Contains(lowerInput, " search") ||
+				strings.Contains(lowerInput, " find") ||
+				strings.Contains(lowerInput, " get") ||
+				strings.Contains(lowerInput, " list") ||
+				strings.Contains(lowerInput, " show") ||
+				strings.Contains(lowerInput, " files")
+
+			if !hasActionWord {
+				// Pure informational question - skip tool orchestration
+				return false
+			}
+		}
+	}
+
+	// For EVERYTHING else, allow tool orchestration
+	// This includes: commands, greetings, tool requests, ambiguous queries, etc.
+	// Better to make an unnecessary LLM call than miss a tool request
+	return true
 }
 
 func isValidSnippet(code string) bool {

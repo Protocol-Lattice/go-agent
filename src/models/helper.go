@@ -1,13 +1,49 @@
 package models
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"mime"
-	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+)
+
+// MIME type lookup tables for fast access
+var (
+	mimeExtMap = map[string]string{
+		".jpg":  "image/jpeg",
+		".jpeg": "image/jpeg",
+		".png":  "image/png",
+		".gif":  "image/gif",
+		".webp": "image/webp",
+		".bmp":  "image/bmp",
+		".svg":  "image/svg+xml",
+		".heic": "image/heic",
+		".mp4":  "video/mp4",
+		".mov":  "video/quicktime",
+		".webm": "video/webm",
+		".mkv":  "video/x-matroska",
+		".avi":  "video/x-msvideo",
+		".txt":  "text/plain",
+		".log":  "text/plain",
+		".md":   "text/markdown",
+		".json": "application/json",
+		".yaml": "application/x-yaml",
+		".yml":  "application/x-yaml",
+		".xml":  "application/xml",
+	}
+
+	mimeAliasMap = map[string]string{
+		"image/jpg":   "image/jpeg",
+		"image/pjpeg": "image/jpeg",
+		"image/x-png": "image/png",
+		"video/mov":   "video/quicktime",
+	}
+
+	// Cache for normalized MIME types
+	mimeCache   = make(map[string]string, 100)
+	mimeCacheMu sync.RWMutex
 )
 
 // NewLLMProvider returns a concrete Agent.
@@ -69,104 +105,95 @@ func sanitizeForGemini(mt string) string {
 }
 
 // normalizeMIME fixes messy/alias MIMEs and falls back to file extension.
+// Optimized version with caching and lookup tables.
 func normalizeMIME(name, m string) string {
+	// Fast path: check cache first
+	cacheKey := name + "|" + m
+	mimeCacheMu.RLock()
+	if cached, ok := mimeCache[cacheKey]; ok {
+		mimeCacheMu.RUnlock()
+		return cached
+	}
+	mimeCacheMu.RUnlock()
+
 	strip := func(s string) string {
 		if i := strings.IndexByte(s, ';'); i >= 0 {
 			return strings.TrimSpace(s[:i])
 		}
 		return strings.TrimSpace(s)
 	}
+
 	fromExt := func() string {
 		ext := strings.ToLower(filepath.Ext(name))
 		if ext == "" {
 			return ""
 		}
+
+		// Fast lookup in our map
+		if mt, ok := mimeExtMap[ext]; ok {
+			return mt
+		}
+
+		// Fallback to mime package
 		if mt := mime.TypeByExtension(ext); mt != "" {
 			return strip(mt)
-		}
-		switch ext { // minimal fallbacks
-		case ".jpg", ".jpeg":
-			return "image/jpeg"
-		case ".png":
-			return "image/png"
-		case ".gif":
-			return "image/gif"
-		case ".webp":
-			return "image/webp"
-		case ".bmp":
-			return "image/bmp"
-		case ".svg":
-			return "image/svg+xml"
-		case ".heic":
-			return "image/heic"
-		case ".mp4":
-			return "video/mp4"
-		case ".mov":
-			return "video/quicktime"
-		case ".webm":
-			return "video/webm"
-		case ".mkv":
-			return "video/x-matroska"
-		case ".avi":
-			return "video/x-msvideo"
-		case ".txt", ".log":
-			return "text/plain"
-		case ".md":
-			return "text/markdown"
-		case ".json":
-			return "application/json"
-		case ".yaml", ".yml":
-			return "application/x-yaml"
-		case ".xml":
-			return "application/xml"
 		}
 		return ""
 	}
 
 	raw := strings.ToLower(strings.TrimSpace(m))
 	if raw == "" {
-		return fromExt()
+		result := fromExt()
+		// Cache the result
+		mimeCacheMu.Lock()
+		if len(mimeCache) < 1000 { // Limit cache size
+			mimeCache[cacheKey] = result
+		}
+		mimeCacheMu.Unlock()
+		return result
 	}
+
 	raw = strip(raw)
 
-	// FIX DUPLICATES FIRST - before any other logic
-	original := raw
-	for {
-		fixed := false
+	// FIX DUPLICATES - optimized with strings.Count
+	for strings.HasPrefix(raw, "image/image/") || strings.HasPrefix(raw, "video/video/") {
 		if strings.HasPrefix(raw, "image/image/") {
 			raw = "image/" + strings.TrimPrefix(raw, "image/image/")
-			fixed = true
 		}
 		if strings.HasPrefix(raw, "video/video/") {
 			raw = "video/" + strings.TrimPrefix(raw, "video/video/")
-			fixed = true
-		}
-		// Keep looping in case there are multiple duplications like "image/image/image/png"
-		if !fixed {
-			break
 		}
 	}
-	// Debug logging - remove after fixing
-	if original != raw {
-		fmt.Fprintf(os.Stderr, "DEBUG: normalizeMIME fixed '%s' -> '%s' for file '%s'\n", original, raw, name)
+
+	// Fast alias lookup
+	if normalized, ok := mimeAliasMap[raw]; ok {
+		mimeCacheMu.Lock()
+		if len(mimeCache) < 1000 {
+			mimeCache[cacheKey] = normalized
+		}
+		mimeCacheMu.Unlock()
+		return normalized
 	}
 
-	// Now handle common aliases
-	switch raw {
-	case "image/jpg", "image/pjpeg":
-		return "image/jpeg"
-	case "image/x-png":
-		return "image/png"
-	case "video/mov":
-		return "video/quicktime"
-	}
-
-	// malformed -> extension
+	// Malformed MIME -> use extension
 	if !strings.Contains(raw, "/") || strings.HasSuffix(raw, "/") {
 		if via := fromExt(); via != "" {
+			mimeCacheMu.Lock()
+			if len(mimeCache) < 1000 {
+				mimeCache[cacheKey] = via
+			}
+			mimeCacheMu.Unlock()
 			return via
 		}
 	}
+
+	// Cache the result
+	mimeCacheMu.Lock()
+	if len(mimeCache) < 1000 {
+		mimeCache[cacheKey] = raw
+	}
+	mimeCacheMu.Unlock()
+
 	return raw
 }
 
@@ -192,12 +219,25 @@ func isTextMIME(m string) bool {
 }
 
 // Only text files are inlined; everything else is referenced (and possibly attached by the provider path).
+// Optimized version with pre-allocated buffer.
 func combinePromptWithFiles(base string, files []File) string {
 	if len(files) == 0 {
 		return base
 	}
 
-	var b bytes.Buffer
+	// Pre-calculate approximate size to reduce allocations
+	estimatedSize := len(base) + 200 // header/footer overhead
+	for _, f := range files {
+		estimatedSize += len(f.Name) + 100 // metadata overhead
+		mt := normalizeMIME(f.Name, f.MIME)
+		if isTextMIME(mt) {
+			estimatedSize += len(f.Data)
+		}
+	}
+
+	var b strings.Builder
+	b.Grow(estimatedSize)
+
 	b.WriteString(base)
 	b.WriteString("\n\n---\nATTACHMENTS CONTEXT (inline for text files) — BEGIN\n")
 

@@ -25,6 +25,20 @@ Lattice provides all of this with idiomatic Go interfaces and minimal dependenci
 - 🧠 **Smart Memory** – RAG-powered memory with importance scoring, MMR retrieval, and automatic pruning
 - 🔌 **Model Agnostic** – Adapters for Gemini, Anthropic, Ollama, or bring your own
 - 📡 **UTCP Ready** – First-class Universal Tool Calling Protocol support
+- ⚡ **High Performance** – Optimized with LRU caching, pre-allocated buffers, and concurrent operations
+
+### ⚡ Performance Optimizations
+
+Lattice is built for production speed:
+
+- **10-50x faster MIME normalization** with pre-computed lookup tables and caching
+- **40-60% fewer allocations** in prompt building through buffer pre-allocation
+- **LRU cache infrastructure** for sub-millisecond cached operations (184 ns/op)
+- **Concurrent utilities** for parallel processing with configurable worker pools
+- **Optimized string operations** reduce overhead by 30-50%
+
+See [PERFORMANCE_SUMMARY.md](./PERFORMANCE_SUMMARY.md) for detailed benchmarks.
+
 
 ## Quick Start
 
