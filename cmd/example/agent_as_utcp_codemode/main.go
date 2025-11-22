@@ -49,10 +49,7 @@ func main() {
 	// 4. Build an orchestrator agent with CodeMode enabled.
 
 	// Use a real Gemini model for the orchestrator
-	orchestratorModel, err := models.NewGeminiLLM(ctx, "gemini-3-pro-preview", "You orchestrate workflows using CodeMode. Generate ONLY valid Go code. Do not include package main or imports. Use codemode.CallTool to invoke tools.")
-	if err != nil {
-		log.Fatalf("Failed to create orchestrator model: %v", err)
-	}
+	orchestratorModel := models.NewOpenAILLM("gpt-5.1", "You orchestrate workflows using CodeMode. Generate ONLY valid Go code. Do not include package main or imports. Use codemode.CallTool to invoke tools.")
 
 	memOpts := engine.DefaultOptions()
 	kit, err := adk.New(ctx,
@@ -84,9 +81,9 @@ func main() {
 	// This prompt describes a multi-step process that the agent would convert into a Go script
 	// calling the respective UTCP tools (e.g. http.echo, http.timestamp, etc.).
 	userPrompt := `
-Step 1: Ask for a fun fact about the Eiffel Tower using the specialist tool.
-Step 2: Ask for a fun fact about the Great Wall of China using the specialist tool.
-Step 3: Use the orchestrator tool to summarize the facts from Step 1 and Step 2.
+Step 1: Ask for a fun fact about the Eiffel Tower using the specialist.specialist tool.
+Step 2: Ask for a fun fact about the Great Wall of China using the specialist.specialist tool.
+Step 3: Use the orchestrator.orchestrator tool to summarize the facts from Step 1 and Step 2.
 `
 	fmt.Printf("\nUser Prompt:\n%s\n", userPrompt)
 
