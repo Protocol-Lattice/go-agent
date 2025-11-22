@@ -1612,7 +1612,7 @@ Return ONLY JSON. No explanations.
 		code, _ := tc.Arguments["code"].(string)
 		timeout, ok := tc.Arguments["timeout"].(float64)
 		if !ok {
-			timeout = 20000
+			timeout = 200000
 		}
 
 		result, err := a.CodeMode.Execute(ctx, codemode.CodeModeArgs{
