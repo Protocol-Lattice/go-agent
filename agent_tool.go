@@ -81,6 +81,9 @@ func (t *agentCLITransport) RegisterToolProvider(ctx context.Context, prov base.
 	}
 	list, ok := t.tools[p.Name]
 	if !ok {
+		if t.inner != nil {
+			return t.inner.RegisterToolProvider(ctx, prov)
+		}
 		return nil, fmt.Errorf("agent tools not found for provider %s", p.Name)
 	}
 	return list, nil
@@ -88,8 +91,10 @@ func (t *agentCLITransport) RegisterToolProvider(ctx context.Context, prov base.
 
 func (t *agentCLITransport) DeregisterToolProvider(ctx context.Context, prov base.Provider) error {
 	if p, ok := prov.(*cli.CliProvider); ok {
-		delete(t.tools, p.Name)
-		return nil
+		if _, ok := t.tools[p.Name]; ok {
+			delete(t.tools, p.Name)
+			return nil
+		}
 	}
 	if t.inner != nil {
 		return t.inner.DeregisterToolProvider(ctx, prov)
@@ -99,13 +104,18 @@ func (t *agentCLITransport) DeregisterToolProvider(ctx context.Context, prov bas
 
 func (t *agentCLITransport) CallTool(ctx context.Context, toolName string, args map[string]any, prov base.Provider, _ *string) (any, error) {
 	if p, ok := prov.(*cli.CliProvider); ok {
-		for _, tool := range t.tools[p.Name] {
-			if tool.Name == toolName || strings.HasSuffix(tool.Name, "."+toolName) {
-				if tool.Handler == nil {
-					return nil, fmt.Errorf("tool %s has no handler", toolName)
+		if list, ok := t.tools[p.Name]; ok {
+			for _, tool := range list {
+				if tool.Name == toolName || strings.HasSuffix(tool.Name, "."+toolName) {
+					if tool.Handler == nil {
+						return nil, fmt.Errorf("tool %s has no handler", toolName)
+					}
+					return tool.Handler(ctx, args)
 				}
-				return tool.Handler(ctx, args)
 			}
+		}
+		if t.inner != nil {
+			return t.inner.CallTool(ctx, toolName, args, prov, nil)
 		}
 		return nil, fmt.Errorf("tool %s not found for provider %s", toolName, p.Name)
 	}
@@ -117,7 +127,9 @@ func (t *agentCLITransport) CallTool(ctx context.Context, toolName string, args 
 
 func (t *agentCLITransport) CallToolStream(ctx context.Context, toolName string, args map[string]any, prov base.Provider) (transports.StreamResult, error) {
 	if p, ok := prov.(*cli.CliProvider); ok {
-		return nil, fmt.Errorf("streaming not supported for tool %s (provider %s)", toolName, p.Name)
+		if _, ok := t.tools[p.Name]; ok {
+			return nil, fmt.Errorf("streaming not supported for tool %s (provider %s)", toolName, p.Name)
+		}
 	}
 	if t.inner != nil {
 		return t.inner.CallToolStream(ctx, toolName, args, prov)

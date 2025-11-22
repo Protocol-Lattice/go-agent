@@ -119,6 +119,7 @@ go run cmd/example/codemode_utcp_workflow/main.go
 
 # Agent-to-Agent Communication via UTCP
 go run cmd/example/agent_as_tool/main.go
+go run cmd/example/agent_as_utcp_codemode/main.go
 ```
 
 #### Example Descriptions
@@ -128,6 +129,7 @@ go run cmd/example/agent_as_tool/main.go
 - **`cmd/example/codemode_utcp_workflow/main.go`**: Shows orchestrating multi-step workflows where multiple specialist agents (analyst, writer, reviewer) work together through UTCP tool calls.
 
 - **`cmd/example/agent_as_tool/main.go`**: Demonstrates exposing agents as UTCP tools using `RegisterAsUTCPProvider()`, enabling agent-to-agent communication and hierarchical agent architectures.
+- **`cmd/example/agent_as_utcp_codemode/main.go`**: Shows an agent exposed as a UTCP tool and orchestrated via CodeMode, illustrating natural language to tool call generation.
 
 
 ## Project Structure
