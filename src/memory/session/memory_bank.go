@@ -188,3 +188,24 @@ func (mb *MemoryBank) Close() error {
 	}
 	return nil
 }
+
+// ExportShortTerm returns a snapshot of the in-memory short-term history.
+func (sm *SessionMemory) ExportShortTerm() map[string][]model.MemoryRecord {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+
+	copyMap := make(map[string][]model.MemoryRecord)
+	for k, v := range sm.shortTerm {
+		records := make([]model.MemoryRecord, len(v))
+		copy(records, v)
+		copyMap[k] = records
+	}
+	return copyMap
+}
+
+// ImportShortTerm overwrites the in-memory short-term history with the provided data.
+func (sm *SessionMemory) ImportShortTerm(data map[string][]model.MemoryRecord) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	sm.shortTerm = data
+}

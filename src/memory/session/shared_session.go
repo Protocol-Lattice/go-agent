@@ -364,3 +364,26 @@ func (ss *SharedSession) allowedReadSessionsFiltered(includeLocal bool) []string
 	}
 	return out
 }
+
+// ExportJoinedSpaces returns the list of currently joined shared spaces.
+func (ss *SharedSession) ExportJoinedSpaces() []string {
+	ss.mu.RLock()
+	defer ss.mu.RUnlock()
+	spaces := make([]string, 0, len(ss.joined))
+	for s := range ss.joined {
+		spaces = append(spaces, s)
+	}
+	return spaces
+}
+
+// ImportJoinedSpaces restores the list of joined shared spaces.
+func (ss *SharedSession) ImportJoinedSpaces(spaces []string) {
+	ss.mu.Lock()
+	defer ss.mu.Unlock()
+	if ss.joined == nil {
+		ss.joined = make(map[string]struct{})
+	}
+	for _, s := range spaces {
+		ss.joined[s] = struct{}{}
+	}
+}

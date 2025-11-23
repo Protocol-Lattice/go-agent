@@ -134,6 +134,9 @@ go run cmd/example/codemode_utcp_workflow/main.go
 # Agent-to-Agent Communication via UTCP
 go run cmd/example/agent_as_tool/main.go
 go run cmd/example/agent_as_utcp_codemode/main.go
+
+# Agent State Persistence (Checkpoint/Restore)
+go run cmd/example/checkpoint/main.go
 ```
 
 #### Example Descriptions
@@ -144,6 +147,7 @@ go run cmd/example/agent_as_utcp_codemode/main.go
 
 - **`cmd/example/agent_as_tool/main.go`**: Demonstrates exposing agents as UTCP tools using `RegisterAsUTCPProvider()`, enabling agent-to-agent communication and hierarchical agent architectures.
 - **`cmd/example/agent_as_utcp_codemode/main.go`**: Shows an agent exposed as a UTCP tool and orchestrated via CodeMode, illustrating natural language to tool call generation.
+- **`cmd/example/checkpoint/main.go`**: Demonstrates how to checkpoint an agent's state to disk and restore it later, preserving conversation history and shared space memberships.
 
 
 ## Project Structure
@@ -339,6 +343,38 @@ fmt.Println(result["response"])
 - **Interoperability**: Your Go agents can be called by Python scripts, CLI tools, or other systems using UTCP.
 - **Standardization**: Uses the standard UTCP schema for inputs and outputs.
 - **Zero Overhead**: Uses an in-process transport when running within the same Go application, avoiding network latency.
+
+### Agent State Persistence
+
+Lattice supports **Checkpointing and Restoration**, allowing you to pause agents mid-task, persist their state to disk or a database, and resume them later (even after a crash or restart).
+
+**Key Methods:**
+- `agent.Checkpoint()`: Serializes the agent's state (system prompt, short-term memory, shared space memberships) to a `[]byte`.
+- `agent.Restore(data []byte)`: Rehydrates an agent instance from a checkpoint.
+
+**Example:**
+
+```go
+// 1. Checkpoint the agent
+data, err := agent.Checkpoint()
+if err != nil {
+    log.Fatal(err)
+}
+// Save 'data' to file/DB...
+
+// 2. Restore the agent (later or after crash)
+// Create a fresh agent instance first
+newAgent, err := agent.New(opts) 
+if err != nil {
+    log.Fatal(err)
+}
+
+// Restore state
+if err := newAgent.Restore(data); err != nil {
+    log.Fatal(err)
+}
+// newAgent now has the same memory and context as the original
+```
 
 ## Why Use TOON?
 
