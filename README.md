@@ -25,6 +25,7 @@ Lattice provides all of this with idiomatic Go interfaces and minimal dependenci
 - 🧠 **Smart Memory** – RAG-powered memory with importance scoring, MMR retrieval, and automatic pruning
 - 🔌 **Model Agnostic** – Adapters for Gemini, Anthropic, Ollama, or bring your own
 - 📡 **UTCP Ready** – First-class Universal Tool Calling Protocol support
+- 🔄 **Self-Evolving Agents** – Autonomous retraining with LLM-as-a-judge evaluation and meta-prompting
 - ⚡ **High Performance** – Optimized with LRU caching, pre-allocated buffers, and concurrent operations
 
 ### ⚡ Performance Optimizations
@@ -134,6 +135,9 @@ go run cmd/example/codemode_utcp_workflow/main.go
 # Agent-to-Agent Communication via UTCP
 go run cmd/example/agent_as_tool/main.go
 go run cmd/example/agent_as_utcp_codemode/main.go
+
+# Self-Evolving Agents with Autonomous Retraining
+go run cmd/example/self_evolving/main.go --verbose
 ```
 
 #### Example Descriptions
@@ -143,7 +147,10 @@ go run cmd/example/agent_as_utcp_codemode/main.go
 - **`cmd/example/codemode_utcp_workflow/main.go`**: Shows orchestrating multi-step workflows where multiple specialist agents (analyst, writer, reviewer) work together through UTCP tool calls.
 
 - **`cmd/example/agent_as_tool/main.go`**: Demonstrates exposing agents as UTCP tools using `RegisterAsUTCPProvider()`, enabling agent-to-agent communication and hierarchical agent architectures.
+
 - **`cmd/example/agent_as_utcp_codemode/main.go`**: Shows an agent exposed as a UTCP tool and orchestrated via CodeMode, illustrating natural language to tool call generation.
+
+- **`cmd/example/self_evolving/main.go`**: Demonstrates self-evolving agents that autonomously improve through LLM-as-a-judge evaluation and meta-prompting. Shows the complete evolution loop with multiple evaluators, prompt optimization, and integration with CodeMode.
 
 
 ## Project Structure
@@ -339,6 +346,144 @@ fmt.Println(result["response"])
 - **Interoperability**: Your Go agents can be called by Python scripts, CLI tools, or other systems using UTCP.
 - **Standardization**: Uses the standard UTCP schema for inputs and outputs.
 - **Zero Overhead**: Uses an in-process transport when running within the same Go application, avoiding network latency.
+
+## Self-Evolving Agents
+
+Lattice includes a powerful **self-evolution** system that enables agents to autonomously improve their performance without human intervention. Inspired by the [OpenAI Cookbook on Autonomous Agent Retraining](https://cookbook.openai.com/examples/partners/self_evolving_agents/autonomous_agent_retraining), this feature addresses a critical limitation: agents that plateau after deployment because they can't learn from their mistakes.
+
+### How It Works
+
+The self-evolution loop consists of four components:
+
+1. **Baseline Agent**: Your standard agent with an initial system prompt
+2. **Evaluator**: LLM-as-a-judge or custom logic that scores outputs (0.0-1.0)
+3. **Prompt Optimizer**: Uses meta-prompting to generate improved prompts based on feedback
+4. **Evolution Loop**: Automatically retries failed tasks with optimized prompts
+
+**The Process:**
+```
+For each task:
+  For attempt in 1..MaxRetries:
+    1. Generate output with current prompt
+    2. Evaluate output against criteria
+    3. If score >= target: SUCCESS ✓
+    4. If score < target: Optimize prompt → retry
+  Track best performing prompt version
+```
+
+### Quick Example
+
+```go
+import "github.com/Protocol-Lattice/go-agent/src/selfevolve"
+
+// 1. Create your base agent
+baseAgent, _ := agent.New(agent.Options{
+    Model: model,
+    Memory: memory,
+    SystemPrompt: "You are a helpful assistant.",
+})
+
+// 2. Create an optimizer model (for evaluation)
+optimizerModel, _ := models.NewGeminiLLM(ctx, "gemini-2.0-flash-exp", "")
+
+// 3. Configure evolution
+config := &selfevolve.EvolutionConfig{
+    MaxRetries:    3,
+    TargetScore:   0.8,
+    EnableLogging: true,
+}
+
+// 4. Wrap with self-evolution
+evolvingAgent := selfevolve.NewEvolvingAgent(
+    baseAgent,
+    optimizerModel,
+    "You are a helpful assistant.",
+    "gemini-2.0-flash-exp",
+    config,
+)
+
+// 5. Use normally - it evolves automatically!
+output, _ := evolvingAgent.Generate(ctx, "session1", "Summarize AI agents")
+
+// 6. View evolution metrics
+evolvingAgent.PrintSummary()
+```
+
+### Custom Evaluators
+
+Create domain-specific evaluators:
+
+```go
+// Length evaluator
+lengthEval := selfevolve.NewLLMAsJudgeEvaluator(
+    model,
+    "length_check",
+    "Output should be concise (under 100 words)",
+    0.7,
+)
+
+// Quality evaluator
+qualityEval := selfevolve.NewLLMAsJudgeEvaluator(
+    model,
+    "quality_check",
+    "Output should be accurate and well-structured",
+    0.8,
+)
+
+// Combine multiple evaluators
+composite := selfevolve.NewCompositeEvaluator(
+    []selfevolve.Evaluator{lengthEval, qualityEval},
+    selfevolve.StrategyAverage,
+)
+
+config := &selfevolve.EvolutionConfig{
+    Evaluators: []selfevolve.Evaluator{composite},
+    TargetScore: 0.8,
+}
+```
+
+### Evolution Metrics
+
+Track performance improvements:
+
+```go
+metrics := evolvingAgent.GetMetrics()
+fmt.Printf("Success Rate: %.1f%%\n", metrics["success_rate"].(float64) * 100)
+fmt.Printf("Best Prompt Version: v%d (score: %.3f)\n",
+    metrics["best_prompt_version"], metrics["best_prompt_score"])
+
+// Access prompt history
+for _, version := range evolvingAgent.GetPromptHistory() {
+    fmt.Printf("v%d: %.3f - %s\n", 
+        version.Version, version.Score, version.Prompt)
+}
+
+// Rollback to best performing prompt
+evolvingAgent.RollbackToBest()
+```
+
+### Integration with CodeMode
+
+Self-evolving agents work seamlessly with CodeMode for UTCP tool orchestration:
+
+```go
+// Agent with CodeMode + Self-Evolution
+baseAgent, _ := agent.New(agent.Options{
+    UTCPClient: utcpClient,
+    CodeMode:   codemode.NewCodeModeUTCP(utcpClient, model),
+})
+
+evolvingAgent := selfevolve.NewEvolvingAgent(baseAgent, optimizerModel, prompt, model, config)
+
+// Evolves while maintaining CodeMode capabilities
+output, _ := evolvingAgent.Generate(ctx, sessionID,
+    "Use codemode to find and call the best summarization tool")
+```
+
+**See the full example:** `cmd/example/self_evolving/main.go`
+
+**Read the detailed guide:** `src/selfevolve/README.md`
+
 
 ## Why Use TOON?
 
