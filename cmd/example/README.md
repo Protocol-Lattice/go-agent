@@ -212,13 +212,3 @@ When registering agents as UTCP tools, follow the `"provider.toolname"` format:
 - ❌ `"analyst"` - May cause issues without provider prefix
 - ❌ `"my-agent-123"` - Avoid hyphens, use underscores or dots
 
----
-
-## Next Steps
-
-1. **Try the examples** - Run each example to see the patterns in action
-2. **Modify workflows** - Change the workflow prompts to see CodeMode adapt
-3. **Add more agents** - Create your own specialist agents and register them
-4. **Real LLM integration** - Replace the demo models with actual LLM providers (Gemini, Anthropic, etc.)
-
-For more details, see the [main README](../../README.md).
