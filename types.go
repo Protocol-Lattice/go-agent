@@ -1,6 +1,11 @@
 package agent
 
-import "context"
+import (
+	"context"
+	"time"
+
+	"github.com/Protocol-Lattice/go-agent/src/memory/model"
+)
 
 // ToolSpec describes how the agent should present a tool to the model.
 type ToolSpec struct {
@@ -48,4 +53,12 @@ type SubAgentDirectory interface {
 	Register(subAgent SubAgent) error
 	Lookup(name string) (SubAgent, bool)
 	All() []SubAgent
+}
+
+// AgentState represents the serializable state of an agent for checkpointing.
+type AgentState struct {
+	SystemPrompt string                          `json:"system_prompt"`
+	ShortTerm    map[string][]model.MemoryRecord `json:"short_term"`
+	JoinedSpaces []string                        `json:"joined_spaces,omitempty"`
+	Timestamp    time.Time                       `json:"timestamp"`
 }

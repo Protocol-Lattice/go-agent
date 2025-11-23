@@ -89,6 +89,33 @@ User Input → Manager Agent → agent.researcher (Researcher Agent) → Result
 
 ---
 
+---
+
+### 4. Agent State Persistence (Checkpoint/Restore)
+**File:** `cmd/example/checkpoint/main.go`
+
+Demonstrates how to save an agent's state to disk and restore it later, preserving conversation history and shared space memberships.
+
+**Key Concepts:**
+- `agent.Checkpoint()`: Serializes state to `[]byte`
+- `agent.Restore()`: Rehydrates state from `[]byte`
+- Persisting short-term memory and shared space context
+- Resuming conversations across process restarts
+
+**Run:**
+```bash
+go run cmd/example/checkpoint/main.go
+```
+
+**What it shows:**
+1. Creating an agent and having a conversation
+2. Checkpointing the agent to a JSON file
+3. Creating a fresh agent instance
+4. Restoring the state from the file
+5. Verifying the agent remembers the previous conversation
+
+---
+
 ## CodeMode Pattern Explained
 
 CodeMode is a powerful feature that allows agents to orchestrate tools through generated Go code.

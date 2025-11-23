@@ -385,6 +385,46 @@ func (a *Agent) Flush(ctx context.Context, sessionID string) error {
 	return a.memory.FlushToLongTerm(ctx, sessionID)
 }
 
+// Checkpoint serializes the agent's current state (system prompt and short-term memory)
+// to a byte slice. This can be saved to disk or a database to pause the agent.
+func (a *Agent) Checkpoint() ([]byte, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	state := AgentState{
+		SystemPrompt: a.systemPrompt,
+		ShortTerm:    a.memory.ExportShortTerm(),
+		Timestamp:    time.Now(),
+	}
+
+	if a.Shared != nil {
+		state.JoinedSpaces = a.Shared.ExportJoinedSpaces()
+	}
+
+	return json.Marshal(state)
+}
+
+// Restore rehydrates the agent's state from a checkpoint.
+// It restores the system prompt and short-term memory.
+func (a *Agent) Restore(data []byte) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	var state AgentState
+	if err := json.Unmarshal(data, &state); err != nil {
+		return err
+	}
+
+	a.systemPrompt = state.SystemPrompt
+	a.memory.ImportShortTerm(state.ShortTerm)
+
+	if a.Shared != nil && len(state.JoinedSpaces) > 0 {
+		a.Shared.ImportJoinedSpaces(state.JoinedSpaces)
+	}
+
+	return nil
+}
+
 func (a *Agent) executeTool(
 	ctx context.Context,
 	sessionID, toolName string,
