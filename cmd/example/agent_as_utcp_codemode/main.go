@@ -46,10 +46,33 @@ func main() {
 	}
 	fmt.Println("✅ Registered specialist as UTCP tool 'specialist'")
 
+	// Create a simple summarizer agent.
+	summarizerModel, err := models.NewGeminiLLM(ctx, "gemini-3-pro-preview", "You are an expert at summarizing text.")
+	if err != nil {
+		log.Fatalf("Failed to create summarizer model: %v", err)
+	}
+	summarizer, err := agent.New(agent.Options{
+		Model:        summarizerModel,
+		Memory:       memory.NewSessionMemory(memory.NewMemoryBankWithStore(memory.NewInMemoryStore()), 8),
+		SystemPrompt: "You are a summarization agent. Summarize the text provided in the 'instruction' and return ONLY the summary as a natural language string.",
+	})
+	if err != nil {
+		log.Fatalf("Failed to create summarizer agent: %v", err)
+	}
+
+	// Register the summarizer as a UTCP tool.
+	err = summarizer.RegisterAsUTCPProvider(ctx, client, "summarizer", "Summarizes text.")
+	if err != nil {
+		log.Fatalf("Failed to register summarizer: %v", err)
+	}
+	fmt.Println("✅ Registered summarizer as UTCP tool 'summarizer'")
 	// 4. Build an orchestrator agent with CodeMode enabled.
 
 	// Use a real Gemini model for the orchestrator
-	orchestratorModel := models.NewOpenAILLM("gpt-5.1", "You orchestrate workflows using CodeMode. Generate ONLY valid Go code. Do not include package main or imports. Use codemode.CallTool to invoke tools.")
+	orchestratorModel, err := models.NewGeminiLLM(ctx, "gemini-3-pro-preview", "You orchestrate workflows using CodeMode. Generate ONLY valid Go code. Do not include package main or imports. Use codemode.CallTool to invoke tools.")
+	if err != nil {
+		log.Fatalf("Failed to create orchestrator model: %v", err)
+	}
 
 	memOpts := engine.DefaultOptions()
 	kit, err := adk.New(ctx,
@@ -81,9 +104,13 @@ func main() {
 	// This prompt describes a multi-step process that the agent would convert into a Go script
 	// calling the respective UTCP tools (e.g. http.echo, http.timestamp, etc.).
 	userPrompt := `
-Step 1: Ask for a fun fact about the Eiffel Tower using the specialist.specialist tool.
-Step 2: Ask for a fun fact about the Great Wall of China using the specialist.specialist tool.
-Step 3: Use the orchestrator.orchestrator tool to summarize the facts from Step 1 and Step 2.
+Step 1: Call the "specialist.specialist" tool with:
+  instruction: "Tell me a fun fact about the Eiffel Tower"
+
+Step 2: Call the "specialist.specialist" tool with:
+  instruction: "Tell me a fun fact about the Great Wall of China"
+
+Step 3: Call the "summarizer.summarizer" tool. The 'instruction' should be a prompt that asks it to summarize the results from the previous two steps.
 `
 	fmt.Printf("\nUser Prompt:\n%s\n", userPrompt)
 
