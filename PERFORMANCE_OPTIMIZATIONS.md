@@ -67,6 +67,7 @@ New environment variables for tuning performance:
 
 - `AGENT_LLM_CACHE_SIZE` - LRU cache size for LLM responses (default: 1000)
 - `AGENT_LLM_CACHE_TTL` - Cache TTL in seconds (default: 300)
+- `AGENT_LLM_CACHE_PATH` - Path to cache file for persistence (default: .agent_cache.json)
 - `AGENT_CONCURRENT_OPS` - Max concurrent operations (default: 10)
 - `AGENT_BATCH_SIZE` - Batch size for batch operations (default: 50)
 

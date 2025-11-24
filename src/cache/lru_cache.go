@@ -121,3 +121,45 @@ func HashKey(prompt string) string {
 	h := sha256.Sum256([]byte(prompt))
 	return hex.EncodeToString(h[:])
 }
+
+// Dump returns a slice of cache entries for persistence
+func (c *LRUCache) Dump() map[string]CacheEntry {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	dump := make(map[string]CacheEntry, len(c.items))
+	for k, elem := range c.items {
+		dump[k] = elem.Value.(*entry).value
+	}
+	return dump
+}
+
+// Restore populates the cache from a map of entries
+func (c *LRUCache) Restore(dump map[string]CacheEntry) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.lru.Init()
+	c.items = make(map[string]*list.Element, c.capacity)
+
+	for k, v := range dump {
+		// Check expiry during restore
+		if time.Now().After(v.ExpiresAt) {
+			continue
+		}
+
+		// Add to cache
+		ent := &entry{key: k, value: v}
+		elem := c.lru.PushFront(ent)
+		c.items[k] = elem
+	}
+
+	// Enforce capacity
+	for c.lru.Len() > c.capacity {
+		oldest := c.lru.Back()
+		if oldest != nil {
+			c.lru.Remove(oldest)
+			delete(c.items, oldest.Value.(*entry).key)
+		}
+	}
+}

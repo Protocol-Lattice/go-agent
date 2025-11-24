@@ -48,18 +48,27 @@ var (
 
 // NewLLMProvider returns a concrete Agent.
 func NewLLMProvider(ctx context.Context, provider string, model string, promptPrefix string) (Agent, error) {
+	var agent Agent
+	var err error
+
 	switch provider {
 	case "openai":
-		return NewOpenAILLM(model, promptPrefix), nil
+		agent = NewOpenAILLM(model, promptPrefix)
 	case "gemini", "google":
-		return NewGeminiLLM(ctx, model, promptPrefix)
+		agent, err = NewGeminiLLM(ctx, model, promptPrefix)
 	case "ollama":
-		return NewOllamaLLM(model, promptPrefix)
+		agent, err = NewOllamaLLM(model, promptPrefix)
 	case "anthropic", "claude":
-		return NewAnthropicLLM(model, promptPrefix), nil
+		agent = NewAnthropicLLM(model, promptPrefix)
 	default:
 		return nil, fmt.Errorf("unknown provider: %s", provider)
 	}
+
+	if err != nil {
+		return nil, err
+	}
+
+	return TryCreateCachedLLM(agent), nil
 }
 
 // sanitizeForGemini coerces edge cases again and filters to what Gemini will accept.
