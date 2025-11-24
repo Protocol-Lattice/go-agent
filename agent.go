@@ -525,7 +525,7 @@ func (a *Agent) buildPrompt(
 	sb.WriteString(a.renderMemory(records))
 
 	sb.WriteString("\n\nUser: ")
-	sb.WriteString(strings.TrimSpace(userInput))
+	sb.WriteString(sanitizeInput(userInput))
 	sb.WriteString("\n\n") // no forced persona label
 
 	// Rehydrate attachments
@@ -583,9 +583,18 @@ func (a *Agent) renderMemory(records []memory.MemoryRecord) string {
 	return fallback.String()
 }
 
-// escapePromptContent safely escapes content that might break formatting.
 func escapePromptContent(s string) string {
 	s = strings.ReplaceAll(s, "`", "'")
+	s = strings.ReplaceAll(s, "\nUser:", "\nUser (quoted):")
+	s = strings.ReplaceAll(s, "\nSystem:", "\nSystem (quoted):")
+	return s
+}
+
+func sanitizeInput(s string) string {
+	s = strings.TrimSpace(s)
+	s = strings.ReplaceAll(s, "\nUser:", "\nUser (quoted):")
+	s = strings.ReplaceAll(s, "\nSystem:", "\nSystem (quoted):")
+	s = strings.ReplaceAll(s, "\nConversation memory", "\nConversation memory (quoted)")
 	return s
 }
 
