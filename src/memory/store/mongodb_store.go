@@ -112,24 +112,24 @@ func (ms *MongoStore) SearchMemory(ctx context.Context, sessionID string, queryE
 	// Use $vectorSearch for efficient similarity search in MongoDB Atlas.
 	pipeline := mongo.Pipeline{
 		{
-			{"$vectorSearch", bson.D{
-				{"index", "vector_index"},
-				{"path", "embedding"},
-				{"queryVector", float64Embedding(queryEmbedding)},
-				{"numCandidates", int64(limit * 10)}, // Oversample for better accuracy
-				{"limit", int64(limit)},
+			{Key: "$vectorSearch", Value: bson.D{
+				{Key: "index", Value: "vector_index"},
+				{Key: "path", Value: "embedding"},
+				{Key: "queryVector", Value: float64Embedding(queryEmbedding)},
+				{Key: "numCandidates", Value: int64(limit * 10)}, // Oversample for better accuracy
+				{Key: "limit", Value: int64(limit)},
 			}},
 		},
 		{
-			{"$addFields", bson.D{
-				{"score", bson.D{{"$meta", "vectorSearchScore"}}},
+			{Key: "$addFields", Value: bson.D{
+				{Key: "score", Value: bson.D{{Key: "$meta", Value: "vectorSearchScore"}}},
 			}},
 		},
 	}
 
 	// Add a $match stage if sessionID is provided.
 	if sessionID != "" {
-		pipeline = append(pipeline, bson.D{{"$match", bson.D{{"session_id", sessionID}}}})
+		pipeline = append(pipeline, bson.D{{Key: "$match", Value: bson.D{{Key: "session_id", Value: sessionID}}}})
 	}
 
 	cursor, err := ms.collection.Aggregate(ctx, pipeline)
@@ -223,14 +223,14 @@ func (ms *MongoStore) CreateSchema(ctx context.Context, _ string) error {
 		// Vector search index for Atlas
 		{
 			Keys: bson.D{
-				{"embedding", "cosmos.vector"},
+				{Key: "embedding", Value: "cosmos.vector"},
 			},
 			Options: options.Index().
 				SetName("vector_index").
 				SetWeights(bson.D{
-					{"numDimensions", 768}, // Assuming 768, adjust as needed
-					{"similarity", "cosine"},
-					{"type", "ivf"},
+					{Key: "numDimensions", Value: 768}, // Assuming 768, adjust as needed
+					{Key: "similarity", Value: "cosine"},
+					{Key: "type", Value: "ivf"},
 				}),
 		},
 	}

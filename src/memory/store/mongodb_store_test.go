@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -84,11 +85,11 @@ func TestMongoStoreCloseNilClient(t *testing.T) {
 
 func TestMongoStoreCreateSchemaOnNilStore(t *testing.T) {
 	var store *MongoStore
-	if err := store.CreateSchema(nil, ""); err != nil {
+	if err := store.CreateSchema(context.TODO(), ""); err != nil {
 		t.Fatalf("expected nil error, got %v", err)
 	}
 	store = &MongoStore{}
-	if err := store.CreateSchema(nil, ""); err != nil {
+	if err := store.CreateSchema(context.TODO(), ""); err != nil {
 		t.Fatalf("expected nil error when collection is nil, got %v", err)
 	}
 }
