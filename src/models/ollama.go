@@ -146,6 +146,39 @@ func (o *OllamaLLM) GenerateWithFiles(ctx context.Context, prompt string, files 
 	}, nil
 }
 
+// GenerateStream leverages Ollama's native callback-based streaming.
+func (o *OllamaLLM) GenerateStream(ctx context.Context, prompt string) (<-chan StreamChunk, error) {
+	fullPrompt := prompt
+	if o.PromptPrefix != "" {
+		fullPrompt = fmt.Sprintf("%s\n\n%s", o.PromptPrefix, prompt)
+	}
+
+	req := &ollama.GenerateRequest{
+		Model:  o.Model,
+		Prompt: fullPrompt,
+	}
+
+	ch := make(chan StreamChunk, 16)
+	go func() {
+		defer close(ch)
+		var sb strings.Builder
+		err := o.Client.Generate(ctx, req, func(gr ollama.GenerateResponse) error {
+			if gr.Response != "" {
+				sb.WriteString(gr.Response)
+				ch <- StreamChunk{Delta: gr.Response}
+			}
+			return nil
+		})
+		if err != nil {
+			ch <- StreamChunk{Done: true, FullText: sb.String(), Err: err}
+			return
+		}
+		ch <- StreamChunk{Done: true, FullText: sb.String()}
+	}()
+
+	return ch, nil
+}
+
 // WebSearch queries the Ollama Web Search API and returns top results.
 func (o *OllamaLLM) WebSearch(ctx context.Context, query string, limit int) ([]map[string]string, error) {
 	endpoint := fmt.Sprintf("%s/api/web_search", strings.TrimRight(o.host, "/"))

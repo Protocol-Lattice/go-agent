@@ -24,6 +24,13 @@ func (m *mockModel) GenerateWithFiles(ctx context.Context, prompt string, files 
 	return m.Generate(ctx, prompt)
 }
 
+func (m *mockModel) GenerateStream(ctx context.Context, prompt string) (<-chan models.StreamChunk, error) {
+	ch := make(chan models.StreamChunk, 1)
+	ch <- models.StreamChunk{Delta: "I remember what you said!", FullText: "I remember what you said!", Done: true}
+	close(ch)
+	return ch, nil
+}
+
 func main() {
 	ctx := context.Background()
 

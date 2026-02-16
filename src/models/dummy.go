@@ -41,4 +41,27 @@ func (d *DummyLLM) GenerateWithFiles(ctx context.Context, prompt string, files [
 	return fmt.Sprintf("%s %s", d.Prefix, combined), nil
 }
 
+// GenerateStream simulates streaming by splitting the response into word-level chunks.
+func (d *DummyLLM) GenerateStream(_ context.Context, prompt string) (<-chan StreamChunk, error) {
+	result, _ := d.Generate(context.Background(), prompt)
+	text := fmt.Sprint(result)
+
+	ch := make(chan StreamChunk, 16)
+	go func() {
+		defer close(ch)
+		words := strings.Fields(text)
+		var sb strings.Builder
+		for i, word := range words {
+			if i > 0 {
+				word = " " + word
+			}
+			sb.WriteString(word)
+			ch <- StreamChunk{Delta: word}
+		}
+		ch <- StreamChunk{Done: true, FullText: sb.String()}
+	}()
+
+	return ch, nil
+}
+
 var _ Agent = (*DummyLLM)(nil)

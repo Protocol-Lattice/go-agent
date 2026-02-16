@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"os"
 	"strconv"
 	"time"
@@ -108,6 +109,43 @@ func (c *CachedLLM) GenerateWithFiles(ctx context.Context, prompt string, files 
 	c.Cache.Set(key, res)
 	c.save()
 	return res, nil
+}
+
+// GenerateStream passes through to the underlying agent's streaming.
+// If the prompt is already cached, it returns a single-chunk stream from cache.
+// Otherwise, it streams from the underlying agent and caches the full result when done.
+func (c *CachedLLM) GenerateStream(ctx context.Context, prompt string) (<-chan StreamChunk, error) {
+	key := cache.HashKey(prompt)
+	if val, ok := c.Cache.Get(key); ok {
+		ch := make(chan StreamChunk, 1)
+		go func() {
+			defer close(ch)
+			text := fmt.Sprint(val)
+			ch <- StreamChunk{Delta: text, Done: true, FullText: text}
+		}()
+		return ch, nil
+	}
+
+	innerCh, err := c.Agent.GenerateStream(ctx, prompt)
+	if err != nil {
+		return nil, err
+	}
+
+	ch := make(chan StreamChunk, 16)
+	go func() {
+		defer close(ch)
+		for chunk := range innerCh {
+			ch <- chunk
+			if chunk.Done {
+				if chunk.FullText != "" && chunk.Err == nil {
+					c.Cache.Set(key, chunk.FullText)
+					c.save()
+				}
+			}
+		}
+	}()
+
+	return ch, nil
 }
 
 // TryCreateCachedLLM checks env vars and wraps the agent if caching is enabled.

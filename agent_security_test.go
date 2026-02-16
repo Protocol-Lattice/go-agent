@@ -24,6 +24,14 @@ func (m *mockModel) GenerateWithFiles(ctx context.Context, prompt string, files 
 	return "mock response", nil
 }
 
+func (m *mockModel) GenerateStream(ctx context.Context, prompt string) (<-chan models.StreamChunk, error) {
+	m.lastPrompt = prompt
+	ch := make(chan models.StreamChunk, 1)
+	ch <- models.StreamChunk{Delta: "mock response", FullText: "mock response", Done: true}
+	close(ch)
+	return ch, nil
+}
+
 func TestPromptInjectionPrevention(t *testing.T) {
 	// Setup
 	s := store.NewInMemoryStore()
