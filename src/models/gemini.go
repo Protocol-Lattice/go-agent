@@ -48,6 +48,48 @@ func (g *GeminiLLM) Generate(ctx context.Context, prompt string) (any, error) {
 	return resp.Candidates[0].Content.Parts[0], nil
 }
 
+// GenerateStream uses Gemini's streaming API to yield tokens incrementally.
+func (g *GeminiLLM) GenerateStream(ctx context.Context, prompt string) (<-chan StreamChunk, error) {
+	model := g.Client.GenerativeModel(g.Model)
+	full := prompt
+	if g.PromptPrefix != "" {
+		full = g.PromptPrefix + "\n\n" + prompt
+	}
+
+	iter := model.GenerateContentStream(ctx, genai.Text(full))
+
+	ch := make(chan StreamChunk, 16)
+	go func() {
+		defer close(ch)
+		var sb strings.Builder
+		for {
+			resp, err := iter.Next()
+			if err != nil {
+				// io.EOF signals normal end of stream
+				if err.Error() == "no more items in iterator" || err == context.Canceled {
+					ch <- StreamChunk{Done: true, FullText: sb.String()}
+					return
+				}
+				// Check for iterator exhaustion via the google iterator sentinel
+				ch <- StreamChunk{Done: true, FullText: sb.String(), Err: err}
+				return
+			}
+			if resp == nil || len(resp.Candidates) == 0 {
+				continue
+			}
+			cand := resp.Candidates[0]
+			if cand.Content == nil || len(cand.Content.Parts) == 0 {
+				continue
+			}
+			delta := fmt.Sprint(cand.Content.Parts[0])
+			sb.WriteString(delta)
+			ch <- StreamChunk{Delta: delta}
+		}
+	}()
+
+	return ch, nil
+}
+
 // NEW: pass images/videos as parts so Gemini can read them.
 // Falls back to text-only if there are no binary attachments.
 // gemini.go (inside package models)

@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
@@ -46,6 +47,53 @@ func (o *OpenAILLM) Generate(ctx context.Context, prompt string) (any, error) {
 		return nil, errors.New("no response from OpenAI")
 	}
 	return resp.Choices[0].Message.Content, nil
+}
+
+// GenerateStream uses OpenAI's streaming chat completion API.
+func (o *OpenAILLM) GenerateStream(ctx context.Context, prompt string) (<-chan StreamChunk, error) {
+	fullPrompt := prompt
+	if o.PromptPrefix != "" {
+		fullPrompt = o.PromptPrefix + "\n" + prompt
+	}
+
+	stream, err := o.Client.CreateChatCompletionStream(ctx, openai.ChatCompletionRequest{
+		Model: o.Model,
+		Messages: []openai.ChatCompletionMessage{{
+			Role:    openai.ChatMessageRoleUser,
+			Content: fullPrompt,
+		}},
+		Stream: true,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	ch := make(chan StreamChunk, 16)
+	go func() {
+		defer close(ch)
+		defer stream.Close()
+		var sb strings.Builder
+		for {
+			resp, err := stream.Recv()
+			if err != nil {
+				if errors.Is(err, io.EOF) {
+					ch <- StreamChunk{Done: true, FullText: sb.String()}
+					return
+				}
+				ch <- StreamChunk{Done: true, FullText: sb.String(), Err: err}
+				return
+			}
+			if len(resp.Choices) > 0 {
+				delta := resp.Choices[0].Delta.Content
+				if delta != "" {
+					sb.WriteString(delta)
+					ch <- StreamChunk{Delta: delta}
+				}
+			}
+		}
+	}()
+
+	return ch, nil
 }
 
 // getOpenAIMimeType converts normalized MIME types to OpenAI's expected format

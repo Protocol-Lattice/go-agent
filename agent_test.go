@@ -36,6 +36,19 @@ func (m *stubModel) Generate(ctx context.Context, prompt string) (any, error) {
 	return m.response + " | " + prompt, nil
 }
 
+func (m *stubModel) GenerateStream(ctx context.Context, prompt string) (<-chan models.StreamChunk, error) {
+	ch := make(chan models.StreamChunk, 1)
+	val, err := m.Generate(ctx, prompt)
+	if err != nil {
+		ch <- models.StreamChunk{Err: err, Done: true}
+	} else {
+		str := fmt.Sprint(val)
+		ch <- models.StreamChunk{Delta: str, FullText: str, Done: true}
+	}
+	close(ch)
+	return ch, nil
+}
+
 type fileEchoModel struct {
 	response string
 }
@@ -46,6 +59,13 @@ func (m *fileEchoModel) Generate(ctx context.Context, prompt string) (any, error
 
 func (m *fileEchoModel) GenerateWithFiles(ctx context.Context, prompt string, files []models.File) (any, error) {
 	return m.response, nil
+}
+
+func (m *fileEchoModel) GenerateStream(ctx context.Context, prompt string) (<-chan models.StreamChunk, error) {
+	ch := make(chan models.StreamChunk, 1)
+	ch <- models.StreamChunk{Delta: m.response, FullText: m.response, Done: true}
+	close(ch)
+	return ch, nil
 }
 
 type dynamicStubModel struct {
@@ -71,6 +91,19 @@ func (m *dynamicStubModel) Generate(ctx context.Context, prompt string) (any, er
 	}
 	// Default response if no specific match
 	return "default model response for: " + prompt, nil
+}
+
+func (m *dynamicStubModel) GenerateStream(ctx context.Context, prompt string) (<-chan models.StreamChunk, error) {
+	ch := make(chan models.StreamChunk, 1)
+	val, err := m.Generate(ctx, prompt)
+	if err != nil {
+		ch <- models.StreamChunk{Err: err, Done: true}
+	} else {
+		str := fmt.Sprint(val)
+		ch <- models.StreamChunk{Delta: str, FullText: str, Done: true}
+	}
+	close(ch)
+	return ch, nil
 }
 
 type stubUTCPClient struct {

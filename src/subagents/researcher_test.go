@@ -29,6 +29,13 @@ func (f *fakeModel) Generate(ctx context.Context, prompt string) (any, error) {
 	return "ok", nil
 }
 
+func (f *fakeModel) GenerateStream(ctx context.Context, prompt string) (<-chan models.StreamChunk, error) {
+	ch := make(chan models.StreamChunk, 1)
+	ch <- models.StreamChunk{Delta: "ok", FullText: "ok", Done: true}
+	close(ch)
+	return ch, nil
+}
+
 func TestResearcherRunIncludesPersonaAndTask(t *testing.T) {
 	fm := &fakeModel{response: "result"}
 	researcher := NewResearcher(fm)

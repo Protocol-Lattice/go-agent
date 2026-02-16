@@ -27,6 +27,14 @@ func (s *stubAgent) GenerateWithFiles(context.Context, string, []models.File) (a
 	return "files", nil
 }
 
+func (s *stubAgent) GenerateStream(context.Context, string) (<-chan models.StreamChunk, error) {
+	atomic.AddInt32(&s.called, 1)
+	ch := make(chan models.StreamChunk, 1)
+	ch <- models.StreamChunk{Delta: "ok", FullText: "ok", Done: true}
+	close(ch)
+	return ch, nil
+}
+
 type stubTool struct{ name string }
 
 func (s stubTool) Spec() agent.ToolSpec { return agent.ToolSpec{Name: s.name} }

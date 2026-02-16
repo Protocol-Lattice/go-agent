@@ -122,6 +122,46 @@ func (a *AnthropicLLM) GenerateWithFiles(ctx context.Context, prompt string, fil
 	return b.String(), nil
 }
 
+// GenerateStream uses Anthropic's streaming messages API.
+func (a *AnthropicLLM) GenerateStream(ctx context.Context, prompt string) (<-chan StreamChunk, error) {
+	fullPrompt := prompt
+	if a.PromptPrefix != "" {
+		fullPrompt = fmt.Sprintf("%s\n\n%s", a.PromptPrefix, prompt)
+	}
+
+	stream := a.Client.Messages.NewStreaming(ctx, anthropic.MessageNewParams{
+		Model:     anthropic.Model(a.Model),
+		MaxTokens: int64(a.MaxTokens),
+		Messages: []anthropic.MessageParam{
+			anthropic.NewUserMessage(anthropic.NewTextBlock(fullPrompt)),
+		},
+	})
+
+	ch := make(chan StreamChunk, 16)
+	go func() {
+		defer close(ch)
+		var sb strings.Builder
+		for stream.Next() {
+			evt := stream.Current()
+			switch delta := evt.AsAny().(type) {
+			case anthropic.ContentBlockDeltaEvent:
+				text := delta.Delta.Text
+				if text != "" {
+					sb.WriteString(text)
+					ch <- StreamChunk{Delta: text}
+				}
+			}
+		}
+		if err := stream.Err(); err != nil {
+			ch <- StreamChunk{Done: true, FullText: sb.String(), Err: err}
+			return
+		}
+		ch <- StreamChunk{Done: true, FullText: sb.String()}
+	}()
+
+	return ch, nil
+}
+
 // sanitizeForAnthropic filters MIME types to what Anthropic supports
 func sanitizeForAnthropic(mt string) string {
 	mt = strings.ToLower(strings.TrimSpace(mt))

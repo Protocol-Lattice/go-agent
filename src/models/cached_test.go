@@ -21,6 +21,14 @@ func (m *MockAgent) GenerateWithFiles(ctx context.Context, prompt string, files 
 	return "mock response with files", nil
 }
 
+func (m *MockAgent) GenerateStream(ctx context.Context, prompt string) (<-chan StreamChunk, error) {
+	atomic.AddInt32(&m.CallCount, 1)
+	ch := make(chan StreamChunk, 1)
+	ch <- StreamChunk{Delta: "mock stream response", FullText: "mock stream response", Done: true}
+	close(ch)
+	return ch, nil
+}
+
 func TestCachedLLM_Generate(t *testing.T) {
 	mock := &MockAgent{}
 	cached := NewCachedLLM(mock, 10, time.Minute, "")

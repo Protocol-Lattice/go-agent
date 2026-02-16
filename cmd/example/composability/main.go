@@ -32,6 +32,19 @@ func (m *DummyModel) GenerateWithFiles(ctx context.Context, prompt string, files
 	return m.Generate(ctx, prompt)
 }
 
+func (m *DummyModel) GenerateStream(ctx context.Context, prompt string) (<-chan models.StreamChunk, error) {
+	ch := make(chan models.StreamChunk, 1)
+	val, err := m.Generate(ctx, prompt)
+	if err != nil {
+		ch <- models.StreamChunk{Err: err, Done: true}
+	} else {
+		str := fmt.Sprint(val)
+		ch <- models.StreamChunk{Delta: str, FullText: str, Done: true}
+	}
+	close(ch)
+	return ch, nil
+}
+
 func main() {
 	ctx := context.Background()
 
