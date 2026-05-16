@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Protocol-Lattice/go-agent"
 	"github.com/Protocol-Lattice/go-agent/src/adk"
 	"github.com/Protocol-Lattice/go-agent/src/adk/modules"
 	"github.com/Protocol-Lattice/go-agent/src/memory"
@@ -22,9 +23,12 @@ Your goal is to help the user with any task by orchestrating tools.
 
 Rules:
 1. You have access to tools registered via UTCP.
-2. You run in a continuous loop, receiving both user messages and background cron events.
-3. When a cron event happens, assess the current state and decide if any background action is needed.
-4. Be proactive, professional, and efficient.`
+2. You have specialist agents available as UTCP tools:
+   - agent.researcher: For deep research and fact-finding.
+   - agent.builder: For architecture and implementation planning.
+3. You run in a continuous loop, receiving both user messages and background cron events.
+4. When a cron event happens, assess the current state and decide if any background action is needed.
+5. Be proactive, professional, and efficient.`
 
 func main() {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -40,7 +44,12 @@ func main() {
 		log.Fatalf("Failed to create UTCP client: %v", err)
 	}
 
-	// 2. Create Orchestrator with CodeMode
+	// 2. Create and register specialist agents as UTCP tools
+	if err := registerSpecialists(ctx, client); err != nil {
+		log.Printf("Warning: failed to register specialist agents: %v", err)
+	}
+
+	// 3. Create Orchestrator with CodeMode
 	orchestratorModel, err := models.NewGeminiLLM(ctx, "gemini-3-flash-preview", "Claw:")
 	if err != nil {
 		log.Fatalf("Failed to create orchestrator model: %v", err)
@@ -125,4 +134,43 @@ func main() {
 			}
 		}
 	}
+}
+func registerSpecialists(ctx context.Context, client utcp.UtcpClientInterface) error {
+	// Researcher Agent
+	researcherModel, err := models.NewGeminiLLM(ctx, "gemini-3-flash-preview", "Researcher:")
+	if err != nil {
+		return fmt.Errorf("create researcher model: %w", err)
+	}
+	researcher, err := agent.New(agent.Options{
+		Model:        researcherModel,
+		Memory:       memory.NewSessionMemory(memory.NewMemoryBankWithStore(memory.NewInMemoryStore()), 10),
+		SystemPrompt: "You are a research specialist. Clarify unknowns and provide concrete facts.",
+	})
+	if err != nil {
+		return fmt.Errorf("create researcher agent: %w", err)
+	}
+	if err := researcher.RegisterAsUTCPProvider(ctx, client, "agent.researcher", "Specialized research agent"); err != nil {
+		return fmt.Errorf("register researcher: %w", err)
+	}
+	fmt.Println("Registered specialist: agent.researcher")
+
+	// Builder Agent
+	builderModel, err := models.NewGeminiLLM(ctx, "gemini-3-flash-preview", "Builder:")
+	if err != nil {
+		return fmt.Errorf("create builder model: %w", err)
+	}
+	builder, err := agent.New(agent.Options{
+		Model:        builderModel,
+		Memory:       memory.NewSessionMemory(memory.NewMemoryBankWithStore(memory.NewInMemoryStore()), 10),
+		SystemPrompt: "You are an implementation specialist. Turn requirements into architecture and code plans.",
+	})
+	if err != nil {
+		return fmt.Errorf("create builder agent: %w", err)
+	}
+	if err := builder.RegisterAsUTCPProvider(ctx, client, "agent.builder", "Specialized implementation agent"); err != nil {
+		return fmt.Errorf("register builder: %w", err)
+	}
+	fmt.Println("Registered specialist: agent.builder")
+
+	return nil
 }
