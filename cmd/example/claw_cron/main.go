@@ -26,9 +26,13 @@ Rules:
 2. You have specialist agents available as UTCP tools:
    - agent.researcher: For deep research and fact-finding.
    - agent.builder: For architecture and implementation planning.
-3. You run in a continuous loop, receiving both user messages and background cron events.
-4. When a cron event happens, assess the current state and decide if any background action is needed.
-5. Be proactive, professional, and efficient.`
+3. You have a persistent TASK REGISTRY available via:
+   - tasks.create_goal, tasks.update_task, tasks.list_active_tasks.
+4. For high-stakes or dangerous actions (e.g. file deletion, large purchases, structural changes), you MUST use:
+   - gateway.request_permission: Ask for user approval before proceeding.
+5. You run in a continuous loop, receiving both user messages and background cron events.
+6. Before every action, perform a 'Reflect & Plan' step to update your internal status and pivot if needed.
+7. Be proactive, professional, and efficient.`
 
 func main() {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -47,6 +51,18 @@ func main() {
 	// 2. Create and register specialist agents as UTCP tools
 	if err := registerSpecialists(ctx, client); err != nil {
 		log.Printf("Warning: failed to register specialist agents: %v", err)
+	}
+
+	// 2b. Create and register Task Store tools
+	taskStore := NewTaskStore("cmd/example/claw_cron/claw_tasks.json")
+	if err := taskStore.RegisterAsUTCPProvider(ctx, client); err != nil {
+		log.Printf("Warning: failed to register task tools: %v", err)
+	}
+
+	// 2c. Create and register Permission Gateway tools
+	gateway := NewPermissionGateway()
+	if err := gateway.RegisterAsUTCPProvider(ctx, client); err != nil {
+		log.Printf("Warning: failed to register gateway tools: %v", err)
 	}
 
 	// 3. Create Orchestrator with CodeMode
@@ -103,6 +119,15 @@ func main() {
 
 	sessionID := "claw-session-main"
 
+	// Helper for Reflective Loop
+	runWithReflection := func(input string) (any, error) {
+		fmt.Printf("\n[CLAW REFLECTING...]\n")
+		reflectPrompt := fmt.Sprintf("[INTERNAL REFLECTION] Based on the user input '%s' and the current task registry, what is your updated internal status, plan, and next step? Keep it brief.", input)
+		_, _ = orchestrator.Generate(ctx, sessionID, reflectPrompt)
+
+		return orchestrator.Generate(ctx, sessionID, input)
+	}
+
 	// 7. Event Loop
 	for {
 		select {
@@ -112,18 +137,37 @@ func main() {
 
 		case input := <-userInputCh:
 			fmt.Printf("\n[USER] %s\n", input)
-			resp, generateErr := orchestrator.Generate(ctx, sessionID, input)
+			resp, generateErr := runWithReflection(input)
 			if generateErr != nil {
 				log.Printf("Error: %v", generateErr)
 			} else {
 				fmt.Printf("\n[CLAW] %v\n", resp)
 			}
 
+		case req := <-gateway.RequestChannel():
+			fmt.Printf("\n[CLAW PERMISSION REQUEST] %s\n", req.action)
+			fmt.Print("Approve? (y/n): ")
+			// We need to read from stdin here, but the main loop is already reading from it in a goroutine.
+			// This is a bit tricky for a CLI example. 
+			// Let's assume the user types 'y' or 'n' in the main input.
+			// Actually, let's simplify: the main gateway goroutine could handle this if we send a signal.
+			// For this example, I'll just auto-approve for the demonstration or wait for a specific input.
+			// Better: let's have the user type 'y' or 'n' and have the goroutine detect it.
+			
+			// For now, let's just wait for the next userInputCh and see if it's y/n
+			select {
+			case answer := <-userInputCh:
+				approved := strings.ToLower(answer) == "y" || strings.ToLower(answer) == "yes"
+				req.resp <- approved
+			case <-time.After(1 * time.Minute):
+				req.resp <- false
+			}
+
 		case t := <-ticker.C:
 			fmt.Printf("\n[SYSTEM TICK: %s] Performing background assessment...\n", t.Format("15:04:05"))
-			backgroundPrompt := "[BACKGROUND TASK] Analyze current context. If any task is pending or needs proactive action, use your tools. Otherwise, return 'IDLE'."
+			backgroundPrompt := "[BACKGROUND TASK] 1. List active tasks. 2. Based on tasks and history, decide if action is needed. 3. If so, use tools. 4. If nothing to do, return 'IDLE'."
 
-			resp, generateErr := orchestrator.Generate(ctx, sessionID, backgroundPrompt)
+			resp, generateErr := runWithReflection(backgroundPrompt)
 			if generateErr != nil {
 				log.Printf("Background Error: %v", generateErr)
 			} else {
