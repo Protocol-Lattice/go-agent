@@ -14,6 +14,14 @@ import (
 // GenerateStream provides a streaming interface for the agent's generation process.
 // It follows the same logic as Generate but returns a channel of chunks.
 func (a *Agent) GenerateStream(ctx context.Context, sessionID, userInput string) (<-chan models.StreamChunk, error) {
+	if a.InputGuardrails != nil {
+		transformed, err := a.InputGuardrails.ValidateAndTransform(ctx, userInput)
+		if err != nil {
+			return nil, err
+		}
+		userInput = transformed
+	}
+
 	trimmed := strings.TrimSpace(userInput)
 	if trimmed == "" {
 		return nil, errors.New("user input is empty")

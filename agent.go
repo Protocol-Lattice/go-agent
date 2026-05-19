@@ -61,6 +61,7 @@ type Agent struct {
 
 	AllowUnsafeTools bool
 	Guardrails       *OutputGuardrails
+	InputGuardrails  *InputGuardrails
 }
 
 // Options configure a new Agent.
@@ -79,6 +80,7 @@ type Options struct {
 	CodeChain         *chain.UtcpChainClient
 	AllowUnsafeTools  bool
 	Guardrails        *OutputGuardrails
+	InputGuardrails   *InputGuardrails
 }
 
 // New creates an Agent with the provided options.
@@ -149,7 +151,9 @@ func New(opts Options) (*Agent, error) {
 		CodeChain:         opts.CodeChain,
 		AllowUnsafeTools:  opts.AllowUnsafeTools,
 		Guardrails:        opts.Guardrails,
+		InputGuardrails:   opts.InputGuardrails,
 	}
+
 
 	return a, nil
 }
@@ -1148,6 +1152,14 @@ func (a *Agent) EnsureSpaceGrants(sessionID string, spaces []string) {
 }
 
 func (a *Agent) Generate(ctx context.Context, sessionID, userInput string) (any, error) {
+	if a.InputGuardrails != nil {
+		transformed, err := a.InputGuardrails.ValidateAndTransform(ctx, userInput)
+		if err != nil {
+			return "", err
+		}
+		userInput = transformed
+	}
+
 	trimmed := strings.TrimSpace(userInput)
 	if trimmed == "" {
 		return "", errors.New("user input is empty")
@@ -1312,6 +1324,14 @@ func (a *Agent) GenerateWithFiles(
 	userInput string,
 	files []models.File,
 ) (string, error) {
+	if a.InputGuardrails != nil {
+		transformed, err := a.InputGuardrails.ValidateAndTransform(ctx, userInput)
+		if err != nil {
+			return "", err
+		}
+		userInput = transformed
+	}
+
 	if strings.TrimSpace(userInput) == "" && len(files) == 0 {
 		return "", errors.New("both user input and files are empty")
 	}

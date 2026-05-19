@@ -100,3 +100,42 @@ func (g *OutputGuardrails) ValidateAndRepair(ctx context.Context, response strin
 	}
 	return final, nil
 }
+
+// InputSafetyPolicy defines an interface for validating LLM inputs.
+type InputSafetyPolicy interface {
+	Validate(ctx context.Context, input string) error
+}
+
+// InputTransformer defines an interface for modifying or sanitizing LLM inputs.
+type InputTransformer interface {
+	Transform(ctx context.Context, input string) (string, error)
+}
+
+// InputGuardrails holds the input safety policies and transformers.
+type InputGuardrails struct {
+	SafetyPolicies []InputSafetyPolicy
+	Transformers   []InputTransformer
+}
+
+// ValidateAndTransform applies safety checks and transformers to the input.
+func (g *InputGuardrails) ValidateAndTransform(ctx context.Context, input string) (string, error) {
+	if g == nil {
+		return input, nil
+	}
+	for _, policy := range g.SafetyPolicies {
+		if err := policy.Validate(ctx, input); err != nil {
+			return "", err
+		}
+	}
+
+	final := input
+	var err error
+	for _, transformer := range g.Transformers {
+		final, err = transformer.Transform(ctx, final)
+		if err != nil {
+			return "", err
+		}
+	}
+	return final, nil
+}
+
