@@ -343,13 +343,12 @@ if err := restored.Restore(data); err != nil {
 
 See `cmd/example/checkpoint` for a disk-backed example.
 
-## CodeMode And UTCP Chains
+## CodeMode
 
 Lattice can integrate with UTCP CodeMode and chain execution:
 
 - `adk.WithUTCP(client)` makes remote/discovered UTCP tools available to the agent.
 - `adk.WithCodeModeUtcp(client, model)` enables Go-code tool orchestration through CodeMode.
-- `adk.WithChainModeUtcp(client)` enables multi-step UTCP chain execution.
 - `Agent.AllowUnsafeTools` must be enabled before `codemode.run_code` can execute.
 
 Use these features only in trusted environments. CodeMode executes generated Go snippets through the configured UTCP runtime.
