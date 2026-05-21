@@ -1,729 +1,485 @@
+# Lattice
+
 [![Go Version](https://img.shields.io/badge/Go-1.25-00ADD8?logo=go&logoColor=white)](https://go.dev/dl/)
 [![CI Status](https://github.com/Protocol-Lattice/go-agent/actions/workflows/go.yml/badge.svg)](https://github.com/Protocol-Lattice/go-agent/actions/workflows/go.yml)
 [![Go Reference](https://pkg.go.dev/badge/github.com/Protocol-Lattice/go-agent.svg)](https://pkg.go.dev/github.com/Protocol-Lattice/go-agent)
 [![Go Report Card](https://goreportcard.com/badge/github.com/Protocol-Lattice/go-agent)](https://goreportcard.com/report/github.com/Protocol-Lattice/go-agent)
 
-**Lattice** helps you build AI agents in Go with clean abstractions for LLMs, tool calling, retrieval-augmented memory, and multi-agent coordination. Focus on your domain logic while Lattice handles the orchestration plumbing.
+Lattice is a Go framework for building AI agents with pluggable LLM providers, memory, file context, guardrails, UTCP tool orchestration, and multi-agent coordination.
 
-## Why Lattice?
+Use it when you want agent runtime pieces that stay idiomatic in Go:
 
-Building production AI agents requires more than just LLM calls. You need:
+- A small `agent.Agent` core with `Generate`, `GenerateWithFiles`, and `GenerateStream`
+- Provider adapters for Gemini, OpenAI, Anthropic, Ollama, and a local dummy model
+- Short-term memory plus vector-store backed long-term memory
+- ADK modules for wiring models, memory, tools, sub-agents, CodeMode, and UTCP
+- Agent-as-tool patterns for specialist agents and hierarchical workflows
+- Input/output guardrails and checkpoint/restore support
 
-- **Pluggable LLM providers** that swap without rewriting logic
-- **Tool calling** that works across different model APIs
-- **Memory systems** that remember context across conversations
-- **Multi-agent coordination** for complex workflows
-- **Testing infrastructure** that doesn't hit external APIs
+## Install
 
-Lattice provides all of this with idiomatic Go interfaces and minimal dependencies.
+```bash
+go get github.com/Protocol-Lattice/go-agent
+```
 
-## Features
-
-- 🧩 **Modular Architecture** – Compose agents from reusable modules with declarative configuration
-- 🤖 **Multi-Agent Support** – Coordinate specialist agents through a shared catalog and delegation system
-- 🔧 **Rich Tooling** – Implement the `Tool` interface once, use everywhere automatically
-- 🧠 **Smart Memory** – RAG-powered memory with importance scoring, MMR retrieval, and automatic pruning
-- 🔌 **Model Agnostic** – Adapters for Gemini, Anthropic, Ollama, or bring your own
-- 📡 **UTCP Ready** – First-class Universal Tool Calling Protocol support
-- ⚡ **High Performance** – Optimized with LRU caching, pre-allocated buffers, and concurrent operations
-
-### ⚡ Performance Optimizations
-
-Lattice is built for production speed:
-
-- **10-50x faster MIME normalization** with pre-computed lookup tables and caching
-- **40-60% fewer allocations** in prompt building through buffer pre-allocation
-- **LRU cache infrastructure** for sub-millisecond cached operations (184 ns/op)
-- **Concurrent utilities** for parallel processing with configurable worker pools
-- **Optimized string operations** reduce overhead by 30-50%
-
-See [PERFORMANCE_SUMMARY.md](./PERFORMANCE_SUMMARY.md) for detailed benchmarks.
-
-
-## Quick Start
-
-### Installation
+For this repository:
 
 ```bash
 git clone https://github.com/Protocol-Lattice/go-agent.git
-cd lattice-agent
-go mod download
+cd go-agent
+go test ./...
 ```
 
-### Basic Usage
+The module currently targets Go `1.25.0`.
+
+## Quick Start
+
+This example runs without API keys. It uses the dummy model and in-memory storage, so it is safe for tests and local wiring checks.
 
 ```go
 package main
 
 import (
 	"context"
-	"flag"
+	"fmt"
 	"log"
 
-	"github.com/Protocol-Lattice/go-agent/src/adk"
-	adkmodules "github.com/Protocol-Lattice/go-agent/src/adk/modules"
-	"github.com/Protocol-Lattice/go-agent"
-	"github.com/Protocol-Lattice/go-agent/src/subagents"
-
+	agent "github.com/Protocol-Lattice/go-agent"
 	"github.com/Protocol-Lattice/go-agent/src/memory"
-	"github.com/Protocol-Lattice/go-agent/src/memory/engine"
 	"github.com/Protocol-Lattice/go-agent/src/models"
-	"github.com/Protocol-Lattice/go-agent/src/tools"
 )
 
 func main() {
-	qdrantURL := flag.String("qdrant-url", "http://localhost:6333", "Qdrant base URL")
-	qdrantCollection := flag.String("qdrant-collection", "adk_memories", "Qdrant collection name")
-	flag.Parse()
 	ctx := context.Background()
 
-	// --- Shared runtime
-	researcherModel, err := models.NewGeminiLLM(ctx, "gemini-2.5-pro", "Research summary:")
-	if err != nil {
-		log.Fatalf("create researcher model: %v", err)
-	}
-	memOpts := engine.DefaultOptions()
+	mem := memory.NewSessionMemory(
+		memory.NewMemoryBankWithStore(memory.NewInMemoryStore()),
+		8,
+	)
 
-	adkAgent, err := adk.New(ctx,
-		adk.WithDefaultSystemPrompt("You orchestrate a helpful assistant team."),
-		adk.WithSubAgents(subagents.NewResearcher(researcherModel)),
+	a, err := agent.New(agent.Options{
+		Model:        models.NewDummyLLM("local:"),
+		Memory:       mem,
+		SystemPrompt: "You are concise and helpful.",
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	out, err := a.Generate(ctx, "demo-session", "Say hello in one sentence.")
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	fmt.Println(out)
+}
+```
+
+## Real Model Providers
+
+Use `models.NewLLMProvider` when you want provider selection from configuration or flags.
+
+```go
+model, err := models.NewLLMProvider(ctx, "openai", "gpt-4o-mini", "")
+if err != nil {
+	log.Fatal(err)
+}
+```
+
+Supported provider names:
+
+| Provider | Aliases | Required environment |
+| --- | --- | --- |
+| Gemini | `gemini`, `google` | `GOOGLE_API_KEY` or `GEMINI_API_KEY` |
+| OpenAI | `openai` | `OPENAI_API_KEY` or `OPENAI_KEY` |
+| Anthropic | `anthropic`, `claude` | `ANTHROPIC_API_KEY` |
+| Ollama | `ollama` | optional `OLLAMA_HOST`, defaults to `http://localhost:11434` |
+
+Embeddings are selected with `memory.AutoEmbedder()`.
+
+| Variable | Purpose |
+| --- | --- |
+| `ADK_EMBED_PROVIDER` | `openai`, `google`, `gemini`, `ollama`, `claude`, `anthropic`, or `fastembed` |
+| `ADK_EMBED_MODEL` | Provider-specific embedding model |
+
+If no embedding provider can be created, Lattice falls back to `DummyEmbedder`.
+
+## ADK Setup
+
+For applications, prefer the ADK when you want dependency injection around model, memory, tools, and runtime features.
+
+```go
+package main
+
+import (
+	"context"
+	"log"
+
+	"github.com/Protocol-Lattice/go-agent/src/adk"
+	"github.com/Protocol-Lattice/go-agent/src/adk/modules"
+	"github.com/Protocol-Lattice/go-agent/src/memory"
+	"github.com/Protocol-Lattice/go-agent/src/models"
+)
+
+func main() {
+	ctx := context.Background()
+	memOpts := memory.DefaultOptions()
+
+	kit, err := adk.New(ctx,
+		adk.WithDefaultSystemPrompt("You coordinate a helpful assistant."),
 		adk.WithModules(
-			adkmodules.NewModelModule("gemini-model", func(_ context.Context) (models.Agent, error) {
-				return models.NewGeminiLLM(ctx, "gemini-2.5-pro", "Swarm orchestration:")
+			modules.NewModelModule("llm", func(ctx context.Context) (models.Agent, error) {
+				return models.NewLLMProvider(ctx, "openai", "gpt-4o-mini", "")
 			}),
-			adkmodules.InQdrantMemory(100000, *qdrantURL, *qdrantCollection, memory.AutoEmbedder(), &memOpts),
+			modules.InMemoryMemoryModule(8, memory.AutoEmbedder(), &memOpts),
 		),
 	)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	agent, err := adkAgent.BuildAgent(ctx)
+	a, err := kit.BuildAgent(ctx)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	// Use the agent
-	resp, err := agent.Generate(ctx, "SessionID", "What is pgvector")
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	log.Println(resp)
+	_, _ = a.Generate(ctx, "user-123", "Draft a short project update.")
 }
 ```
 
-### Running Examples
+Use direct `agent.New` for small programs and tests. Use `adk.New` once you need reusable modules, shared sessions, provider selection, or UTCP runtime wiring.
 
-```bash
-# Interactive CLI demo
-go run cmd/demo/main.go
+## Memory
 
-# Multi-agent coordination
-go run cmd/team/main.go
+Every agent needs a `*memory.SessionMemory`. The session layer keeps recent conversation turns and can retrieve long-term records from a vector store.
 
-# Quick start example
-go run cmd/quickstart/main.go
+Common backends:
 
-# CodeMode + Agent as UTCP Tool
-go run cmd/example/codemode/main.go
+| Backend | Constructor or module |
+| --- | --- |
+| In-memory | `memory.NewInMemoryStore()` or `modules.InMemoryMemoryModule(...)` |
+| PostgreSQL + pgvector | `memory.NewPostgresStore(...)` or `modules.InPostgresMemory(...)` |
+| Qdrant | `memory.NewQdrantStore(...)` or `modules.InQdrantMemory(...)` |
+| MongoDB | `memory.NewMongoStore(...)` or `modules.InMongoMemory(...)` |
+| Neo4j | `memory.NewNeo4jStore(...)` or `modules.InNeo4jMemory(...)` |
 
-# Multi-Agent Workflow Orchestration
-go run cmd/example/codemode_utcp_workflow/main.go
-
-# Agent-to-Agent Communication via UTCP
-go run cmd/example/agent_as_tool/main.go
-go run cmd/example/agent_as_utcp_codemode/main.go
-
-# Agent State Persistence (Checkpoint/Restore)
-go run cmd/example/checkpoint/main.go
-```
-
-#### Example Descriptions
-
-- **`cmd/example/codemode/main.go`**: Demonstrates how to use CodeMode to enable agents to call UTCP tools (including other agents) via generated Go code. Shows the pattern: User Input → LLM generates `codemode.CallTool()` → UTCP executes tool.
-
-- **`cmd/example/codemode_utcp_workflow/main.go`**: Shows orchestrating multi-step workflows where multiple specialist agents (analyst, writer, reviewer) work together through UTCP tool calls.
-
-- **`cmd/example/agent_as_tool/main.go`**: Demonstrates exposing agents as UTCP tools using `RegisterAsUTCPProvider()`, enabling agent-to-agent communication and hierarchical agent architectures.
-- **`cmd/example/agent_as_utcp_codemode/main.go`**: Shows an agent exposed as a UTCP tool and orchestrated via CodeMode, illustrating natural language to tool call generation.
-- **`cmd/example/checkpoint/main.go`**: Demonstrates how to checkpoint an agent's state to disk and restore it later, preserving conversation history and shared space memberships.
-
-
-## Project Structure
-
-```
-lattice-agent/
-├── cmd/
-│   ├── demo/          # Interactive CLI with tools, delegation, and memory
-│   ├── quickstart/    # Minimal getting-started example
-│   └── team/          # Multi-agent coordination demos
-├── pkg/
-│   ├── adk/           # Agent Development Kit and module system
-│   ├── memory/        # Memory engine and vector store adapters
-│   ├── models/        # LLM provider adapters (Gemini, Ollama, Anthropic)
-│   ├── subagents/     # Pre-built specialist agent personas
-├── └── tools/         # Built-in tools (echo, calculator, time, etc.)
-```
-
-## Configuration
-
-### Environment Variables
-
-| Variable | Description | Required |
-|----------|-------------|----------|
-| `GOOGLE_API_KEY` | Gemini API credentials | For Gemini models |
-| `GEMINI_API_KEY` | Alternative to `GOOGLE_API_KEY` | For Gemini models |
-| `DATABASE_URL` | PostgreSQL connection string | For persistent memory |
-| `ADK_EMBED_PROVIDER` | Embedding provider override | No (defaults to Gemini) |
-
-### Example Configuration
-
-```bash
-export GOOGLE_API_KEY="your-api-key-here"
-export DATABASE_URL="postgres://user:pass@localhost:5432/lattice?sslmode=disable"
-export ADK_EMBED_PROVIDER="gemini"
-```
-
-## Core Concepts
-
-### Memory Engine
-
-Lattice includes a sophisticated memory system with retrieval-augmented generation (RAG):
+Minimal in-memory setup:
 
 ```go
-store := memory.NewInMemoryStore() // or PostgreSQL/Qdrant
-engine := memory.NewEngine(store, memory.Options{}).
-    WithEmbedder(yourEmbedder)
-
-sessionMemory := memory.NewSessionMemory(
-    memory.NewMemoryBankWithStore(store), 
-    8, // context window size
-).WithEngine(engine)
-```
-
-Features:
-- **Importance Scoring** – Automatically weights memories by relevance
-- **MMR Retrieval** – Maximal Marginal Relevance for diverse results
-- **Auto-Pruning** – Removes stale or low-value memories
-- **Multiple Backends** – In-memory, PostgreSQL+pgvector,mongodb, neo4j or Qdrant
-
-### Tool System
-
-Create custom tools by implementing a simple interface:
-
-```go
-package tools
-
-import (
-        "context"
-        "fmt"
-        "strings"
-
-        "github.com/Protocol-Lattice/go-agent"
+mem := memory.NewSessionMemory(
+	memory.NewMemoryBankWithStore(memory.NewInMemoryStore()),
+	8,
 )
+```
 
-// EchoTool repeats the provided input. Useful for testing tool wiring.
+Persistent stores that support schema setup implement `memory.SchemaInitializer`.
+
+```go
+store, err := memory.NewPostgresStore(ctx, connStr)
+if err != nil {
+	log.Fatal(err)
+}
+defer store.Close()
+
+if err := store.CreateSchema(ctx, ""); err != nil {
+	log.Fatal(err)
+}
+```
+
+## File Context
+
+Use `GenerateWithFiles` when you already have file bytes in memory. Text files are included in the prompt context; supported image/video MIME types are passed through provider-specific paths where available.
+
+```go
+files := []models.File{
+	{
+		Name: "notes.md",
+		MIME: "text/markdown",
+		Data: []byte("# Notes\nShip the README update."),
+	},
+}
+
+out, err := a.GenerateWithFiles(ctx, "demo-session", "Summarize this file.", files)
+```
+
+## Tools
+
+Tools are small Go interfaces with a JSON-schema-like spec and an invocation function.
+
+```go
 type EchoTool struct{}
 
-func (e *EchoTool) Spec() agent.ToolSpec {
-        return agent.ToolSpec{
-                Name:        "echo",
-                Description: "Echoes the provided text back to the caller.",
-                InputSchema: map[string]any{
-                        "type": "object",
-                        "properties": map[string]any{
-                                "input": map[string]any{
-                                        "type":        "string",
-                                        "description": "Text to echo back.",
-                                },
-                        },
-                        "required": []any{"input"},
-                },
-        }
+func (EchoTool) Spec() agent.ToolSpec {
+	return agent.ToolSpec{
+		Name:        "echo",
+		Description: "Returns the input text.",
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"input": map[string]any{
+					"type": "string",
+				},
+			},
+			"required": []string{"input"},
+		},
+	}
 }
 
-func (e *EchoTool) Invoke(_ context.Context, req agent.ToolRequest) (agent.ToolResponse, error) {
-        raw := req.Arguments["input"]
-        if raw == nil {
-                return agent.ToolResponse{Content: ""}, nil
-        }
-        return agent.ToolResponse{Content: strings.TrimSpace(fmt.Sprint(raw))}, nil
+func (EchoTool) Invoke(ctx context.Context, req agent.ToolRequest) (agent.ToolResponse, error) {
+	return agent.ToolResponse{Content: fmt.Sprint(req.Arguments["input"])}, nil
 }
 ```
 
-Register tools with the module system and they're automatically available to all agents.
-
-### Multi-Agent Coordination
-
-Use **Shared Spaces** to coordinate multiple agents with shared memory
-
-Perfect for:
-- Team-based workflows where agents need shared context
-- Complex tasks requiring specialist coordination
-- Projects with explicit access control requirements
-
-### Agent Composability
-
-Lattice treats Agents as first-class Tools. This allows you to expose any agent as a tool to another agent, enabling powerful hierarchical or mesh architectures.
-
-**Why use this?**
-- **Specialization**: Create small, focused agents (e.g., "Researcher", "Coder", "Reviewer") and orchestrate them with a "Manager" agent.
-- **Encapsulation**: Hide complex multi-step workflows behind a simple natural language interface.
-- **Scalability**: Build complex systems by composing simple, testable agents.
-
-### How It Works
-
-When you wrap an agent as a tool:
-1. **Context Isolation**: The sub-agent runs in its own session (namespaced like `parent_session.sub.tool_name`). It has its own memory and history, preventing the parent's context window from being polluted with the sub-agent's internal thought process.
-2. **Recursive Capability**: Since a sub-agent is just a tool, it can have its own tools—including *other* agents. This allows for arbitrarily deep hierarchies (e.g., CEO -> CTO -> Lead Dev -> Coder).
-3. **Standard Interface**: The parent agent doesn't know it's talking to another AI. It simply sees a tool that takes an instruction and returns a result. This means you can swap a "Researcher Agent" with a "Google Search Tool" without changing the parent's logic.
+Register tools directly when constructing an agent to keep them in the agent catalog and expose them through `a.Tools()` or ADK tool bundles:
 
 ```go
-// 1. Create a specialist agent
+a, err := agent.New(agent.Options{
+	Model:  model,
+	Memory: mem,
+	Tools:  []agent.Tool{EchoTool{}},
+})
+```
+
+For model-selected tool execution across providers and processes, wire execution through UTCP. Agents can also be exposed as UTCP tools.
+
+## Agents As Tools
+
+Any `*agent.Agent` can be wrapped as a local `agent.Tool`.
+
+```go
 researcher, _ := agent.New(agent.Options{
-    SystemPrompt: "You are a researcher. Search for facts.",
-    // ...
+	Model:        researcherModel,
+	Memory:       researcherMemory,
+	SystemPrompt: "You are a research specialist.",
 })
 
-// 2. Create a manager agent that uses the researcher
 manager, _ := agent.New(agent.Options{
-    SystemPrompt: "You are a manager. Delegate tasks.",
-    Tools: []agent.Tool{
-        // Expose the researcher as a tool!
-        researcher.AsTool("researcher", "Delegates research tasks to the specialist."),
-    },
+	Model:        managerModel,
+	Memory:       managerMemory,
+	SystemPrompt: "You delegate research work.",
+	Tools: []agent.Tool{
+		researcher.AsTool("researcher", "Delegates research to a specialist agent."),
+	},
 })
-
-// 3. The manager can now call the researcher tool
-// User: "Find out why the sky is blue"
-// Manager -> calls tool "researcher" -> Researcher Agent runs -> returns result -> Manager answers
 ```
 
-### Exposing Agents as UTCP Tools
-
-In addition to the internal `Tool` interface, Lattice agents can be exposed as **Universal Tool Calling Protocol (UTCP)** tools. This allows them to be consumed by any UTCP-compliant client, enabling cross-language and cross-platform agent orchestration.
-
-**Key Functions:**
-
-- `agent.AsUTCPTool(name, description)`: Wraps an agent as a standalone UTCP `tools.Tool` struct.
-- `agent.RegisterAsUTCPProvider(ctx, client, name, description)`: Automatically registers the agent as a tool provider on a UTCP client.
-
-**Example:**
+You can also register an agent as a UTCP provider:
 
 ```go
-// 1. Create your specialist agent
-researcher, _ := agent.New(agent.Options{
-    SystemPrompt: "You are a researcher.",
+client, err := utcp.NewUTCPClient(ctx, &utcp.UtcpClientConfig{}, nil, nil)
+if err != nil {
+	log.Fatal(err)
+}
+
+if err := researcher.RegisterAsUTCPProvider(
+	ctx,
+	client,
+	"agent.researcher",
+	"Specialist research agent",
+); err != nil {
+	log.Fatal(err)
+}
+
+result, err := client.CallTool(ctx, "agent.researcher", map[string]any{
+	"instruction": "Find three facts about pgvector.",
 })
-
-// 2. Initialize a UTCP client
-client, err := utcp.NewUTCPClient(ctx, nil, nil, nil)
-if err != nil {
-    log.Fatal(err)
-}
-
-// 3. Register the agent as a UTCP provider
-// This makes the agent available as a tool named "researcher.agent"
-err := researcher.RegisterAsUTCPProvider(ctx, client, "researcher.agent", "Deep research agent")
-if err != nil {
-    log.Fatal(err)
-}
-
-// 4. Call the agent via UTCP
-// The tool accepts 'instruction' and optional 'session_id'
-result, err := client.CallTool(ctx, "researcher.agent", map[string]any{
-    "instruction": "Analyze the latest trends in AI agents",
-}, "researcher", nil)
-
-fmt.Println(result["response"])
 ```
 
-**Benefits:**
-- **Interoperability**: Your Go agents can be called by Python scripts, CLI tools, or other systems using UTCP.
-- **Standardization**: Uses the standard UTCP schema for inputs and outputs.
-- **Zero Overhead**: Uses an in-process transport when running within the same Go application, avoiding network latency.
+## Guardrails
 
-### Agent State Persistence
-
-Lattice supports **Checkpointing and Restoration**, allowing you to pause agents mid-task, persist their state to disk or a database, and resume them later (even after a crash or restart).
-
-**Key Methods:**
-- `agent.Checkpoint()`: Serializes the agent's state (system prompt, short-term memory, shared space memberships) to a `[]byte`.
-- `agent.Restore(data []byte)`: Rehydrates an agent instance from a checkpoint.
-
-**Example:**
+Input guardrails validate or transform user input before the model call. Output guardrails validate or repair model responses before they are returned.
 
 ```go
-// 1. Checkpoint the agent
-data, err := agent.Checkpoint()
+inputGuardrails := &agent.InputGuardrails{
+	SafetyPolicies: []agent.InputSafetyPolicy{
+		agent.NewPromptInjectionDetectorPolicy(nil),
+	},
+	Transformers: []agent.InputTransformer{
+		agent.NewPIIMaskerTransformer(true, true, false, false),
+	},
+}
+
+outputPolicy, err := agent.NewRegexBlocklistPolicy([]string{
+	`(?i)\bpassword\s*=`,
+})
 if err != nil {
-    log.Fatal(err)
+	log.Fatal(err)
 }
-// Save 'data' to file/DB...
 
-// 2. Restore the agent (later or after crash)
-// Create a fresh agent instance first
-newAgent, err := agent.New(opts) 
+a, err := agent.New(agent.Options{
+	Model:           model,
+	Memory:          mem,
+	InputGuardrails: inputGuardrails,
+	Guardrails: &agent.OutputGuardrails{
+		SafetyPolicies: []agent.SafetyPolicy{outputPolicy},
+	},
+})
+```
+
+See `cmd/example/guardrails` for a complete runnable example.
+
+## Checkpoint And Restore
+
+Checkpointing serializes the agent system prompt, short-term memory, shared-space memberships, and timestamp.
+
+```go
+data, err := a.Checkpoint()
 if err != nil {
-    log.Fatal(err)
+	log.Fatal(err)
 }
 
-// Restore state
-if err := newAgent.Restore(data); err != nil {
-    log.Fatal(err)
+restored, err := agent.New(agent.Options{
+	Model:  model,
+	Memory: freshMemory,
+})
+if err != nil {
+	log.Fatal(err)
 }
-// newAgent now has the same memory and context as the original
-```
 
-## Why Use TOON?
-
-**Token-Oriented Object Notation (TOON)** is integrated into Lattice to dramatically reduce token consumption when passing structured data to and from LLMs. This is especially critical for AI agent workflows where context windows are precious and API costs scale with token usage.
-
-### The Problem with JSON
-
-Traditional JSON is verbose and wastes tokens on repetitive syntax. Consider passing agent memory or tool responses:
-
-```json
-{
-  "memories": [
-    { "id": 1, "content": "User prefers Python", "importance": 0.9, "timestamp": "2025-01-15" },
-    { "id": 2, "content": "User is building CLI tools", "importance": 0.85, "timestamp": "2025-01-14" },
-    { "id": 3, "content": "User works with PostgreSQL", "importance": 0.8, "timestamp": "2025-01-13" }
-  ]
+if err := restored.Restore(data); err != nil {
+	log.Fatal(err)
 }
 ```
 
-**Token count:** ~180 tokens
+See `cmd/example/checkpoint` for a disk-backed example.
 
-### The TOON Solution
+## CodeMode And UTCP Chains
 
-TOON compresses the same data by eliminating redundancy:
+Lattice can integrate with UTCP CodeMode and chain execution:
 
-```
-memories[3]{id,content,importance,timestamp}:
-1,User prefers Python,0.9,2025-01-15
-2,User is building CLI tools,0.85,2025-01-14
-3,User works with PostgreSQL,0.8,2025-01-13
-```
+- `adk.WithUTCP(client)` makes remote/discovered UTCP tools available to the agent.
+- `adk.WithCodeModeUtcp(client, model)` enables Go-code tool orchestration through CodeMode.
+- `adk.WithChainModeUtcp(client)` enables multi-step UTCP chain execution.
+- `Agent.AllowUnsafeTools` must be enabled before `codemode.run_code` can execute.
 
-**Token count:** ~85 tokens
+Use these features only in trusted environments. CodeMode executes generated Go snippets through the configured UTCP runtime.
 
-**Savings: ~53% fewer tokens**
+## Examples
 
-### Why This Matters for AI Agents
+No-key examples:
 
-1. **Larger Context Windows** – Fit more memories, tool results, and conversation history into the same context limit
-2. **Lower API Costs** – Reduce your LLM API bills by up to 50% on structured data
-3. **Faster Processing** – Fewer tokens mean faster inference times and lower latency
-4. **Better Memory Systems** – Store and retrieve more historical context without hitting token limits
-5. **Multi-Agent Communication** – Pass more information between coordinating agents efficiently
-
-### When TOON Shines
-
-TOON is particularly effective for:
-
-- **Agent Memory Banks** – Retrieving and formatting conversation history
-- **Tool Responses** – Returning structured data from database queries or API calls
-- **Multi-Agent Coordination** – Sharing state between specialist agents
-- **Batch Operations** – Processing multiple similar records (users, tasks, logs)
-- **RAG Contexts** – Injecting retrieved documents with metadata
-
-### Example: Memory Retrieval
-
-When your agent queries its memory system, TOON can encode dozens of memories in the space where JSON would fit only a handful:
-
-```go
-// Retrieve memories
-memories := sessionMemory.Retrieve(ctx, "user preferences", 20)
-
-// Encode with TOON for LLM context
-encoded, _ := toon.Marshal(memories, toon.WithLengthMarkers(true))
-
-// Pass to LLM with 40-60% fewer tokens than JSON
-prompt := fmt.Sprintf("Based on these memories:\n%s\n\nAnswer the user's question.", encoded)
+```bash
+go run ./cmd/example/composability
+go run ./cmd/example/guardrails
+go run ./cmd/example/checkpoint
 ```
 
-### Human-Readable Format
+Provider-backed examples:
 
-Despite its compactness, TOON remains readable for debugging and development. The format explicitly declares its schema, making it self-documenting:
+```bash
+# Requires GOOGLE_API_KEY or GEMINI_API_KEY by default.
+go run ./cmd/example/codemode
 
-```
-users[2]{id,name,role}:
-1,Alice,admin
-2,Bob,user
-```
+# Requires provider credentials and a Qdrant instance unless flags are changed.
+go run ./cmd/app -provider openai -model gpt-4o-mini -message "Summarize this project"
 
-You can immediately see: 2 users, with fields id/name/role, followed by their values.
-
-### Getting Started with TOON
-
-Lattice automatically uses TOON for internal data serialization. To use it in your custom tools or memory adapters:
-
-```go
-import "github.com/toon-format/toon-go"
-
-// Encode your structs
-encoded, err := toon.Marshal(data, toon.WithLengthMarkers(true))
-
-// Decode back to structs
-var result MyStruct
-err = toon.Unmarshal(encoded, &result)
-
-// Or decode to dynamic maps
-var doc map[string]any
-err = toon.Unmarshal(encoded, &doc)
+# Requires provider credentials and PostgreSQL + pgvector unless flags are changed.
+go run ./cmd/example -provider openai -model gpt-4o-mini -message "Summarize this project"
 ```
 
-For more details, see the [TOON specification](https://github.com/toon-format/spec/blob/main/SPEC.md).
+Specialized workflows:
 
----
+| Path | Demonstrates |
+| --- | --- |
+| `cmd/example/agent_as_tool` | Registering an agent as a UTCP tool |
+| `cmd/example/agent_as_utcp_codemode` | Orchestrating agent tools through CodeMode |
+| `cmd/example/codemode_utcp_workflow` | Analyst/writer/reviewer workflow |
+| `cmd/example/autonomous_agent` | Configurable multi-agent coordinator |
+| `cmd/example/autonomous_cron` | Autonomous periodic task pattern |
+| `cmd/example/claw_cron` | Task store, permission gateway, and specialist agents |
+| `cmd/codemode` | CodeMode CLI wiring |
 
-**Bottom Line:** TOON helps your agents do more with less, turning token budgets into a competitive advantage rather than a constraint.
+## Repository Layout
 
-## 🧠 Tool Orchestrator (LLM-Driven UTCP Tool Selection)
-
-The **Tool Orchestrator** is an intelligent decision engine that lets the LLM choose when and how to call UTCP tools.
-It analyzes user input, evaluates available tools, and returns a structured JSON plan describing the next action.
-
-> This brings `go-agent` to the same capability tier as OpenAI’s *tool choice*, but with fully pluggable **UTCP** backends and Go-native execution.
-
----
-
-### 🎯 What It Does
-
-* Interprets the user’s request
-* Loads and renders all available UTCP tools
-* Allows the LLM to reason using **TOON-Go**
-* Produces a strict JSON decision object:
-
-  ```json
-  {
-    "use_tool": true,
-    "tool_name": "search.files",
-    "arguments": { "query": "config" },
-    "reason": "User asked to look for configuration files"
-  }
-  ```
-* Executes the chosen tool deterministically
-
----
-
-### ⚙️ How It Works
-
-1. **Collect Tool Definitions**
-
-   ```go
-   rendered := a.renderUtcpToolsForPrompt()
-   ```
-
-2. **Build the Orchestration Prompt**
-
-   ```go
-   choicePrompt := fmt.Sprintf(`
-     You are a UTCP tool selection engine.
-
-     A user asked:
-     %q
-
-     You have access to these UTCP tools:
-     %s
-
-     You can also discover tools dynamically using:
-     search_tools("<query>", <limit>)
-
-     Return ONLY JSON:
-     { "use_tool": ..., "tool_name": "...", "arguments": { }, "reason": "..." }
-   `, userInput, rendered)
-   ```
-
-3. **LLM Makes a Decision (via TOON)**
-
-   * Coordinator executes reasoning
-   * Assistant returns the final JSON only
-
-4. **Agent Executes the Tool**
-
-   * `CallTool`
-   * `SearchTools`
-   * `CallToolStream`
-
-5. **The result becomes the agent’s final response**
-
----
-
-## 🧩 Why TOON-Go Improves Tool Selection
-
-The orchestrator uses **TOON** as its structured reasoning layer:
-
-* Coordinator → analyzes tool options
-* Assistant → returns the strict JSON
-* No hallucinated formatting
-* Easy to debug via TOON traces
-* Session memory stores the entire reasoning trajectory
-
-This yields **stable, deterministic** tool choice behavior.
-
----
-
-## 🚀 Example
-
-### **User**
-
-> find all files containing “db connection” in the workspace
-
-### **LLM Output**
-
-```json
-{
-  "use_tool": true,
-  "tool_name": "search.files",
-  "arguments": {
-    "query": "db connection",
-    "limit": 20
-  },
-  "reason": "User wants to search through the workspace files"
-}
+```text
+.
+|-- agent.go                 # Core Agent runtime
+|-- agent_stream.go          # Streaming responses
+|-- agent_tool.go            # Agent-as-tool and UTCP provider adapters
+|-- input_guardrails.go      # Input validation and transforms
+|-- safety_policies.go       # Output safety policies
+|-- catalog.go               # Tool and sub-agent registries
+|-- src/
+|   |-- adk/                 # Agent Development Kit and modules
+|   |-- cache/               # LRU cache utilities
+|   |-- concurrent/          # Worker pool helpers
+|   |-- helpers/             # Small CLI/config helpers
+|   |-- memory/              # Session memory, engine, stores, embedders
+|   |-- models/              # LLM provider adapters
+|   |-- subagents/           # Built-in specialist agents
+|   `-- swarm/               # Multi-agent coordination primitives
+`-- cmd/
+    |-- app/                 # Qdrant-backed CLI
+    |-- codemode/            # CodeMode CLI
+    `-- example/             # Runnable examples
 ```
-
-### **Agent Execution**
-
-The `search.files` UTCP tool is invoked, and its direct output is returned to the user.
-
----
-
----
-
-## 🧵 Works Seamlessly with CodeMode + Chain
-
-### **CodeMode**
-
-UTCP tool calls can run inside the Go DSL:
-
-```go
-r, _ := codemode.CallTool("echo", map[string]any{"input": "hi"})
-```
-
-### **ChainStep**
-
-The orchestrator can:
-
-* call a tool
-* run a chain step
-* discover tools dynamically
-* combine reasoning + execution
-
-This makes `go-agent` one of the first Go frameworks with multi-step, LLM-driven tool-routing.
-
 
 ## Development
 
-### Running Tests
-
 ```bash
-# Run all tests
+# Run all tests.
 go test ./...
 
-# Run with coverage
-go test -cover ./...
+# Run one package.
+go test ./src/memory/engine
 
-# Run specific package tests
-go test ./pkg/memory/...
+# Run one test.
+go test ./... -run TestCheckpoint
+
+# Format changed Go files.
+gofmt -w path/to/file.go
 ```
 
-### Code Style
+FastEmbed support is behind the `fastembed` build tag:
 
-We follow standard Go conventions:
-- Use `gofmt` for formatting
-- Follow [Effective Go](https://golang.org/doc/effective_go.html) guidelines
-- Add tests for new features
-- Update documentation when adding capabilities
+```bash
+go test -tags fastembed ./src/memory/embed
+```
 
-### Adding New Components
+## Adding Components
 
-**New LLM Provider:**
-1. Implement the `models.LLM` interface in `pkg/models/`
-2. Add provider-specific configuration
-3. Update documentation and examples
+Add a model provider by implementing `src/models.Agent`:
 
-**New Tool:**
-1. Implement `agent.Tool` interface in `pkg/tools/`
-2. Register with the tool module system
-3. Add tests and usage examples
+```go
+type Agent interface {
+	Generate(context.Context, string) (any, error)
+	GenerateWithFiles(context.Context, string, []File) (any, error)
+	GenerateStream(context.Context, string) (<-chan StreamChunk, error)
+}
+```
 
-**New Memory Backend:**
-1. Implement `memory.VectorStore` interface
-2. Add migration scripts if needed
-3. Update configuration documentation
+Add a memory backend by implementing `memory.VectorStore`. Add `memory.SchemaInitializer` if the backend needs schema/bootstrap support.
 
-## Prerequisites
+Add a tool by implementing `agent.Tool`, then register it through `agent.Options`, an ADK tool provider, or a UTCP provider depending on how it should be discovered and executed.
 
-- **Go** 1.22+ (1.25 recommended)
-- **PostgreSQL** 15+ with `pgvector` extension (optional, for persistent memory)
-- **API Keys** for your chosen LLM provider
+## Troubleshooting
 
-### PostgreSQL Setup (Optional)
+### Missing API Key
 
-For persistent memory with vector search:
+Provider constructors fail when required keys are missing. Set the matching environment variable or use `models.NewDummyLLM` for local tests.
+
+### No Long-Term Memory Results
+
+Check that the session uses a store-backed `MemoryBank`, an embedder is configured, and records have been flushed or stored through the memory engine.
+
+### PostgreSQL Vector Errors
+
+For pgvector-backed memory, enable the extension:
 
 ```sql
 CREATE EXTENSION IF NOT EXISTS vector;
 ```
 
-The memory module handles schema migrations automatically.
+Then run the store schema initializer:
 
-## Troubleshooting
-
-### Common Issues
-
-**Missing pgvector extension**
+```go
+_ = store.CreateSchema(ctx, "")
 ```
-ERROR: type "vector" does not exist
-```
-Solution: Run `CREATE EXTENSION vector;` in your PostgreSQL database.
 
-**API key errors**
-```
-ERROR: authentication failed
-```
-Solution: Verify your API key is correctly set in the environment where you run the application.
+### Tool Not Found
 
-**Tool not found**
-```
-ERROR: tool "xyz" not registered
-```
-Solution: Ensure tool names are unique and properly registered in your tool catalog.
-
-### Getting Help
-
-- Check existing [GitHub Issues](https://github.com/Protocol-Lattice/go-agent/issues)
-- Review the [examples](./cmd/) for common patterns
-- Join discussions in [GitHub Discussions](https://github.com/Protocol-Lattice/go-agent/discussions)
-
-## Contributing
-
-We welcome contributions! Here's how to get started:
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Make your changes with tests
-4. Update documentation
-5. Submit a pull request
-
-Please ensure:
-- Tests pass (`go test ./...`)
-- Code is formatted (`gofmt`)
-- Documentation is updated
-- Commit messages are clear
+Confirm the tool name exactly matches the registered UTCP tool name. Fully qualified names such as `agent.researcher` are preferred when multiple providers expose similar tools.
 
 ## License
 
-This project is licensed under the [Apache 2.0 License](./LICENSE).
-
-## Acknowledgments
-
-- Inspired by Google's [Agent Development Kit (Python)](https://github.com/google/adk-python)
-
----
-
-**Star us on GitHub** if you find Lattice useful! ⭐
+See [LICENSE](./LICENSE).
