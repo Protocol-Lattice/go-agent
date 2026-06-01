@@ -18,7 +18,6 @@ import (
 	"github.com/Protocol-Lattice/go-agent/src/models"
 	"github.com/alpkeskin/gotoon"
 	"github.com/universal-tool-calling-protocol/go-utcp"
-	"github.com/universal-tool-calling-protocol/go-utcp/src/plugins/chain"
 	"github.com/universal-tool-calling-protocol/go-utcp/src/plugins/codemode"
 	"github.com/universal-tool-calling-protocol/go-utcp/src/tools"
 )
@@ -57,7 +56,6 @@ type Agent struct {
 
 	Shared    *memory.SharedSession
 	CodeMode  *codemode.CodeModeUTCP
-	CodeChain *chain.UtcpChainClient
 
 	AllowUnsafeTools bool
 	Guardrails       *OutputGuardrails
@@ -77,7 +75,6 @@ type Options struct {
 	UTCPClient        utcp.UtcpClientInterface
 	CodeMode          *codemode.CodeModeUTCP
 	Shared            *memory.SharedSession
-	CodeChain         *chain.UtcpChainClient
 	AllowUnsafeTools  bool
 	Guardrails        *OutputGuardrails
 	InputGuardrails   *InputGuardrails
@@ -148,7 +145,6 @@ func New(opts Options) (*Agent, error) {
 		UTCPClient:        opts.UTCPClient,
 		Shared:            opts.Shared,
 		CodeMode:          opts.CodeMode,
-		CodeChain:         opts.CodeChain,
 		AllowUnsafeTools:  opts.AllowUnsafeTools,
 		Guardrails:        opts.Guardrails,
 		InputGuardrails:   opts.InputGuardrails,
@@ -1225,24 +1221,8 @@ func (a *Agent) Generate(ctx context.Context, sessionID, userInput string) (any,
 		}
 	}
 
-	// -------------------------------------------------------------
-	// 3. Chain Orchestrator (LLM decides a multi-step chain execution)
-	// -------------------------------------------------------------
-	if handled, output, err := a.codeChainOrchestrator(ctx, sessionID, userInput); handled {
-		if err != nil {
-			return "", err
-		}
-		if a.Guardrails != nil {
-			validated, gErr := a.Guardrails.ValidateAndRepair(ctx, output)
-			if gErr != nil {
-				return "", gErr
-			}
-			return validated, nil
-		}
-		return output, nil
-	}
 	// ---------------------------------------------
-	// 4. TOOL ORCHESTRATOR (normal UTCP tools)
+	// 3. TOOL ORCHESTRATOR (normal UTCP tools)
 	// ---------------------------------------------
 	prefetchWG.Wait() // Ensure memory is ready for orchestrator
 	if handled, output, err := a.toolOrchestrator(ctx, sessionID, userInput, records); handled {

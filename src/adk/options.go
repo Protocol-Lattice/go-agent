@@ -7,7 +7,6 @@ import (
 	agent "github.com/Protocol-Lattice/go-agent"
 	"github.com/Protocol-Lattice/go-agent/src/models"
 	"github.com/universal-tool-calling-protocol/go-utcp"
-	"github.com/universal-tool-calling-protocol/go-utcp/src/plugins/chain"
 	"github.com/universal-tool-calling-protocol/go-utcp/src/plugins/codemode"
 )
 
@@ -94,16 +93,6 @@ func WithCodeModeUtcp(client utcp.UtcpClientInterface, model models.Agent) Optio
 			return fmt.Errorf("codemode UTCP client cannot be nil")
 		}
 		kit.CodeMode = codemode.NewCodeModeUTCP(client, model)
-		return nil
-	}
-}
-
-func WithChainModeUtcp(client utcp.UtcpClientInterface) Option {
-	return func(kit *AgentDevelopmentKit) error {
-		if client == nil {
-			return fmt.Errorf("chain UTCP client cannot be nil")
-		}
-		kit.ChainMode = chain.NewChainModeUTCP(client)
 		return nil
 	}
 }

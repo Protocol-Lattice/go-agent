@@ -79,19 +79,7 @@ func (a *Agent) GenerateStream(ctx context.Context, sessionID, userInput string)
 		}
 	}
 
-	// 3. Chain Orchestrator
-	if handled, output, err := a.codeChainOrchestrator(ctx, sessionID, userInput); handled {
-		if err == nil && a.Guardrails != nil {
-			validated, gErr := a.Guardrails.ValidateAndRepair(ctx, output)
-			if gErr != nil {
-				return immediateStream("", gErr)
-			}
-			output = validated
-		}
-		return immediateStream(output, err)
-	}
-
-	// 4. TOOL ORCHESTRATOR
+	// 3. TOOL ORCHESTRATOR
 	prefetchWG.Wait()
 	if handled, output, err := a.toolOrchestrator(ctx, sessionID, userInput, records); handled {
 		return immediateStream(output, err)

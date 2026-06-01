@@ -9,11 +9,9 @@ import (
 	"log"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/Protocol-Lattice/go-agent/src/memory"
 	"github.com/Protocol-Lattice/go-agent/src/models"
-	"github.com/universal-tool-calling-protocol/go-utcp/src/plugins/chain"
 	"github.com/universal-tool-calling-protocol/go-utcp/src/plugins/codemode"
 	"github.com/universal-tool-calling-protocol/go-utcp/src/providers/base"
 	"github.com/universal-tool-calling-protocol/go-utcp/src/repository"
@@ -144,10 +142,6 @@ func (c *stubUTCPClient) SearchTools(query string, limit int) ([]utcpTools.Tool,
 }
 
 func (c *stubUTCPClient) DeregisterToolProvider(ctx context.Context, name string) error {
-	return nil
-}
-
-func (c *stubUTCPClientV2) DeregisterToolProvider(ctx context.Context, name string) error {
 	return nil
 }
 
@@ -495,9 +489,6 @@ func TestRetrieveAttachmentFilesReturnsBinaryData(t *testing.T) {
 func (u *stubUTCPClient) GetTransports() map[string]repository.ClientTransport {
 	return nil
 }
-func (u *stubUTCPClientV2) GetTransports() map[string]repository.ClientTransport {
-	return nil
-}
 
 func TestAgentCallsUTCPClientForRemoteTools(t *testing.T) {
 	ctx := context.Background()
@@ -529,10 +520,6 @@ func TestAgentCallsUTCPClientForRemoteTools(t *testing.T) {
 }
 
 func (u *stubUTCPClient) RegisterToolProvider(ctx context.Context, prov base.Provider) ([]utcpTools.Tool, error) {
-	return nil, nil
-}
-
-func (u *stubUTCPClientV2) RegisterToolProvider(ctx context.Context, prov base.Provider) ([]utcpTools.Tool, error) {
 	return nil, nil
 }
 
@@ -1331,287 +1318,4 @@ func TestCodeMode_ExecutesCallToolInsideDSL2(t *testing.T) {
 	if utcpClient.lastToolName != "echo" {
 		t.Fatalf("expected last UTCP tool to be 'echo', got %q", utcpClient.lastToolName)
 	}
-}
-
-func TestChainOrchestrator_ParsesToolNameAndInputs(t *testing.T) {
-	ctx := context.Background()
-
-	model := &stubModel{
-		response: `{
-			"use_chain": true,
-			"steps": [
-				{ 
-				  "tool_name": "echo", 
-				  "inputs": { "input": "alpha" }
-				}
-			],
-			"timeout": 20000
-		}`,
-	}
-
-	mem := memory.NewSessionMemory(&memory.MemoryBank{}, 4)
-	utcp := &stubUTCPClient{
-		searchTools: []utcpTools.Tool{
-			{Name: "echo"},
-		},
-	}
-
-	agent, _ := New(Options{
-		Model:      model,
-		Memory:     mem,
-		UTCPClient: utcp,
-		CodeChain:  chain.NewChainModeUTCP(utcp),
-	})
-
-	_, err := agent.Generate(ctx, "sess", "run")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if utcp.lastToolName != "echo" {
-		t.Fatalf("expected tool 'echo', got %s", utcp.lastToolName)
-	}
-}
-
-func TestChainOrchestrator_ParsesStreamFlag(t *testing.T) {
-	ctx := context.Background()
-
-	stream := &FakeStream{chunks: []any{"A", "B", nil}}
-	utcp := &stubUTCPClientV2{
-		fakeStream: stream,
-		searchTools: []utcpTools.Tool{
-			{Name: "stream.echo"},
-		},
-	}
-
-	model := &stubModel{
-		response: `{
-            "use_chain": true,
-            "steps": [
-                {
-                    "tool_name": "stream.echo",
-                    "inputs": { "input": "xyz" },
-                    "stream": true
-                }
-            ],
-            "timeout": 20000
-        }`,
-	}
-
-	mem := memory.NewSessionMemory(&memory.MemoryBank{}, 4)
-
-	agent, _ := New(Options{
-		Model:      model,
-		Memory:     mem,
-		UTCPClient: utcp,
-		CodeChain:  chain.NewChainModeUTCP(utcp),
-	})
-
-	_, err := agent.Generate(ctx, "sess3", "run")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if utcp.lastToolName != "stream.echo" {
-		t.Fatalf("expected streaming tool to run, got %q", utcp.lastToolName)
-	}
-	if utcp.callCount != 1 {
-		t.Fatalf("expected at least one tool call")
-	}
-}
-
-func (c *stubUTCPClient) CallToolChain(
-	ctx context.Context,
-	steps []chain.ChainStep,
-	timeout time.Duration,
-) (map[string]any, error) {
-
-	var sb strings.Builder
-	var last any
-
-	for _, s := range steps {
-		c.callCount++
-		c.lastToolName = s.ToolName
-
-		// -------------------------------
-		// STREAMING STEP
-		// -------------------------------
-		if s.Stream {
-			stream, err := c.CallToolStream(ctx, s.ToolName, s.Inputs)
-			if err != nil {
-				return nil, err
-			}
-
-			for {
-				chunk, err := stream.Next()
-				if err == io.EOF {
-					break
-				}
-				if err != nil {
-					return nil, err
-				}
-
-				if chunk != nil {
-					sb.WriteString(fmt.Sprint(chunk))
-					last = chunk
-				}
-			}
-			continue
-		}
-
-		// -------------------------------
-		// NORMAL STEP
-		// -------------------------------
-		out, err := c.CallTool(ctx, s.ToolName, s.Inputs)
-		if err != nil {
-			return nil, err
-		}
-		if out != nil {
-			sb.WriteString(fmt.Sprint(out))
-			last = out
-		}
-	}
-
-	// THIS is the real UTCP chain return shape.
-	return map[string]any{
-		"output": sb.String(),
-		"last":   last,
-	}, nil
-}
-
-// stubUTCPClient is a simplified UTCP client for testing chain execution.
-type stubUTCPClientV2 struct {
-	fakeStream   transports.StreamResult
-	lastToolName string
-	callCount    int
-	searchTools  []utcpTools.Tool
-}
-
-// --- Normal tool call (non-stream) ---
-func (c *stubUTCPClientV2) CallTool(
-	ctx context.Context,
-	toolName string,
-	inputs map[string]any,
-) (any, error) {
-	c.callCount++
-	c.lastToolName = toolName
-
-	// For tests, return simple string = toolName + input
-	if v, ok := inputs["input"].(string); ok {
-		return v, nil
-	}
-	return "ok", nil
-}
-
-// --- Streaming tool call ---
-func (c *stubUTCPClientV2) CallToolStream(
-	ctx context.Context,
-	toolName string,
-	inputs map[string]any,
-) (transports.StreamResult, error) {
-	c.callCount++
-	c.lastToolName = toolName
-
-	// Return the preset fake stream
-	return c.fakeStream, nil
-}
-
-// --- CHAIN EXECUTION (stubbed but production-shaped) ---
-func (c *stubUTCPClientV2) CallToolChain(
-	ctx context.Context,
-	steps []chain.ChainStep,
-	timeout time.Duration,
-) (map[string]any, error) {
-
-	results := make(map[string]any, len(steps))
-	var lastOutput string
-
-	for i, step := range steps {
-		c.callCount++
-		c.lastToolName = step.ToolName
-
-		// --- USE_PREVIOUS BEHAVIOR ---
-		if step.UsePrevious {
-			for k, v := range results {
-				if _, exists := step.Inputs[k]; !exists {
-					step.Inputs[k] = v
-				}
-			}
-			if lastOutput != "" {
-				step.Inputs["__previous_output"] = lastOutput
-			}
-		}
-
-		var res any
-		var err error
-
-		// --- STREAMING STEP ---
-		if step.Stream {
-			stream, err := c.CallToolStream(ctx, step.ToolName, step.Inputs)
-			if err != nil {
-				return results, err
-			}
-
-			var sb strings.Builder
-
-			for {
-				chunk, err := stream.Next()
-				if err == io.EOF {
-					break
-				}
-				if err != nil {
-					return results, err
-				}
-
-				// For stub: chunk is expected to be string or contains Data
-				switch v := chunk.(type) {
-				case string:
-					sb.WriteString(v)
-					lastOutput = v
-				case map[string]any:
-					if data, ok := v["data"]; ok {
-						sb.WriteString(fmt.Sprint(data))
-						lastOutput = fmt.Sprint(data)
-					}
-				default:
-					sb.WriteString(fmt.Sprint(v))
-					lastOutput = fmt.Sprint(v)
-				}
-			}
-
-			key := step.ID
-			if key == "" {
-				key = step.ToolName
-			}
-
-			results[key] = lastOutput
-			continue
-		}
-
-		// --- NORMAL STEP ---
-		res, err = c.CallTool(ctx, step.ToolName, step.Inputs)
-		if err != nil {
-			return results, fmt.Errorf("step %d (%s) failed: %w", i+1, step.ToolName, err)
-		}
-
-		key := step.ID
-		if key == "" {
-			key = step.ToolName
-		}
-
-		if s, ok := res.(string); ok {
-			lastOutput = s
-		} else {
-			lastOutput = fmt.Sprint(res)
-		}
-
-		results[key] = res
-	}
-
-	return results, nil
-}
-
-func (c *stubUTCPClientV2) SearchTools(query string, limit int) ([]utcpTools.Tool, error) {
-
-	return c.searchTools, nil
 }

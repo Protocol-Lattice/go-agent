@@ -9,7 +9,6 @@ import (
 	agent "github.com/Protocol-Lattice/go-agent"
 	"github.com/Protocol-Lattice/go-agent/src/memory"
 	"github.com/universal-tool-calling-protocol/go-utcp"
-	"github.com/universal-tool-calling-protocol/go-utcp/src/plugins/chain"
 	"github.com/universal-tool-calling-protocol/go-utcp/src/plugins/codemode"
 
 	"github.com/universal-tool-calling-protocol/go-utcp/src/tools"
@@ -40,7 +39,6 @@ type AgentDevelopmentKit struct {
 	agentOptions []AgentOption
 	UTCP         utcp.UtcpClientInterface
 	CodeMode     *codemode.CodeModeUTCP
-	ChainMode    *chain.UtcpChainClient
 }
 
 // New constructs a kit, applies the provided options and bootstraps registered
@@ -264,7 +262,6 @@ func (k *AgentDevelopmentKit) BuildAgent(ctx context.Context, opts ...AgentOptio
 	defaultAgentOptions := append([]AgentOption(nil), k.agentOptions...)
 	utcp := k.UTCP
 	codeMode := k.CodeMode
-	chainMode := k.ChainMode
 	k.mu.RUnlock()
 
 	if modelProvider == nil {
@@ -321,7 +318,6 @@ func (k *AgentDevelopmentKit) BuildAgent(ctx context.Context, opts ...AgentOptio
 		ContextLimit: defaultLimit,
 		UTCPClient:   utcp,
 		CodeMode:     codeMode,
-		CodeChain:    chainMode,
 	}
 
 	for _, opt := range defaultAgentOptions {
