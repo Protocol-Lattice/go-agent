@@ -1,6 +1,8 @@
 package markdown
 
 import (
+	"encoding/base64"
+	"encoding/json"
 	"regexp"
 	"sort"
 	"strings"
@@ -141,6 +143,26 @@ func parseMeta(line string) Record {
 	if ts := fields["ts"]; ts != "" {
 		if parsed, err := time.Parse(time.RFC3339, ts); err == nil {
 			rec.CreatedAt = parsed
+		}
+	}
+
+	// Decode embedding
+	if embStr := fields["embedding"]; embStr != "" {
+		if data, err := base64.StdEncoding.DecodeString(embStr); err == nil {
+			var embedding []float32
+			if err := json.Unmarshal(data, &embedding); err == nil {
+				rec.Embedding = embedding
+			}
+		}
+	}
+
+	// Decode metadata
+	if metaStr := fields["metadata"]; metaStr != "" {
+		if data, err := base64.StdEncoding.DecodeString(metaStr); err == nil {
+			var metadata map[string]any
+			if err := json.Unmarshal(data, &metadata); err == nil {
+				rec.Metadata = metadata
+			}
 		}
 	}
 

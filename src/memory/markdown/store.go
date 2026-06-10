@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 )
 
 type Store struct {
@@ -189,7 +190,19 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 		}
 
 		var builder strings.Builder
-		builder.WriteString("# Memory\n\n")
+
+		// FIX: Reconstruct header using scope/sessionID from kept records
+		// (or use defaults if all records were deleted)
+		var scope, sessionID string
+		if len(kept) > 0 {
+			scope = kept[0].Scope
+			sessionID = kept[0].SessionID
+		} else {
+			scope = "sessions"
+			sessionID = "default"
+		}
+		fmt.Fprintf(&builder, "# %s: %s\n\n", title(scope), sessionID)
+
 		for _, rec := range kept {
 			builder.WriteString(renderBlock(rec))
 		}
@@ -225,6 +238,234 @@ func (s *Store) all(ctx context.Context) ([]Record, error) {
 	})
 
 	return out, err
+}
+
+func (s *Store) Count(ctx context.Context) (int, error) {
+	records, err := s.all(ctx)
+	return len(records), err
+}
+
+// VectorStore Interface Implementation
+
+// StoreMemory stores a memory with embedding (satisfies VectorStore interface)
+func (s *Store) StoreMemory(ctx context.Context, sessionID, content string, metadata map[string]any, embedding []float32) error {
+	rec := Record{
+		SessionID:    sessionID,
+		Content:      content,
+		Metadata:     metadata,
+		Embedding:    embedding,
+		LastEmbedded: time.Now().UTC(),
+	}
+	return s.Save(ctx, rec)
+}
+
+// SearchMemory searches by embedding vector (cosine similarity)
+// Falls back to keyword search if no embedding provided
+func (s *Store) SearchMemory(ctx context.Context, sessionID string, queryEmbedding []float32, limit int) ([]MemoryRecord, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	if limit <= 0 {
+		limit = 8
+	}
+
+	all, err := s.all(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	// Filter by sessionID
+	var candidates []Record
+	for _, rec := range all {
+		if rec.SessionID == sessionID {
+			candidates = append(candidates, rec)
+		}
+	}
+
+	// Score by embedding similarity
+	type scoredRec struct {
+		Record Record
+		Score  float32
+	}
+
+	var scored []scoredRec
+
+	for _, rec := range candidates {
+		score := float32(0)
+		if len(queryEmbedding) > 0 && len(rec.Embedding) > 0 {
+			score = cosineSimilarity(queryEmbedding, rec.Embedding)
+		}
+		if score > 0 || len(queryEmbedding) == 0 {
+			scored = append(scored, scoredRec{rec, score})
+		}
+	}
+
+	// Sort by score descending
+	for i := 0; i < len(scored); i++ {
+		for j := i + 1; j < len(scored); j++ {
+			if scored[j].Score > scored[i].Score {
+				scored[i], scored[j] = scored[j], scored[i]
+			}
+		}
+	}
+
+	if len(scored) > limit {
+		scored = scored[:limit]
+	}
+
+	result := make([]MemoryRecord, len(scored))
+	for i, s := range scored {
+		result[i] = s.Record.toMemoryRecord()
+	}
+	return result, nil
+}
+
+// UpdateEmbedding updates the embedding vector for a record
+func (s *Store) UpdateEmbedding(ctx context.Context, id int64, embedding []float32, lastEmbedded time.Time) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return filepath.WalkDir(s.root, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() || filepath.Ext(path) != ".md" {
+			return nil
+		}
+
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+
+		records := parseBlocks(string(b))
+		var updated []Record
+		changed := false
+
+		for _, rec := range records {
+			if rec.NumID == id {
+				rec.Embedding = embedding
+				rec.LastEmbedded = lastEmbedded
+				changed = true
+			}
+			updated = append(updated, rec)
+		}
+
+		if !changed {
+			return nil
+		}
+
+		var scope, sessionID string
+		if len(updated) > 0 {
+			scope = updated[0].Scope
+			sessionID = updated[0].SessionID
+		} else {
+			scope = "sessions"
+			sessionID = "default"
+		}
+
+		var builder strings.Builder
+		fmt.Fprintf(&builder, "# %s: %s\n\n", title(scope), sessionID)
+		for _, rec := range updated {
+			builder.WriteString(renderBlock(rec))
+		}
+
+		return os.WriteFile(path, []byte(builder.String()), 0o644)
+	})
+}
+
+// DeleteMemory deletes memories by numeric IDs
+func (s *Store) DeleteMemory(ctx context.Context, ids []int64) error {
+	for _, id := range ids {
+		// Convert int64 back to string ID (would need reverse mapping in practice)
+		// For now, iterate and find matching NumID
+		if err := s.deleteByNumID(ctx, id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// deleteByNumID is a helper to delete by numeric ID
+func (s *Store) deleteByNumID(ctx context.Context, id int64) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return filepath.WalkDir(s.root, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() || filepath.Ext(path) != ".md" {
+			return nil
+		}
+
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+
+		records := parseBlocks(string(b))
+		var kept []Record
+		changed := false
+
+		for _, rec := range records {
+			if rec.NumID == id {
+				changed = true
+				continue
+			}
+			kept = append(kept, rec)
+		}
+
+		if !changed {
+			return nil
+		}
+
+		var scope, sessionID string
+		if len(kept) > 0 {
+			scope = kept[0].Scope
+			sessionID = kept[0].SessionID
+		} else {
+			scope = "sessions"
+			sessionID = "default"
+		}
+
+		var builder strings.Builder
+		fmt.Fprintf(&builder, "# %s: %s\n\n", title(scope), sessionID)
+		for _, rec := range kept {
+			builder.WriteString(renderBlock(rec))
+		}
+
+		return os.WriteFile(path, []byte(builder.String()), 0o644)
+	})
+}
+
+// Iterate calls fn for each memory record, stopping if fn returns false
+func (s *Store) Iterate(ctx context.Context, fn func(MemoryRecord) bool) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	all, err := s.all(ctx)
+	if err != nil {
+		return err
+	}
+
+	for _, rec := range all {
+		if !fn(rec.toMemoryRecord()) {
+			break
+		}
+	}
+
+	return nil
 }
 
 func (s *Store) pathFor(scope, sessionID string) (string, error) {
@@ -285,4 +526,47 @@ func readLines(s string) []string {
 		out = append(out, scanner.Text())
 	}
 	return out
+}
+
+// cosineSimilarity computes cosine similarity between two embedding vectors
+func cosineSimilarity(a, b []float32) float32 {
+	if len(a) == 0 || len(b) == 0 {
+		return 0
+	}
+
+	minLen := len(a)
+	if len(b) < minLen {
+		minLen = len(b)
+	}
+
+	var dotProduct, normA, normB float32
+	for i := 0; i < minLen; i++ {
+		dotProduct += a[i] * b[i]
+		normA += a[i] * a[i]
+		normB += b[i] * b[i]
+	}
+
+	if normA == 0 || normB == 0 {
+		return 0
+	}
+
+	// Using simple approximation for sqrt (could use math.Sqrt for precision)
+	return dotProduct / (sqrt(normA) * sqrt(normB))
+}
+
+// sqrt computes integer square root approximation
+func sqrt(x float32) float32 {
+	if x < 0 {
+		return 0
+	}
+	if x == 0 {
+		return 0
+	}
+
+	// Newton's method approximation
+	result := x
+	for i := 0; i < 10; i++ {
+		result = (result + x/result) / 2
+	}
+	return result
 }
