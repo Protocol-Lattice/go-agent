@@ -54,8 +54,8 @@ type Agent struct {
 	toolPromptKey    string
 	toolPromptExpiry time.Time
 
-	Shared    *memory.SharedSession
-	CodeMode  *codemode.CodeModeUTCP
+	Shared   *memory.SharedSession
+	CodeMode *codemode.CodeModeUTCP
 
 	AllowUnsafeTools bool
 	Guardrails       *OutputGuardrails
@@ -149,7 +149,6 @@ func New(opts Options) (*Agent, error) {
 		Guardrails:        opts.Guardrails,
 		InputGuardrails:   opts.InputGuardrails,
 	}
-
 
 	return a, nil
 }
@@ -375,54 +374,76 @@ func (a *Agent) buildPrompt(
 	sessionID string,
 	userInput string,
 ) (string, error) {
+	userInput = sanitizeInput(userInput)
 
-	// Detect query type to choose retrieval depth.
 	queryType := classifyQuery(userInput)
-	var records []memory.MemoryRecord
-	var err error
+
+	var (
+		records []memory.MemoryRecord
+		err     error
+	)
 
 	switch queryType {
-
 	case QueryMath:
-		// Skip heavy retrieval; math needs no context.
+		// Math usually does not need retrieved conversation context.
 
 	case QueryShortFactoid:
-		records, err = a.retrieveContext(ctx, sessionID, userInput, min(a.contextLimit/2, 3))
-		if err != nil {
-			return "", fmt.Errorf("retrieve context: %w", err)
+		limit := intMin(a.contextLimit/2, 3)
+		if limit > 0 {
+			records, err = a.retrieveContext(ctx, sessionID, userInput, limit)
+			if err != nil {
+				return "", fmt.Errorf("retrieve context: %w", err)
+			}
 		}
 
 	case QueryComplex:
-		records, err = a.retrieveContext(ctx, sessionID, userInput, a.contextLimit)
-		if err != nil {
-			return "", fmt.Errorf("retrieve context: %w", err)
+		if a.contextLimit > 0 {
+			records, err = a.retrieveContext(ctx, sessionID, userInput, a.contextLimit)
+			if err != nil {
+				return "", fmt.Errorf("retrieve context: %w", err)
+			}
 		}
 
 	default:
-		// Unknown → no retrieval
+		// Unknown query type: keep prompt lean and avoid accidental noisy retrieval.
 	}
 
-	// Build LLM prompt without tools/subagents:
-	// Tools are only exposed inside the toolOrchestrator,
-	// not during normal generation.
 	var sb strings.Builder
 	sb.Grow(4096)
 
-	sb.WriteString(a.systemPrompt)
-	sb.WriteString("\n\nConversation memory (TOON):\n")
-	sb.WriteString(a.renderMemory(records))
-
-	sb.WriteString("\n\nUser: ")
-	sb.WriteString(sanitizeInput(userInput))
-	sb.WriteString("\n\n") // no forced persona label
-
-	// Rehydrate attachments
-	files, _ := a.RetrieveAttachmentFiles(ctx, sessionID, a.contextLimit)
-	if len(files) > 0 {
-		sb.WriteString(a.buildAttachmentPrompt("Session attachments (rehydrated)", files))
+	if strings.TrimSpace(a.systemPrompt) != "" {
+		sb.WriteString(strings.TrimSpace(a.systemPrompt))
+		sb.WriteString("\n\n")
 	}
 
+	if len(records) > 0 {
+		sb.WriteString("Conversation memory (TOON):\n")
+		sb.WriteString(a.renderMemory(records))
+		sb.WriteString("\n\n")
+	}
+
+	files, err := a.RetrieveAttachmentFiles(ctx, sessionID, a.contextLimit)
+	if err != nil {
+		return "", fmt.Errorf("retrieve attachment files: %w", err)
+	}
+
+	if len(files) > 0 {
+		sb.WriteString(a.buildAttachmentPrompt("Session attachments (rehydrated)", files))
+		sb.WriteString("\n\n")
+	}
+
+	sb.WriteString("User: ")
+	sb.WriteString(userInput)
+	sb.WriteString("\n")
+
 	return sb.String(), nil
+}
+
+func intMin(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 // renderMemory formats retrieved memory records into a clean, token-efficient list.
