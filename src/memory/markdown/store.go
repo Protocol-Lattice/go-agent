@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/Protocol-Lattice/go-agent/src/memory/model"
 )
 
 type Store struct {
@@ -261,7 +263,7 @@ func (s *Store) StoreMemory(ctx context.Context, sessionID, content string, meta
 
 // SearchMemory searches by embedding vector (cosine similarity)
 // Falls back to keyword search if no embedding provided
-func (s *Store) SearchMemory(ctx context.Context, sessionID string, queryEmbedding []float32, limit int) ([]MemoryRecord, error) {
+func (s *Store) SearchMemory(ctx context.Context, sessionID string, queryEmbedding []float32, limit int) ([]model.MemoryRecord, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -314,7 +316,7 @@ func (s *Store) SearchMemory(ctx context.Context, sessionID string, queryEmbeddi
 		scored = scored[:limit]
 	}
 
-	result := make([]MemoryRecord, len(scored))
+	result := make([]model.MemoryRecord, len(scored))
 	for i, s := range scored {
 		result[i] = s.Record.toMemoryRecord()
 	}
@@ -449,7 +451,7 @@ func (s *Store) deleteByNumID(ctx context.Context, id int64) error {
 }
 
 // Iterate calls fn for each memory record, stopping if fn returns false
-func (s *Store) Iterate(ctx context.Context, fn func(MemoryRecord) bool) error {
+func (s *Store) Iterate(ctx context.Context, fn func(model.MemoryRecord) bool) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}

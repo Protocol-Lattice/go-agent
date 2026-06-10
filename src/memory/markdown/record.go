@@ -5,24 +5,16 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"encoding/hex"
+	"encoding/json"
 	"strings"
 	"time"
+
+	"github.com/Protocol-Lattice/go-agent/src/memory/model"
 )
 
-// MemoryRecord wraps Record to satisfy external VectorStore interfaces
-type MemoryRecord struct {
-	ID           int64
-	SessionID    string
-	Content      string
-	Metadata     map[string]any
-	Embedding    []float32
-	LastEmbedded time.Time
-	CreatedAt    time.Time
-}
-
 type Record struct {
-	ID           string      // String ID for markdown storage
-	NumID        int64       // Numeric ID for VectorStore interface (derived from string ID)
+	ID           string // String ID for markdown storage
+	NumID        int64  // Numeric ID for VectorStore interface (derived from string ID)
 	Scope        string
 	SessionID    string
 	Role         string
@@ -60,13 +52,21 @@ func (r Record) normalized() Record {
 	return r
 }
 
-// toMemoryRecord converts Record to MemoryRecord for VectorStore interface
-func (r Record) toMemoryRecord() MemoryRecord {
-	return MemoryRecord{
+// toMemoryRecord converts Record to model.MemoryRecord for VectorStore interface
+func (r Record) toMemoryRecord() model.MemoryRecord {
+	// Marshal metadata to JSON string
+	metaStr := ""
+	if len(r.Metadata) > 0 {
+		if data, err := json.Marshal(r.Metadata); err == nil {
+			metaStr = string(data)
+		}
+	}
+
+	return model.MemoryRecord{
 		ID:           r.NumID,
 		SessionID:    r.SessionID,
 		Content:      r.Content,
-		Metadata:     r.Metadata,
+		Metadata:     metaStr,
 		Embedding:    r.Embedding,
 		LastEmbedded: r.LastEmbedded,
 		CreatedAt:    r.CreatedAt,
