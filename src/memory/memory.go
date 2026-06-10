@@ -5,6 +5,7 @@ import (
 
 	embedpkg "github.com/Protocol-Lattice/go-agent/src/memory/embed"
 	memengine "github.com/Protocol-Lattice/go-agent/src/memory/engine"
+	markdownpkg "github.com/Protocol-Lattice/go-agent/src/memory/markdown"
 	"github.com/Protocol-Lattice/go-agent/src/memory/model"
 	sessionpkg "github.com/Protocol-Lattice/go-agent/src/memory/session"
 	storepkg "github.com/Protocol-Lattice/go-agent/src/memory/store"
@@ -46,6 +47,10 @@ type (
 	Embedder      = embedpkg.Embedder
 	DummyEmbedder = embedpkg.DummyEmbedder
 )
+type MarkdownStore = markdownpkg.Store
+type MarkdownRecord = markdownpkg.Record
+
+var NewMarkdownStore = markdownpkg.NewStore
 
 const (
 	EdgeFollows     = model.EdgeFollows
