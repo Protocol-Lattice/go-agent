@@ -317,21 +317,64 @@ func (a *Agent) executeTool(
 	sessionID, toolName string,
 	args map[string]any,
 ) (any, error) {
-
 	if args == nil {
 		args = map[string]any{}
 	}
 
-	// ---------------------------------------------
-	// 1. REMOTE UTCP TOOL
-	// If "stream": true → CallToolStream
-	// else → CallTool
-	// ---------------------------------------------
+	// 0. Built-in CodeMode tool.
+	// ToolSpecs exposes codemode.run_code from a.CodeMode, so execution must
+	// also route it here instead of forwarding it to the UTCP client.
+	if toolName == codemode.CodeModeToolName || toolName == "codemode.run_code" {
+		if a.CodeMode == nil {
+			return nil, fmt.Errorf("codemode is not configured")
+		}
+		if !a.AllowUnsafeTools {
+			return nil, fmt.Errorf("unauthorized tool execution: %s is restricted", toolName)
+		}
+
+		code, ok := args["code"].(string)
+		if !ok || strings.TrimSpace(code) == "" {
+			return nil, fmt.Errorf("codemode.run_code requires non-empty string field: code")
+		}
+
+		timeout := 30000
+		switch v := args["timeout"].(type) {
+		case int:
+			timeout = v
+		case int64:
+			timeout = int(v)
+		case float64:
+			timeout = int(v)
+		case json.Number:
+			if n, err := v.Int64(); err == nil {
+				timeout = int(n)
+			}
+		}
+
+		result, err := a.CodeMode.Execute(ctx, codemode.CodeModeArgs{
+			Code:    code,
+			Timeout: timeout,
+		})
+		if err != nil {
+			return nil, err
+		}
+		if strings.TrimSpace(result.Stderr) != "" {
+			return nil, fmt.Errorf("codemode script produced stderr: %s", result.Stderr)
+		}
+
+		if result.Stdout != "" {
+			return map[string]any{
+				"value":  result.Value,
+				"stdout": result.Stdout,
+			}, nil
+		}
+
+		return result.Value, nil
+	}
+
+	// 1. Remote UTCP tool.
 	if a.UTCPClient != nil {
-
-		// streaming request?
 		if streamFlag, ok := args["stream"].(bool); ok && streamFlag {
-
 			stream, err := a.UTCPClient.CallToolStream(ctx, toolName, args)
 			if err != nil {
 				return nil, err
@@ -340,29 +383,22 @@ func (a *Agent) executeTool(
 				return nil, fmt.Errorf("CallToolStream returned nil stream for %s", toolName)
 			}
 
-			// Accumulate streamed chunks into a single string
 			var sb strings.Builder
 			for {
 				chunk, err := stream.Next()
 				if err != nil {
 					break
 				}
-
 				if chunk != nil {
 					sb.WriteString(fmt.Sprint(chunk))
 				}
 			}
-
 			return sb.String(), nil
 		}
 
-		// Non-streaming remote call
 		return a.UTCPClient.CallTool(ctx, toolName, args)
 	}
 
-	// ---------------------------------------------
-	// 3. Unknown tool
-	// ---------------------------------------------
 	return nil, fmt.Errorf("unknown tool: %s", toolName)
 }
 
