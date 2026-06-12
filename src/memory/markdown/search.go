@@ -64,6 +64,10 @@ func scoreRecords(records []Record, query string) []scoredRecord {
 }
 
 func parseBlocks(doc string) []Record {
+	return parseBlocksWithDefaults(doc, "", "")
+}
+
+func parseBlocksWithDefaults(doc, scope, sessionID string) []Record {
 	lines := readLines(doc)
 
 	var out []Record
@@ -84,6 +88,12 @@ func parseBlocks(doc string) []Record {
 
 		if strings.TrimSpace(line) == "<!-- /memory -->" {
 			if inBlock && current != nil {
+				if current.Scope == "" {
+					current.Scope = scope
+				}
+				if current.SessionID == "" {
+					current.SessionID = sessionID
+				}
 				current.Content = strings.TrimSpace(body.String())
 				out = append(out, current.normalized())
 			}

@@ -115,7 +115,7 @@ func (s *Store) List(ctx context.Context, scope, sessionID string) ([]Record, er
 		return nil, err
 	}
 
-	return parseBlocks(string(b)), nil
+	return s.parseFile(path, b), nil
 }
 
 func (s *Store) Search(ctx context.Context, query string, limit int) ([]Record, error) {
@@ -175,7 +175,7 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 			return err
 		}
 
-		records := parseBlocks(string(b))
+		records := s.parseFile(path, b)
 		var kept []Record
 		changed := false
 
@@ -235,7 +235,7 @@ func (s *Store) all(ctx context.Context) ([]Record, error) {
 			return err
 		}
 
-		out = append(out, parseBlocks(string(b))...)
+		out = append(out, s.parseFile(path, b)...)
 		return nil
 	})
 
@@ -280,7 +280,7 @@ func (s *Store) SearchMemory(ctx context.Context, sessionID string, queryEmbeddi
 	// Filter by sessionID
 	var candidates []Record
 	for _, rec := range all {
-		if rec.SessionID == sessionID {
+		if sessionID == "" || rec.SessionID == sessionID {
 			candidates = append(candidates, rec)
 		}
 	}
@@ -345,7 +345,7 @@ func (s *Store) UpdateEmbedding(ctx context.Context, id int64, embedding []float
 			return err
 		}
 
-		records := parseBlocks(string(b))
+		records := s.parseFile(path, b)
 		var updated []Record
 		changed := false
 
@@ -415,7 +415,7 @@ func (s *Store) deleteByNumID(ctx context.Context, id int64) error {
 			return err
 		}
 
-		records := parseBlocks(string(b))
+		records := s.parseFile(path, b)
 		var kept []Record
 		changed := false
 
@@ -488,6 +488,25 @@ func (s *Store) pathFor(scope, sessionID string) (string, error) {
 	}
 
 	return filepath.Join(s.root, scope, sessionID+".md"), nil
+}
+
+func (s *Store) parseFile(path string, b []byte) []Record {
+	scope, sessionID := s.identityForPath(path)
+	return parseBlocksWithDefaults(string(b), scope, sessionID)
+}
+
+func (s *Store) identityForPath(path string) (string, string) {
+	rel, err := filepath.Rel(s.root, path)
+	if err != nil {
+		return "", strings.TrimSuffix(filepath.Base(path), ".md")
+	}
+
+	parts := strings.Split(filepath.ToSlash(rel), "/")
+	if len(parts) < 2 {
+		return "", strings.TrimSuffix(filepath.Base(path), ".md")
+	}
+
+	return parts[0], strings.TrimSuffix(parts[len(parts)-1], ".md")
 }
 
 func title(scope string) string {
