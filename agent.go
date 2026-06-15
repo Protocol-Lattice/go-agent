@@ -25,6 +25,9 @@ import (
 const (
 	defaultSystemPrompt = "You are the primary coordinator for an AI agent team. Provide concise, accurate answers and explain when you call tools or delegate work to specialist sub-agents."
 	defaultToolCacheTTL = 30 * time.Second
+
+	defaultToolLoopMaxSteps        = 12
+	defaultToolObservationMaxBytes = 4000
 )
 
 var (
@@ -1356,9 +1359,9 @@ func (a *Agent) SessionMemory() *memory.SessionMemory {
 // file bytes (e.g., uploaded via API) and want the model to consider them
 // ephemerally for this turn only.
 // GenerateWithFiles runs the full orchestration pipeline (direct tool →
-// subagent → CodeMode → UTCP orchestrator) before falling back to a
-// file-aware model call. Files are only forwarded to the model when no
-// tool handles the request.
+// subagent → CodeMode → UTCP tool loop) before falling back to a file-aware
+// model call. Files are forwarded to the planner so tools can be selected with
+// attachment context, but tool execution still uses the normal UTCP arguments.
 func (a *Agent) GenerateWithFiles(
 	ctx context.Context,
 	sessionID string,
@@ -1373,11 +1376,17 @@ func (a *Agent) GenerateWithFiles(
 		userInput = transformed
 	}
 
-	if strings.TrimSpace(userInput) == "" && len(files) == 0 {
+	trimmed := strings.TrimSpace(userInput)
+	if trimmed == "" && len(files) == 0 {
 		return "", errors.New("both user input and files are empty")
 	}
 
-	trimmed := strings.TrimSpace(userInput)
+	// Capture already-known files before storing this turn's files. This avoids
+	// immediately rehydrating the same uploaded files and duplicating prompt/file
+	// context in the fallback model call.
+	existingFiles, _ := a.RetrieveAttachmentFiles(ctx, sessionID, a.contextLimit)
+	allFiles := append([]models.File(nil), existingFiles...)
+	allFiles = append(allFiles, files...)
 
 	// ----------------------------------------------------------
 	// PREFETCH: context retrieval + tool discovery in parallel.
@@ -1396,12 +1405,14 @@ func (a *Agent) GenerateWithFiles(
 	// ----------------------------------------------------------
 	// 0. Direct tool invocation (bypass everything).
 	// ----------------------------------------------------------
-	if toolName, args, ok := a.detectDirectToolCall(trimmed); ok {
-		result, err := a.executeTool(ctx, sessionID, toolName, args)
-		if err != nil {
-			return "", err
+	if trimmed != "" {
+		if toolName, args, ok := a.detectDirectToolCall(trimmed); ok {
+			result, err := a.executeTool(ctx, sessionID, toolName, args)
+			if err != nil {
+				return "", err
+			}
+			return fmt.Sprint(result), nil
 		}
-		return fmt.Sprint(result), nil
 	}
 
 	// ----------------------------------------------------------
@@ -1416,22 +1427,22 @@ func (a *Agent) GenerateWithFiles(
 	}
 
 	// ----------------------------------------------------------
-	// 2. CodeMode.
+	// 2. CodeMode DSL.
 	// ----------------------------------------------------------
-	if a.CodeMode != nil {
+	if trimmed != "" && a.CodeMode != nil {
 		if handled, output, err := a.CodeMode.CallTool(ctx, userInput); handled {
 			if err != nil {
 				return "", err
 			}
-			return output.(string), nil
+			return fmt.Sprint(output), nil
 		}
 	}
 
 	// ----------------------------------------------------------
-	// 3. Tool orchestrator.
+	// 3. Multi-step UTCP / CodeMode tool loop.
 	// ----------------------------------------------------------
 	prefetchWG.Wait()
-	if handled, output, err := a.toolOrchestrator(ctx, sessionID, userInput, records); handled {
+	if handled, output, err := a.toolOrchestrator(ctx, sessionID, userInput, records, allFiles...); handled {
 		if err != nil {
 			return "", err
 		}
@@ -1445,50 +1456,76 @@ func (a *Agent) GenerateWithFiles(
 		a.storeMemory(sessionID, "user", userInput, nil)
 	}
 
-	if a.userLooksLikeToolCall(trimmed) {
+	if trimmed != "" && a.userLooksLikeToolCall(trimmed) {
 		return "", nil
+	}
+
+	// Persist this turn's files only when no tool handled the request. Tool calls
+	// should be explicit and reproducible from their arguments, while fallback
+	// conversations may benefit from future attachment rehydration.
+	if len(files) > 0 {
+		a.storeAttachmentMemories(sessionID, files)
 	}
 
 	// ----------------------------------------------------------
 	// 5. LLM fallback — file-aware model call.
 	// ----------------------------------------------------------
-	prompt, err := a.buildPrompt(ctx, sessionID, userInput)
-	if err != nil {
-		return "", err
+	var sb strings.Builder
+	sb.Grow(4096)
+
+	if strings.TrimSpace(a.systemPrompt) != "" {
+		sb.WriteString(strings.TrimSpace(a.systemPrompt))
+		sb.WriteString("\n\n")
+	}
+
+	sb.WriteString("Conversation memory (TOON):\n")
+	sb.WriteString(a.renderMemory(records))
+	sb.WriteString("\n\n")
+
+	if len(existingFiles) > 0 {
+		sb.WriteString(a.buildAttachmentPrompt("Session attachments (rehydrated)", existingFiles))
+		sb.WriteString("\n")
 	}
 
 	if len(files) > 0 {
-		a.storeAttachmentMemories(sessionID, files)
-		prompt += a.buildAttachmentPrompt("Files provided for this turn", files)
+		sb.WriteString(a.buildAttachmentPrompt("Files provided for this turn", files))
+		sb.WriteString("\n")
 	}
 
-	existing, _ := a.RetrieveAttachmentFiles(ctx, sessionID, a.contextLimit)
-	if len(existing) > 0 {
-		prompt += a.buildAttachmentPrompt("Session attachments (rehydrated)", existing)
+	if trimmed != "" {
+		sb.WriteString("User: ")
+		sb.WriteString(sanitizeInput(userInput))
+		sb.WriteString("\n")
+	} else {
+		sb.WriteString("User: Analyze the provided files.\n")
 	}
 
-	completion, err := a.model.GenerateWithFiles(
-		ctx,
-		prompt,
-		append(existing, files...),
+	prompt := sb.String()
+
+	var (
+		completion any
+		err        error
 	)
+	if len(allFiles) > 0 {
+		completion, err = a.model.GenerateWithFiles(ctx, prompt, allFiles)
+	} else {
+		completion, err = a.model.Generate(ctx, prompt)
+	}
 	if err != nil {
 		return "", err
 	}
 
 	response := fmt.Sprint(completion)
-
 	if a.Guardrails != nil {
 		validated, gErr := a.Guardrails.ValidateAndRepair(ctx, response)
 		if gErr != nil {
 			return "", gErr
 		}
 		response = validated
-		completion = validated
 	}
-	full := completion.(string)
-	a.storeMemory(sessionID, "assistant", full, nil)
-	return full, nil
+
+	a.storeMemory(sessionID, "assistant", response, nil)
+	return response, nil
 }
 
 // buildAttachmentPrompt renders a compact, token-conscious list of files.
@@ -1605,65 +1642,123 @@ func indentBlock(text, prefix string) string {
 }
 
 type ToolChoice struct {
-	UseTool   bool           `json:"use_tool"`
-	ToolName  string         `json:"tool_name"`
-	Arguments map[string]any `json:"arguments"`
-	Reason    string         `json:"reason"`
-	Answer    string         `json:"answer"` // Added for one-turn resolution
+	UseTool     bool           `json:"use_tool"`
+	ToolName    string         `json:"tool_name"`
+	Arguments   map[string]any `json:"arguments"`
+	Reason      string         `json:"reason"`
+	Answer      string         `json:"answer"`
+	FinalAnswer string         `json:"final_answer"`
 }
 
-// In the toolOrchestrator function, modify the JSON parsing section:
+func configuredToolLoopMaxSteps() int {
+	raw := strings.TrimSpace(os.Getenv("utcp_tool_loop_max_steps"))
+	if raw == "" {
+		return defaultToolLoopMaxSteps
+	}
+	steps, err := strconv.Atoi(raw)
+	if err != nil || steps <= 0 {
+		return defaultToolLoopMaxSteps
+	}
+	return steps
+}
+
+func toolChoiceFinalAnswer(tc ToolChoice) string {
+	if final := strings.TrimSpace(tc.FinalAnswer); final != "" {
+		return final
+	}
+	return strings.TrimSpace(tc.Answer)
+}
+
+func toolSpecExists(specs []tools.Tool, name string) bool {
+	for _, spec := range specs {
+		if spec.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+func appendCodeModeToolSpec(specs []tools.Tool) []tools.Tool {
+	if toolSpecExists(specs, "codemode.run_code") {
+		return specs
+	}
+	return append(specs, tools.Tool{
+		Name:        "codemode.run_code",
+		Description: "Execute Go code with access to UTCP tools via CallTool() and CallToolStream().",
+		Inputs: tools.ToolInputOutputSchema{
+			Type: "object",
+			Properties: map[string]any{
+				"code": map[string]any{
+					"type":        "string",
+					"description": "Go code statements to execute.",
+				},
+				"timeout": map[string]any{
+					"type":        "integer",
+					"description": "Timeout in milliseconds.",
+				},
+			},
+			Required: []string{"code"},
+		},
+	})
+}
+
+func formatToolObservation(step int, toolName string, args map[string]any, result any) string {
+	return fmt.Sprintf(
+		"[step %d] tool=%s args=%s\nresult=%s",
+		step,
+		toolName,
+		compactJSON(args),
+		truncate(fmt.Sprint(result), defaultToolObservationMaxBytes),
+	)
+}
+
+func compactJSON(v any) string {
+	if v == nil {
+		return "{}"
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		return fmt.Sprint(v)
+	}
+	return string(b)
+}
+
+func lastToolObservation(observations []string) string {
+	if len(observations) == 0 {
+		return ""
+	}
+	return observations[len(observations)-1]
+}
 
 func (a *Agent) toolOrchestrator(
 	ctx context.Context,
 	sessionID string,
 	userInput string,
 	records []memory.MemoryRecord,
+	files ...models.File,
 ) (bool, string, error) {
-
-	// FAST PATH: Skip LLM call for obvious non-tool queries
-	// This saves 1-3 seconds per request!
 	lowerInput := strings.ToLower(strings.TrimSpace(userInput))
-
-	// Skip if input looks like a natural question/statement
 	if !a.likelyNeedsToolCall(lowerInput) {
 		return false, "", nil
 	}
 
-	// Collect merged local + UTCP tools
 	toolList := a.ToolSpecs()
+	if a.CodeMode != nil {
+		toolList = appendCodeModeToolSpec(toolList)
+	}
 	if len(toolList) == 0 {
 		return false, "", nil
 	}
 
-	// Add codemode.run_code as a discoverable tool if CodeMode is enabled
-	if a.CodeMode != nil {
-		toolList = append(toolList, tools.Tool{
-			Name:        "codemode.run_code",
-			Description: "Execute Go code with access to UTCP tools via CallTool() and CallToolStream()",
-			Inputs: tools.ToolInputOutputSchema{
-				Type: "object",
-				Properties: map[string]any{
-					"code": map[string]any{
-						"type":        "string",
-						"description": "Go code to execute",
-					},
-					"timeout": map[string]any{
-						"type":        "integer",
-						"description": "Timeout in milliseconds",
-					},
-				},
-				Required: []string{"code"},
-			},
-		})
-	}
-
-	// Build tool selection prompt with memory context
 	toolDesc := a.cachedToolPrompt(toolList)
 	memoryDesc := a.renderMemory(records)
+	fileDesc := a.buildAttachmentPrompt("Files available for this turn", files)
+	maxSteps := configuredToolLoopMaxSteps()
 
-	choicePrompt := fmt.Sprintf(`
-You are a UTCP tool selection and planning engine.
+	var observations []string
+	for step := 1; step <= maxSteps; step++ {
+		choicePrompt := fmt.Sprintf(`
+You are an agentic UTCP tool execution loop.
 
 USER REQUEST:
 %q
@@ -1671,130 +1766,133 @@ USER REQUEST:
 CONVERSATION MEMORY:
 %s
 
+FILES:
+%s
+
 AVAILABLE UTCP TOOLS:
 %s
 
+PREVIOUS TOOL OBSERVATIONS:
+%s
+
 OBJECTIVE:
-Analyze if the user's request requires calling a tool or if it can be answered directly using conversational memory.
+Continue working until the user request is complete.
 
 RULES:
-1. If a tool is needed, set "use_tool": true and provide "tool_name" and "arguments".
-2. If NO tool is needed, set "use_tool": false and provide the final answer in "answer".
-3. Use only the exact tool names provided.
+1. If another tool is needed, set "use_tool": true.
+2. If the task is complete, set "use_tool": false and provide "final_answer".
+3. Use only exact tool names from AVAILABLE UTCP TOOLS.
+4. Do not stop after listing files when the user asked to create, modify, refactor, test, build, or add a feature.
+5. For project refactors, inspect relevant files before writing.
+6. Use filesystem.write for file changes.
+7. Use shell.run only for safe validation commands like gofmt, go test, or go build.
+8. For CodeMode, use codemode.run_code only when CodeMode is clearly the best tool.
+9. Return ONLY JSON.
 
-Return ONLY a JSON object:
+JSON shape:
 {
   "use_tool": true|false,
-  "tool_name": "name or empty",
-  "arguments": { },
-  "answer": "Complete final answer if no tool is used",
-  "reason": "Short explanation"
+  "tool_name": "provider.tool or empty",
+  "arguments": {},
+  "final_answer": "summary when done",
+  "reason": "short reason"
 }
+`,
+			userInput,
+			memoryDesc,
+			fileDesc,
+			toolDesc,
+			strings.Join(observations, "\n\n"),
+		)
 
-Return ONLY JSON.`, userInput, memoryDesc, toolDesc)
-
-	// Query LLM
-	raw, err := a.model.Generate(ctx, choicePrompt)
-	if err != nil {
-		return false, "", err
-	}
-
-	response := strings.TrimSpace(fmt.Sprint(raw))
-
-	// Extract and validate JSON
-	jsonStr := extractJSON(response)
-	if jsonStr == "" {
-		return false, "", nil
-	}
-
-	var tc ToolChoice
-	if err := json.Unmarshal([]byte(jsonStr), &tc); err != nil {
-		return false, "", nil
-	}
-
-	if !tc.UseTool {
-		if tc.Answer != "" {
-			a.storeMemory(sessionID, "assistant", tc.Answer, nil)
-			return true, tc.Answer, nil
+		var (
+			raw any
+			err error
+		)
+		if len(files) > 0 {
+			raw, err = a.model.GenerateWithFiles(ctx, choicePrompt, files)
+		} else {
+			raw, err = a.model.Generate(ctx, choicePrompt)
 		}
-		return false, "", nil
-	}
-	if strings.TrimSpace(tc.ToolName) == "" {
-		return false, "", nil
-	}
-
-	if tc.ToolName == "codemode.run_code" {
-		if !a.AllowUnsafeTools {
-			return true, "", fmt.Errorf("unauthorized tool execution: %s is restricted", tc.ToolName)
-		}
-	}
-
-	// Validate tool exists
-	exists := false
-	for _, t := range toolList {
-		if t.Name == tc.ToolName {
-			exists = true
-			break
-		}
-	}
-	if !exists {
-		return true, "", fmt.Errorf("UTCP tool unknown: %s", tc.ToolName)
-	}
-
-	// Handle codemode.run_code specially
-	if tc.ToolName == "codemode.run_code" && a.CodeMode != nil {
-		code, _ := tc.Arguments["code"].(string)
-		timeout, ok := tc.Arguments["timeout"].(float64)
-		if !ok {
-			timeout = 200000
+		if err != nil {
+			return false, "", err
 		}
 
-		result, err := a.CodeMode.Execute(ctx, codemode.CodeModeArgs{
-			Code:    code,
-			Timeout: int(timeout),
-		})
+		jsonStr := extractJSON(fmt.Sprint(raw))
+		if jsonStr == "" {
+			if len(observations) == 0 {
+				return false, "", nil
+			}
+			final := fmt.Sprintf("Stopped because the tool planner did not return valid JSON after %d tool step(s). Last observation:\n%s", len(observations), lastToolObservation(observations))
+			a.storeMemory(sessionID, "assistant", final, map[string]string{"source": "tool_loop"})
+			return true, final, nil
+		}
+
+		var tc ToolChoice
+		if err := json.Unmarshal([]byte(jsonStr), &tc); err != nil {
+			if len(observations) == 0 {
+				return false, "", nil
+			}
+			final := fmt.Sprintf("Stopped because the tool planner returned invalid JSON after %d tool step(s). Last observation:\n%s", len(observations), lastToolObservation(observations))
+			a.storeMemory(sessionID, "assistant", final, map[string]string{"source": "tool_loop"})
+			return true, final, nil
+		}
+
+		if !tc.UseTool {
+			final := toolChoiceFinalAnswer(tc)
+			if final == "" {
+				if len(observations) == 0 {
+					return false, "", nil
+				}
+				final = fmt.Sprintf("Done. Last observation:\n%s", lastToolObservation(observations))
+			}
+			a.storeMemory(sessionID, "assistant", final, map[string]string{"source": "tool_loop"})
+			return true, final, nil
+		}
+
+		toolName := strings.TrimSpace(tc.ToolName)
+		if toolName == "" {
+			return true, "", fmt.Errorf("tool loop selected empty tool name")
+		}
+		if !toolSpecExists(toolList, toolName) {
+			return true, "", fmt.Errorf("UTCP tool unknown: %s", toolName)
+		}
+		if tc.Arguments == nil {
+			tc.Arguments = map[string]any{}
+		}
+
+		result, err := a.executeTool(ctx, sessionID, toolName, tc.Arguments)
 		if err != nil {
 			a.storeMemory(sessionID, "assistant",
-				fmt.Sprintf("CodeMode error: %v", err),
-				map[string]string{"source": "codemode"},
+				fmt.Sprintf("tool %s error: %v", toolName, err),
+				map[string]string{
+					"tool":   toolName,
+					"source": "tool_loop",
+				},
 			)
 			return true, "", err
 		}
 
 		rawOut := fmt.Sprint(result)
+		observations = append(observations, formatToolObservation(step, toolName, tc.Arguments, rawOut))
+
 		toonBytes, _ := gotoon.Encode(rawOut)
-		full := fmt.Sprintf("%s\n\n.toon:\n%s", rawOut, string(toonBytes))
-
-		a.storeMemory(sessionID, "assistant", full, map[string]string{
-			"source": "codemode",
-		})
-
-		return true, rawOut, nil
-	}
-
-	// Execute UTCP or local tool
-	result, err := a.executeTool(ctx, sessionID, tc.ToolName, tc.Arguments)
-	if err != nil {
 		a.storeMemory(sessionID, "assistant",
-			fmt.Sprintf("tool %s error: %v", tc.ToolName, err),
-			map[string]string{"source": "tool_orchestrator"},
+			fmt.Sprintf("%s\n\n.toon:\n%s", rawOut, string(toonBytes)),
+			map[string]string{
+				"tool":   toolName,
+				"source": "tool_loop",
+			},
 		)
-		return true, "", err
 	}
 
-	// Return RAW output
-	rawOut := fmt.Sprint(result)
-
-	// Store TOON version in memory
-	toonBytes, _ := gotoon.Encode(rawOut)
-	store := fmt.Sprintf("%s\n\n.toon:\n%s", rawOut, string(toonBytes))
-
-	a.storeMemory(sessionID, "assistant", store, map[string]string{
-		"tool":   tc.ToolName,
-		"source": "tool_orchestrator",
-	})
-
-	return true, rawOut, nil
+	final := fmt.Sprintf(
+		"Stopped after %d tool step(s) before the planner reported completion. Last observation:\n%s",
+		maxSteps,
+		lastToolObservation(observations),
+	)
+	a.storeMemory(sessionID, "assistant", final, map[string]string{"source": "tool_loop"})
+	return true, final, nil
 }
 
 // extractJSON attempts to extract valid JSON from a response that may contain
