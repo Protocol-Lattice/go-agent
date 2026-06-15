@@ -1355,6 +1355,10 @@ func (a *Agent) SessionMemory() *memory.SessionMemory {
 // without ingesting them into long-term memory. Use this when you already have
 // file bytes (e.g., uploaded via API) and want the model to consider them
 // ephemerally for this turn only.
+// GenerateWithFiles runs the full orchestration pipeline (direct tool →
+// subagent → CodeMode → UTCP orchestrator) before falling back to a
+// file-aware model call. Files are only forwarded to the model when no
+// tool handles the request.
 func (a *Agent) GenerateWithFiles(
 	ctx context.Context,
 	sessionID string,
@@ -1373,29 +1377,96 @@ func (a *Agent) GenerateWithFiles(
 		return "", errors.New("both user input and files are empty")
 	}
 
-	if strings.TrimSpace(userInput) != "" {
+	trimmed := strings.TrimSpace(userInput)
+
+	// ----------------------------------------------------------
+	// PREFETCH: context retrieval + tool discovery in parallel.
+	// ----------------------------------------------------------
+	var (
+		prefetchWG sync.WaitGroup
+		records    []memory.MemoryRecord
+	)
+	prefetchWG.Add(1)
+	go func() {
+		defer prefetchWG.Done()
+		records, _ = a.retrieveContext(ctx, sessionID, userInput, a.contextLimit)
+	}()
+	_ = a.ToolSpecs()
+
+	// ----------------------------------------------------------
+	// 0. Direct tool invocation (bypass everything).
+	// ----------------------------------------------------------
+	if toolName, args, ok := a.detectDirectToolCall(trimmed); ok {
+		result, err := a.executeTool(ctx, sessionID, toolName, args)
+		if err != nil {
+			return "", err
+		}
+		return fmt.Sprint(result), nil
+	}
+
+	// ----------------------------------------------------------
+	// 1. Subagent commands.
+	// ----------------------------------------------------------
+	if handled, out, meta, err := a.handleCommand(ctx, sessionID, userInput); handled {
+		if err != nil {
+			return "", err
+		}
+		a.storeMemory(sessionID, "subagent", out, meta)
+		return out, nil
+	}
+
+	// ----------------------------------------------------------
+	// 2. CodeMode.
+	// ----------------------------------------------------------
+	if a.CodeMode != nil {
+		if handled, output, err := a.CodeMode.CallTool(ctx, userInput); handled {
+			if err != nil {
+				return "", err
+			}
+			return output.(string), nil
+		}
+	}
+
+	// ----------------------------------------------------------
+	// 3. Tool orchestrator.
+	// ----------------------------------------------------------
+	prefetchWG.Wait()
+	if handled, output, err := a.toolOrchestrator(ctx, sessionID, userInput, records); handled {
+		if err != nil {
+			return "", err
+		}
+		return output, nil
+	}
+
+	// ----------------------------------------------------------
+	// 4. Store user memory only after all tool paths declined.
+	// ----------------------------------------------------------
+	if trimmed != "" {
 		a.storeMemory(sessionID, "user", userInput, nil)
 	}
 
-	// Build base prompt
+	if a.userLooksLikeToolCall(trimmed) {
+		return "", nil
+	}
+
+	// ----------------------------------------------------------
+	// 5. LLM fallback — file-aware model call.
+	// ----------------------------------------------------------
 	prompt, err := a.buildPrompt(ctx, sessionID, userInput)
 	if err != nil {
 		return "", err
 	}
 
-	// Persist new this-turn files
 	if len(files) > 0 {
 		a.storeAttachmentMemories(sessionID, files)
 		prompt += a.buildAttachmentPrompt("Files provided for this turn", files)
 	}
 
-	// Rehydrate old files
 	existing, _ := a.RetrieveAttachmentFiles(ctx, sessionID, a.contextLimit)
 	if len(existing) > 0 {
 		prompt += a.buildAttachmentPrompt("Session attachments (rehydrated)", existing)
 	}
 
-	// Model call
 	completion, err := a.model.GenerateWithFiles(
 		ctx,
 		prompt,
@@ -1407,15 +1478,16 @@ func (a *Agent) GenerateWithFiles(
 
 	response := fmt.Sprint(completion)
 
-	// ---------------------------------------
-	// 🔵 NEW: Add TOON-encoded output
-	// ---------------------------------------
-	toonBytes, _ := gotoon.Encode(completion)
-	full := fmt.Sprintf("%s\n\n.toon:\n%s", response, string(toonBytes))
-
-	// store TOON-enhanced version
+	if a.Guardrails != nil {
+		validated, gErr := a.Guardrails.ValidateAndRepair(ctx, response)
+		if gErr != nil {
+			return "", gErr
+		}
+		response = validated
+		completion = validated
+	}
+	full := completion.(string)
 	a.storeMemory(sessionID, "assistant", full, nil)
-
 	return full, nil
 }
 
