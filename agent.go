@@ -1382,21 +1382,29 @@ func (a *Agent) GenerateWithFiles(
 	}
 
 	existingFiles, _ := a.RetrieveAttachmentFiles(ctx, sessionID, a.contextLimit)
-	allFiles := append([]models.File(nil), existingFiles...)
+
+	allFiles := make([]models.File, 0, len(existingFiles)+len(files))
+	allFiles = append(allFiles, existingFiles...)
 	allFiles = append(allFiles, files...)
+
+	fileBacked := len(allFiles) > 0
 
 	var (
 		prefetchWG sync.WaitGroup
 		records    []memory.MemoryRecord
 	)
+
 	prefetchWG.Add(1)
 	go func() {
 		defer prefetchWG.Done()
 		records, _ = a.retrieveContext(ctx, sessionID, userInput, a.contextLimit)
 	}()
+
 	_ = a.ToolSpecs()
 
-	if trimmed != "" {
+	// Direct tool calls are only safe for text-only requests.
+	// File-backed requests must go through the file-aware orchestration path.
+	if trimmed != "" && !fileBacked {
 		if toolName, args, ok := a.detectDirectToolCall(trimmed); ok {
 			result, err := a.executeTool(ctx, sessionID, toolName, args)
 			if err != nil {
@@ -1414,8 +1422,9 @@ func (a *Agent) GenerateWithFiles(
 		return out, nil
 	}
 
-	// Direct CodeMode does not receive files, so disable it for file-backed turns.
-	if trimmed != "" && len(allFiles) == 0 && a.CodeMode != nil {
+	// Direct CodeMode does not receive files.
+	// If files are present, CodeMode must be disabled unless it receives full attachment context.
+	if trimmed != "" && !fileBacked && a.CodeMode != nil {
 		if handled, output, err := a.CodeMode.CallTool(ctx, userInput); handled {
 			if err != nil {
 				return "", err
@@ -1426,12 +1435,42 @@ func (a *Agent) GenerateWithFiles(
 
 	prefetchWG.Wait()
 
-	// Persist current files before tool orchestration so file-aware tool paths can reuse them.
 	if len(files) > 0 {
 		a.storeAttachmentMemories(sessionID, files)
 	}
 
-	if handled, output, err := a.toolOrchestrator(ctx, sessionID, userInput, records, allFiles...); handled {
+	orchestratorInput := userInput
+	if fileBacked {
+		var ob strings.Builder
+		ob.Grow(len(userInput) + 4096)
+
+		ob.WriteString("FILE-BACKED REQUEST\n")
+		ob.WriteString("Use the attached workspace files as the source of truth.\n")
+		ob.WriteString("Do not use CodeMode unless the full attachment context is included.\n")
+		ob.WriteString("Do not invent files, packages, APIs, commands, or project structure.\n\n")
+
+		if len(existingFiles) > 0 {
+			ob.WriteString(a.buildAttachmentPrompt("Session attachments rehydrated", existingFiles))
+			ob.WriteString("\n")
+		}
+
+		if len(files) > 0 {
+			ob.WriteString(a.buildAttachmentPrompt("Files provided for this turn", files))
+			ob.WriteString("\n")
+		}
+
+		if trimmed != "" {
+			ob.WriteString("User instruction:\n")
+			ob.WriteString(sanitizeInput(userInput))
+			ob.WriteString("\n")
+		} else {
+			ob.WriteString("User instruction:\nAnalyze the provided files.\n")
+		}
+
+		orchestratorInput = ob.String()
+	}
+
+	if handled, output, err := a.toolOrchestrator(ctx, sessionID, orchestratorInput, records, allFiles...); handled {
 		if err != nil {
 			return "", err
 		}
@@ -1442,7 +1481,7 @@ func (a *Agent) GenerateWithFiles(
 		a.storeMemory(sessionID, "user", userInput, nil)
 	}
 
-	if trimmed != "" && a.userLooksLikeToolCall(trimmed) {
+	if trimmed != "" && !fileBacked && a.userLooksLikeToolCall(trimmed) {
 		return "", nil
 	}
 
@@ -1459,7 +1498,7 @@ func (a *Agent) GenerateWithFiles(
 	sb.WriteString("\n\n")
 
 	if len(existingFiles) > 0 {
-		sb.WriteString(a.buildAttachmentPrompt("Session attachments (rehydrated)", existingFiles))
+		sb.WriteString(a.buildAttachmentPrompt("Session attachments rehydrated", existingFiles))
 		sb.WriteString("\n")
 	}
 
@@ -1482,7 +1521,8 @@ func (a *Agent) GenerateWithFiles(
 		completion any
 		err        error
 	)
-	if len(allFiles) > 0 {
+
+	if fileBacked {
 		completion, err = a.model.GenerateWithFiles(ctx, prompt, allFiles)
 	} else {
 		completion, err = a.model.Generate(ctx, prompt)
