@@ -1381,16 +1381,10 @@ func (a *Agent) GenerateWithFiles(
 		return "", errors.New("both user input and files are empty")
 	}
 
-	// Capture already-known files before storing this turn's files. This avoids
-	// immediately rehydrating the same uploaded files and duplicating prompt/file
-	// context in the fallback model call.
 	existingFiles, _ := a.RetrieveAttachmentFiles(ctx, sessionID, a.contextLimit)
 	allFiles := append([]models.File(nil), existingFiles...)
 	allFiles = append(allFiles, files...)
 
-	// ----------------------------------------------------------
-	// PREFETCH: context retrieval + tool discovery in parallel.
-	// ----------------------------------------------------------
 	var (
 		prefetchWG sync.WaitGroup
 		records    []memory.MemoryRecord
@@ -1402,9 +1396,6 @@ func (a *Agent) GenerateWithFiles(
 	}()
 	_ = a.ToolSpecs()
 
-	// ----------------------------------------------------------
-	// 0. Direct tool invocation (bypass everything).
-	// ----------------------------------------------------------
 	if trimmed != "" {
 		if toolName, args, ok := a.detectDirectToolCall(trimmed); ok {
 			result, err := a.executeTool(ctx, sessionID, toolName, args)
@@ -1415,9 +1406,6 @@ func (a *Agent) GenerateWithFiles(
 		}
 	}
 
-	// ----------------------------------------------------------
-	// 1. Subagent commands.
-	// ----------------------------------------------------------
 	if handled, out, meta, err := a.handleCommand(ctx, sessionID, userInput); handled {
 		if err != nil {
 			return "", err
@@ -1426,10 +1414,8 @@ func (a *Agent) GenerateWithFiles(
 		return out, nil
 	}
 
-	// ----------------------------------------------------------
-	// 2. CodeMode DSL.
-	// ----------------------------------------------------------
-	if trimmed != "" && a.CodeMode != nil {
+	// Direct CodeMode does not receive files, so disable it for file-backed turns.
+	if trimmed != "" && len(allFiles) == 0 && a.CodeMode != nil {
 		if handled, output, err := a.CodeMode.CallTool(ctx, userInput); handled {
 			if err != nil {
 				return "", err
@@ -1438,10 +1424,13 @@ func (a *Agent) GenerateWithFiles(
 		}
 	}
 
-	// ----------------------------------------------------------
-	// 3. Multi-step UTCP / CodeMode tool loop.
-	// ----------------------------------------------------------
 	prefetchWG.Wait()
+
+	// Persist current files before tool orchestration so file-aware tool paths can reuse them.
+	if len(files) > 0 {
+		a.storeAttachmentMemories(sessionID, files)
+	}
+
 	if handled, output, err := a.toolOrchestrator(ctx, sessionID, userInput, records, allFiles...); handled {
 		if err != nil {
 			return "", err
@@ -1449,9 +1438,6 @@ func (a *Agent) GenerateWithFiles(
 		return output, nil
 	}
 
-	// ----------------------------------------------------------
-	// 4. Store user memory only after all tool paths declined.
-	// ----------------------------------------------------------
 	if trimmed != "" {
 		a.storeMemory(sessionID, "user", userInput, nil)
 	}
@@ -1460,16 +1446,6 @@ func (a *Agent) GenerateWithFiles(
 		return "", nil
 	}
 
-	// Persist this turn's files only when no tool handled the request. Tool calls
-	// should be explicit and reproducible from their arguments, while fallback
-	// conversations may benefit from future attachment rehydration.
-	if len(files) > 0 {
-		a.storeAttachmentMemories(sessionID, files)
-	}
-
-	// ----------------------------------------------------------
-	// 5. LLM fallback — file-aware model call.
-	// ----------------------------------------------------------
 	var sb strings.Builder
 	sb.Grow(4096)
 
