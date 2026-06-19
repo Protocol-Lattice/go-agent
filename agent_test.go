@@ -104,6 +104,29 @@ func (m *dynamicStubModel) GenerateStream(ctx context.Context, prompt string) (<
 	return ch, nil
 }
 
+type captureFilePlannerModel struct {
+	prompts []string
+	files   [][]models.File
+}
+
+func (m *captureFilePlannerModel) GenerateWithFiles(ctx context.Context, prompt string, files []models.File) (any, error) {
+	m.prompts = append(m.prompts, prompt)
+	m.files = append(m.files, append([]models.File(nil), files...))
+	return `{"use_tool": false, "final_answer": "done"}`, nil
+}
+
+func (m *captureFilePlannerModel) Generate(ctx context.Context, prompt string) (any, error) {
+	m.prompts = append(m.prompts, prompt)
+	return `{"use_tool": false, "final_answer": "done"}`, nil
+}
+
+func (m *captureFilePlannerModel) GenerateStream(ctx context.Context, prompt string) (<-chan models.StreamChunk, error) {
+	ch := make(chan models.StreamChunk, 1)
+	ch <- models.StreamChunk{Delta: "done", FullText: "done", Done: true}
+	close(ch)
+	return ch, nil
+}
+
 type stubUTCPClient struct {
 	callCount       int
 	lastToolName    string
@@ -441,6 +464,59 @@ func TestGenerateWithFilesStoresNonTextAttachments(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("expected attachment memory to be stored for non-text file")
+	}
+}
+
+func TestGenerateWithFilesFileBackedPlannerTreatsExamplePathsAsIllustrative(t *testing.T) {
+	ctx := context.Background()
+	bank := memory.NewMemoryBankWithStore(memory.NewInMemoryStore())
+	mem := memory.NewSessionMemory(bank, 8).WithEmbedder(memory.DummyEmbedder{})
+	model := &captureFilePlannerModel{}
+	utcpClient := &stubUTCPClient{
+		searchTools: []utcpTools.Tool{
+			{Name: "filesystem.write", Description: "Write a file"},
+			{Name: "filesystem.read", Description: "Read a file"},
+		},
+	}
+
+	agent, err := New(Options{Model: model, Memory: mem, UTCPClient: utcpClient})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+
+	files := []models.File{{
+		Name: "main.go",
+		MIME: "text/x-go",
+		Data: []byte("package main\n\nfunc Greet() string { return \"Hello, World!\" }\n"),
+	}}
+	userInput := "Inspect the codebase to identify a refactoring opportunity. For example, read an existing file like 'pkg/service/logic.go', then refactor the target."
+
+	out, err := agent.GenerateWithFiles(ctx, "session", userInput, files)
+	if err != nil {
+		t.Fatalf("GenerateWithFiles returned error: %v", err)
+	}
+	if out != "done" {
+		t.Fatalf("unexpected output: %q", out)
+	}
+	if len(model.prompts) == 0 {
+		t.Fatalf("expected planner prompt to be captured")
+	}
+
+	prompt := model.prompts[0]
+	for _, want := range []string{
+		"Workspace file-selection rules:",
+		"Available attached workspace paths (authoritative for existing files):",
+		"- main.go",
+		"Treat paths mentioned as examples",
+		"for example",
+		"do not create or edit paths that appear only as illustrative examples",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("expected planner prompt to contain %q, got:\n%s", want, prompt)
+		}
+	}
+	if len(model.files) != 1 || len(model.files[0]) != 1 || model.files[0][0].Name != "main.go" {
+		t.Fatalf("expected main.go to be forwarded to file-aware planner, got %#v", model.files)
 	}
 }
 

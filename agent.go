@@ -1448,6 +1448,8 @@ func (a *Agent) GenerateWithFiles(
 		ob.WriteString("Use the attached workspace files as the source of truth.\n")
 		ob.WriteString("Do not use CodeMode unless the full attachment context is included.\n")
 		ob.WriteString("Do not invent files, packages, APIs, commands, or project structure.\n\n")
+		ob.WriteString(fileBackedWorkspaceRules(allFiles))
+		ob.WriteString("\n")
 
 		if len(existingFiles) > 0 {
 			ob.WriteString(a.buildAttachmentPrompt("Session attachments rehydrated", existingFiles))
@@ -1497,6 +1499,11 @@ func (a *Agent) GenerateWithFiles(
 	sb.WriteString(a.renderMemory(records))
 	sb.WriteString("\n\n")
 
+	if fileBacked {
+		sb.WriteString(fileBackedWorkspaceRules(allFiles))
+		sb.WriteString("\n")
+	}
+
 	if len(existingFiles) > 0 {
 		sb.WriteString(a.buildAttachmentPrompt("Session attachments rehydrated", existingFiles))
 		sb.WriteString("\n")
@@ -1542,6 +1549,38 @@ func (a *Agent) GenerateWithFiles(
 
 	a.storeMemory(sessionID, "assistant", response, nil)
 	return response, nil
+}
+
+func fileBackedWorkspaceRules(files []models.File) string {
+	if len(files) == 0 {
+		return ""
+	}
+
+	var sb strings.Builder
+	sb.WriteString("Workspace file-selection rules:\n")
+	sb.WriteString("Available attached workspace paths (authoritative for existing files):\n")
+
+	seen := make(map[string]bool, len(files))
+	for i, f := range files {
+		name := strings.TrimSpace(f.Name)
+		if name == "" {
+			name = fmt.Sprintf("attachment_%d", i+1)
+		}
+		key := strings.ToLower(name)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		sb.WriteString("- ")
+		sb.WriteString(name)
+		sb.WriteString("\n")
+	}
+
+	sb.WriteString("For fixes, refactors, and edits to existing code, choose targets from the attached path list first.\n")
+	sb.WriteString("If the attached paths include the relevant existing source file, use that file as the refactor target instead of creating a new source path.\n")
+	sb.WriteString("Treat paths mentioned as examples, e.g. after \"for example\", \"e.g.\", \"such as\", or \"like\", as illustrative unless they are attached paths or the user explicitly asks to create that exact path.\n")
+	sb.WriteString("New companion files are allowed only when the task requires them, such as tests or docs, and should correspond to the chosen existing file when possible.\n")
+	return sb.String()
 }
 
 // buildAttachmentPrompt renders a compact, token-conscious list of files.
@@ -1769,6 +1808,7 @@ func (a *Agent) toolOrchestrator(
 	toolDesc := a.cachedToolPrompt(toolList)
 	memoryDesc := a.renderMemory(records)
 	fileDesc := a.buildAttachmentPrompt("Files available for this turn", files)
+	workspaceRules := fileBackedWorkspaceRules(files)
 	maxSteps := configuredToolLoopMaxSteps()
 
 	var observations []string
@@ -1783,6 +1823,9 @@ CONVERSATION MEMORY:
 %s
 
 FILES:
+%s
+
+WORKSPACE FILE SELECTION:
 %s
 
 AVAILABLE UTCP TOOLS:
@@ -1804,6 +1847,7 @@ RULES:
 7. Use shell.run only for safe validation commands like gofmt, go test, or go build.
 8. For CodeMode, use codemode.run_code only when CodeMode is clearly the best tool.
 9. Return ONLY JSON.
+10. For file-backed requests, do not create or edit paths that appear only as illustrative examples; prefer attached existing paths.
 
 JSON shape:
 {
@@ -1817,6 +1861,7 @@ JSON shape:
 			userInput,
 			memoryDesc,
 			fileDesc,
+			workspaceRules,
 			toolDesc,
 			strings.Join(observations, "\n\n"),
 		)
