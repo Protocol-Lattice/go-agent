@@ -60,6 +60,8 @@ func NewLLMProvider(ctx context.Context, provider string, model string, promptPr
 		agent, err = NewOllamaLLM(model, promptPrefix)
 	case "anthropic", "claude":
 		agent = NewAnthropicLLM(model, promptPrefix)
+	case "openrouter":
+		agent = NewOpenRouterLLM(model, promptPrefix)
 	default:
 		return nil, fmt.Errorf("unknown provider: %s", provider)
 	}
