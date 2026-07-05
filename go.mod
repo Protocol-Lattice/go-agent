@@ -1,8 +1,9 @@
 module github.com/Protocol-Lattice/go-agent
 
-go 1.25.0
+go 1.25.10
 
 require (
+	github.com/OpenRouterTeam/go-sdk v0.5.12
 	github.com/alpkeskin/gotoon v0.1.1
 	github.com/anthropics/anthropic-sdk-go v1.13.0
 	github.com/anush008/fastembed-go v1.0.0
@@ -10,7 +11,6 @@ require (
 	github.com/jackc/pgx/v5 v5.7.6
 	github.com/neo4j/neo4j-go-driver/v5 v5.28.4
 	github.com/ollama/ollama v0.12.5
-	github.com/revrost/go-openrouter v1.6.0
 	github.com/sashabaranov/go-openai v1.41.2
 	github.com/universal-tool-calling-protocol/go-utcp v1.10.12
 	go.mongodb.org/mongo-driver v1.13.1
@@ -70,6 +70,7 @@ require (
 	github.com/schollz/progressbar/v2 v2.15.0 // indirect
 	github.com/schollz/progressbar/v3 v3.14.1 // indirect
 	github.com/spf13/cast v1.7.1 // indirect
+	github.com/spyzhov/ajson v0.8.0 // indirect
 	github.com/stretchr/testify v1.11.1 // indirect
 	github.com/sugarme/regexpset v0.0.0-20200920021344-4d4ec8eaf93c // indirect
 	github.com/sugarme/tokenizer v0.2.3-0.20230829214935-448e79b1ed65 // indirect
