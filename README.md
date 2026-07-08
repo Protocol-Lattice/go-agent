@@ -149,6 +149,72 @@ func main() {
 
 Use direct `agent.New` for small programs and tests. Use `adk.New` once you need reusable modules, shared sessions, provider selection, or UTCP runtime wiring.
 
+## Graph Workflows
+
+Graph workflows give you ADK Go v2-style deterministic control flow: define nodes, wire them with edges, and pass each node's output to the next node. Function nodes, emitting router nodes, session-aware agent nodes, and `agent.Tool` nodes can be mixed in the same graph.
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"strings"
+
+	"github.com/Protocol-Lattice/go-agent/src/adk/workflow"
+	"github.com/Protocol-Lattice/go-agent/src/adk/workflowagent"
+)
+
+func main() {
+	classify := workflow.NewEmittingFunctionNode[string, any]("classify",
+		func(_ workflow.Context, input string, emit workflow.EmitFunc) (any, error) {
+			route := "LOGISTICS"
+			if strings.Contains(strings.ToLower(input), "bug") {
+				route = "BUG"
+			}
+			return nil, emit(&workflow.Event{Output: input, Routes: []any{route}})
+		},
+		workflow.NodeConfig{},
+	)
+
+	bug := workflow.NewFunctionNode[string, string]("bug",
+		func(_ workflow.Context, input string) (string, error) {
+			return "Handling bug: " + input, nil
+		},
+		workflow.NodeConfig{},
+	)
+
+	fallback := workflow.NewFunctionNode[string, string]("fallback",
+		func(_ workflow.Context, input string) (string, error) {
+			return "Handling request: " + input, nil
+		},
+		workflow.NodeConfig{},
+	)
+
+	root, err := workflowagent.New(workflowagent.Config{
+		Name: "routing_workflow",
+		Edges: workflow.Concat(
+			workflow.Chain(workflow.Start, classify),
+			[]workflow.Edge{
+				{From: classify, To: bug, Route: workflow.StringRoute("BUG")},
+				{From: classify, To: fallback, Route: workflow.Default},
+			},
+		),
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	out, err := root.Generate(context.Background(), "demo-session", "bug in checkout")
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println(out)
+}
+```
+
+See `cmd/example/graph_workflow` for a runnable no-key example.
+
 ## Memory
 
 Every agent needs a `*memory.SessionMemory`. The session layer keeps recent conversation turns and can retrieve long-term records from a vector store.
