@@ -4,20 +4,28 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 )
 
 const defaultMaxSteps = 128
 
 // GraphConfig configures workflow graph execution.
 type GraphConfig struct {
-	MaxSteps int
+	MaxSteps    int
+	JoinTimeout time.Duration
 }
 
 // Graph executes workflow nodes according to explicit edges and routes.
 type Graph struct {
-	edges   []Edge
-	adj     map[string][]Edge
-	maxStep int
+	edges       []Edge
+	adj         map[string][]Edge
+	joins       map[string]joinSpec
+	maxStep     int
+	joinTimeout time.Duration
+}
+
+type joinSpec struct {
+	sources map[string]struct{}
 }
 
 // NewGraph validates and constructs a workflow graph.
@@ -31,6 +39,7 @@ func NewGraph(edges []Edge, config GraphConfig) (*Graph, error) {
 	}
 
 	adj := make(map[string][]Edge)
+	joins := make(map[string]joinSpec)
 	hasStart := false
 	for i, edge := range edges {
 		if edge.From == nil {
@@ -53,15 +62,40 @@ func NewGraph(edges []Edge, config GraphConfig) (*Graph, error) {
 		if from == nodeKey(Start) {
 			hasStart = true
 		}
+		if isJoinNode(edge.To) {
+			if from == nodeKey(Start) {
+				return nil, fmt.Errorf("workflow join node %s cannot receive input from START", to)
+			}
+			spec := joins[to]
+			if spec.sources == nil {
+				spec.sources = make(map[string]struct{})
+			}
+			if _, exists := spec.sources[from]; exists {
+				return nil, fmt.Errorf("workflow join node %s has duplicate predecessor %s", to, from)
+			}
+			spec.sources[from] = struct{}{}
+			joins[to] = spec
+		}
 		adj[from] = append(adj[from], edge)
 	}
 	if !hasStart {
 		return nil, fmt.Errorf("workflow graph requires an edge from START")
 	}
+	for name, spec := range joins {
+		if len(spec.sources) < 2 {
+			return nil, fmt.Errorf("workflow join node %s requires at least two direct predecessors", name)
+		}
+	}
 
 	copied := make([]Edge, len(edges))
 	copy(copied, edges)
-	return &Graph{edges: copied, adj: adj, maxStep: maxSteps}, nil
+	return &Graph{
+		edges:       copied,
+		adj:         adj,
+		joins:       joins,
+		maxStep:     maxSteps,
+		joinTimeout: config.JoinTimeout,
+	}, nil
 }
 
 // Edges returns a copy of graph edges.
@@ -83,21 +117,39 @@ func (g *Graph) Run(ctx context.Context, sessionID string, input any) (any, erro
 	wctx := newContext(ctx, sessionID)
 	queue := make([]runItem, 0)
 	for _, edge := range g.matchingEdges(Start, Event{Output: input}) {
-		queue = append(queue, runItem{node: edge.To, input: input})
+		queue = append(queue, runItem{from: Start, node: edge.To, input: input})
 	}
 	if len(queue) == 0 {
 		return nil, fmt.Errorf("workflow graph has no START target")
 	}
 
 	finals := make([]any, 0, 1)
+	joinStates := make(map[string]*joinState, len(g.joins))
 	steps := 0
 	for len(queue) > 0 {
+		if err := wctx.Err(); err != nil {
+			return nil, err
+		}
+		if err := g.joinTimeoutError(joinStates); err != nil {
+			return nil, err
+		}
 		if steps >= g.maxStep {
 			return nil, fmt.Errorf("workflow graph exceeded max steps %d", g.maxStep)
 		}
 		item := queue[0]
 		queue = queue[1:]
 		steps++
+
+		if isJoinNode(item.node) {
+			joinedInput, ready, err := g.recordJoinInput(item, joinStates)
+			if err != nil {
+				return nil, err
+			}
+			if !ready {
+				continue
+			}
+			item.input = joinedInput
+		}
 
 		events, err := item.node.run(wctx, item.input)
 		if err != nil {
@@ -110,9 +162,12 @@ func (g *Graph) Run(ctx context.Context, sessionID string, input any) (any, erro
 				continue
 			}
 			for _, edge := range matches {
-				queue = append(queue, runItem{node: edge.To, input: ev.Output})
+				queue = append(queue, runItem{from: item.node, node: edge.To, input: ev.Output})
 			}
 		}
+	}
+	if err := g.incompleteJoinError(joinStates); err != nil {
+		return nil, err
 	}
 
 	switch len(finals) {
@@ -126,8 +181,83 @@ func (g *Graph) Run(ctx context.Context, sessionID string, input any) (any, erro
 }
 
 type runItem struct {
+	from  Node
 	node  Node
 	input any
+}
+
+type joinState struct {
+	values       map[string]any
+	firstArrival time.Time
+}
+
+func isJoinNode(node Node) bool {
+	_, ok := node.(interface{ isJoinNode() })
+	return ok
+}
+
+func (g *Graph) recordJoinInput(item runItem, states map[string]*joinState) (map[string]any, bool, error) {
+	name := nodeKey(item.node)
+	spec, ok := g.joins[name]
+	if !ok {
+		return nil, false, fmt.Errorf("workflow join node %s is not configured", name)
+	}
+	source := nodeKey(item.from)
+	if _, expected := spec.sources[source]; !expected {
+		return nil, false, fmt.Errorf("workflow join node %s received output from unexpected predecessor %s", name, source)
+	}
+
+	state := states[name]
+	if state == nil {
+		state = &joinState{values: make(map[string]any, len(spec.sources)), firstArrival: time.Now()}
+		states[name] = state
+	}
+	if _, duplicate := state.values[source]; duplicate {
+		return nil, false, fmt.Errorf("workflow join node %s received multiple outputs from predecessor %s", name, source)
+	}
+	state.values[source] = item.input
+	if len(state.values) != len(spec.sources) {
+		return nil, false, nil
+	}
+
+	inputs := make(map[string]any, len(state.values))
+	for source, output := range state.values {
+		inputs[source] = output
+	}
+	return inputs, true, nil
+}
+
+func (g *Graph) joinTimeoutError(states map[string]*joinState) error {
+	if g.joinTimeout <= 0 {
+		return nil
+	}
+	now := time.Now()
+	for name, state := range states {
+		if state == nil || len(state.values) == 0 || now.Sub(state.firstArrival) <= g.joinTimeout {
+			continue
+		}
+		return fmt.Errorf("workflow join node %s timed out after %s", name, g.joinTimeout)
+	}
+	return nil
+}
+
+func (g *Graph) incompleteJoinError(states map[string]*joinState) error {
+	for name, state := range states {
+		if state == nil || len(state.values) == 0 {
+			continue
+		}
+		spec := g.joins[name]
+		missing := make([]string, 0, len(spec.sources)-len(state.values))
+		for source := range spec.sources {
+			if _, received := state.values[source]; !received {
+				missing = append(missing, source)
+			}
+		}
+		if len(missing) > 0 {
+			return fmt.Errorf("workflow join node %s did not receive outputs from %s", name, strings.Join(missing, ", "))
+		}
+	}
+	return nil
 }
 
 func (g *Graph) matchingEdges(from Node, ev Event) []Edge {

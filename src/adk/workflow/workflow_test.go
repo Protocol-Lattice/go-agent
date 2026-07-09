@@ -2,8 +2,10 @@ package workflow_test
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	goagent "github.com/Protocol-Lattice/go-agent"
 	"github.com/Protocol-Lattice/go-agent/src/adk/workflow"
@@ -128,6 +130,176 @@ func TestToolNodePassesMapArguments(t *testing.T) {
 	}
 	if tool.last.SessionID != "s1" {
 		t.Fatalf("expected session id to be passed, got %q", tool.last.SessionID)
+	}
+}
+
+func TestGraphJoinsFanOutBranchOutputs(t *testing.T) {
+	t.Parallel()
+
+	left := workflow.NewFunctionNode[string, string]("left",
+		func(_ workflow.Context, input string) (string, error) {
+			return "left:" + input, nil
+		},
+		workflow.NodeConfig{},
+	)
+	right := workflow.NewFunctionNode[string, string]("right",
+		func(_ workflow.Context, input string) (string, error) {
+			return "right:" + input, nil
+		},
+		workflow.NodeConfig{},
+	)
+	joinCalls := 0
+	join := workflow.NewJoinNode("join",
+		func(_ workflow.Context, inputs map[string]any) (any, error) {
+			joinCalls++
+			return inputs["left"].(string) + " + " + inputs["right"].(string), nil
+		},
+		workflow.NodeConfig{},
+	)
+
+	graph, err := workflow.NewGraph([]workflow.Edge{
+		{From: workflow.Start, To: left},
+		{From: workflow.Start, To: right},
+		{From: left, To: join},
+		{From: right, To: join},
+	}, workflow.GraphConfig{})
+	if err != nil {
+		t.Fatalf("NewGraph: %v", err)
+	}
+
+	out, err := graph.Run(context.Background(), "session", "work")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if out != "left:work + right:work" {
+		t.Fatalf("unexpected output: %q", out)
+	}
+	if joinCalls != 1 {
+		t.Fatalf("expected join to run once, got %d calls", joinCalls)
+	}
+}
+
+func TestGraphReportsIncompleteJoin(t *testing.T) {
+	t.Parallel()
+
+	router := workflow.NewEmittingFunctionNode[string, any]("router",
+		func(_ workflow.Context, input string, emit workflow.EmitFunc) (any, error) {
+			return nil, emit(&workflow.Event{Output: input, Routes: []any{"left"}})
+		},
+		workflow.NodeConfig{},
+	)
+	left := workflow.NewFunctionNode[string, string]("left",
+		func(_ workflow.Context, input string) (string, error) { return input, nil },
+		workflow.NodeConfig{},
+	)
+	right := workflow.NewFunctionNode[string, string]("right",
+		func(_ workflow.Context, input string) (string, error) { return input, nil },
+		workflow.NodeConfig{},
+	)
+	joinCalls := 0
+	join := workflow.NewJoinNode("join",
+		func(_ workflow.Context, inputs map[string]any) (any, error) {
+			joinCalls++
+			return inputs, nil
+		},
+		workflow.NodeConfig{},
+	)
+
+	graph, err := workflow.NewGraph([]workflow.Edge{
+		{From: workflow.Start, To: router},
+		{From: router, To: left, Route: workflow.StringRoute("left")},
+		{From: router, To: right, Route: workflow.StringRoute("right")},
+		{From: left, To: join},
+		{From: right, To: join},
+	}, workflow.GraphConfig{})
+	if err != nil {
+		t.Fatalf("NewGraph: %v", err)
+	}
+
+	_, err = graph.Run(context.Background(), "session", "work")
+	if err == nil || !strings.Contains(err.Error(), "did not receive outputs from right") {
+		t.Fatalf("expected incomplete join error, got %v", err)
+	}
+	if joinCalls != 0 {
+		t.Fatalf("join should not run with incomplete inputs, got %d calls", joinCalls)
+	}
+}
+
+func TestGraphJoinTimeout(t *testing.T) {
+	t.Parallel()
+
+	left := workflow.NewFunctionNode[string, string]("left",
+		func(_ workflow.Context, input string) (string, error) { return input, nil },
+		workflow.NodeConfig{},
+	)
+	delay := workflow.NewFunctionNode[string, string]("delay",
+		func(_ workflow.Context, input string) (string, error) {
+			time.Sleep(20 * time.Millisecond)
+			return input, nil
+		},
+		workflow.NodeConfig{},
+	)
+	right := workflow.NewFunctionNode[string, string]("right",
+		func(_ workflow.Context, input string) (string, error) { return input, nil },
+		workflow.NodeConfig{},
+	)
+	join := workflow.NewJoinNode("join",
+		func(_ workflow.Context, inputs map[string]any) (any, error) { return inputs, nil },
+		workflow.NodeConfig{},
+	)
+
+	graph, err := workflow.NewGraph([]workflow.Edge{
+		{From: workflow.Start, To: left},
+		{From: left, To: join},
+		{From: left, To: delay},
+		{From: delay, To: right},
+		{From: right, To: join},
+	}, workflow.GraphConfig{JoinTimeout: time.Millisecond})
+	if err != nil {
+		t.Fatalf("NewGraph: %v", err)
+	}
+
+	_, err = graph.Run(context.Background(), "session", "work")
+	if err == nil || !strings.Contains(err.Error(), "timed out") {
+		t.Fatalf("expected join timeout, got %v", err)
+	}
+}
+
+func TestGraphRespectsCanceledContext(t *testing.T) {
+	t.Parallel()
+
+	node := workflow.NewFunctionNode[string, string]("node",
+		func(_ workflow.Context, input string) (string, error) { return input, nil },
+		workflow.NodeConfig{},
+	)
+	graph, err := workflow.NewGraph(workflow.Chain(workflow.Start, node), workflow.GraphConfig{})
+	if err != nil {
+		t.Fatalf("NewGraph: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err = graph.Run(ctx, "session", "work")
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context cancellation, got %v", err)
+	}
+}
+
+func TestNewGraphRejectsJoinWithOnePredecessor(t *testing.T) {
+	t.Parallel()
+
+	step := workflow.NewFunctionNode[string, string]("step",
+		func(_ workflow.Context, input string) (string, error) { return input, nil },
+		workflow.NodeConfig{},
+	)
+	join := workflow.NewJoinNode("join",
+		func(_ workflow.Context, inputs map[string]any) (any, error) { return inputs, nil },
+		workflow.NodeConfig{},
+	)
+
+	_, err := workflow.NewGraph(workflow.Chain(workflow.Start, step, join), workflow.GraphConfig{})
+	if err == nil || !strings.Contains(err.Error(), "at least two direct predecessors") {
+		t.Fatalf("expected join validation error, got %v", err)
 	}
 }
 

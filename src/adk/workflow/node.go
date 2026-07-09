@@ -76,6 +76,50 @@ type emittingFunctionNode[I, O any] struct {
 	config NodeConfig
 }
 
+// JoinFunc combines the outputs of every direct predecessor of a JoinNode.
+// The map is keyed by the predecessor node name.
+type JoinFunc func(Context, map[string]any) (any, error)
+
+type joinNode struct {
+	name   string
+	fn     JoinFunc
+	config NodeConfig
+}
+
+// NewJoinNode creates a barrier node. It runs once after every direct
+// predecessor has produced one output for the current graph invocation. The
+// reducer receives a map keyed by predecessor node name. A join needs at least
+// two distinct direct predecessors; NewGraph validates that requirement.
+func NewJoinNode(name string, fn JoinFunc, config NodeConfig) Node {
+	return &joinNode{
+		name:   strings.TrimSpace(name),
+		fn:     fn,
+		config: config,
+	}
+}
+
+func (n *joinNode) Name() string        { return n.name }
+func (n *joinNode) Description() string { return n.config.Description }
+func (*joinNode) isJoinNode()           {}
+
+func (n *joinNode) run(ctx Context, input any) ([]Event, error) {
+	if strings.TrimSpace(n.name) == "" {
+		return nil, fmt.Errorf("workflow join node has empty name")
+	}
+	if n.fn == nil {
+		return nil, fmt.Errorf("workflow join node %s has nil function", n.name)
+	}
+	inputs, ok := input.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("workflow join node %s input: expected predecessor outputs, got %T", n.name, input)
+	}
+	out, err := n.fn(ctx, inputs)
+	if err != nil {
+		return nil, err
+	}
+	return []Event{{Output: out}}, nil
+}
+
 // NewEmittingFunctionNode wraps a function that can emit explicit Events.
 // Returning nil and emitting no events suppresses automatic output.
 func NewEmittingFunctionNode[I, O any](name string, fn func(Context, I, EmitFunc) (O, error), config NodeConfig) Node {

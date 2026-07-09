@@ -153,6 +153,11 @@ Use direct `agent.New` for small programs and tests. Use `adk.New` once you need
 
 Graph workflows give you ADK Go v2-style deterministic control flow: define nodes, wire them with edges, and pass each node's output to the next node. Function nodes, emitting router nodes, session-aware agent nodes, and `agent.Tool` nodes can be mixed in the same graph.
 
+For fan-out work, use `NewJoinNode` as a barrier: it waits for one output from
+each direct predecessor, then gives the reducer a `map[string]any` keyed by
+node name. Set `GraphConfig.JoinTimeout` to bound how long a partially-filled
+join may wait; graph cancellation is also respected.
+
 ```go
 package main
 
