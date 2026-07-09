@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="go-agent is a Go framework for building production-ready AI agents with models, memory, tools, guardrails, and workflow orchestration."
+    />
+    <meta name="theme-color" content="#15191a" />
+    <title>go-agent | AI agents, built in Go</title>
+    <link rel="stylesheet" href="styles.css" />
+    <script src="site.js" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#content">Skip to content</a>
+
+    <header class="site-header">
+      <a class="brand" href="#top" aria-label="go-agent home">
+        <span class="brand-mark" aria-hidden="true">go</span>
+        <span>go-agent</span>
+      </a>
+
+      <button class="menu-toggle" type="button" aria-expanded="false" aria-controls="main-nav">
+        Menu
+      </button>
+
+      <nav id="main-nav" class="site-nav" aria-label="Primary navigation">
+        <a href="#capabilities">Capabilities</a>
+        <a href="#workflows">Workflows</a>
+        <a href="#start">Get started</a>
+        <a href="https://pkg.go.dev/github.com/Protocol-Lattice/go-agent">API reference</a>
+      </nav>
+
+      <button id="theme-toggle" class="theme-toggle" type="button" aria-label="Switch color theme">
+        Switch theme
+      </button>
+    </header>
+
+    <main id="content">
+      <section id="top" class="hero section-shell">
+        <div class="hero-copy reveal">
+          <p class="eyebrow">Go-native AI runtime</p>
+          <h1>Agents in Go.</h1>
+          <p class="hero-summary">
+            Build agents with pluggable models, memory, tools, guardrails, and deterministic workflows in idiomatic Go.
+          </p>
+          <div class="hero-actions">
+            <a class="button button-primary" href="https://github.com/Protocol-Lattice/go-agent#readme">Read documentation</a>
+            <a class="button button-secondary" href="https://github.com/Protocol-Lattice/go-agent">Browse source</a>
+          </div>
+        </div>
+
+        <figure class="hero-visual reveal">
+          <img
+            src="assets/agent-system.png"
+            width="1448"
+            height="1086"
+            alt="Abstract charcoal modules connected by amber glass and copper pathways."
+          />
+        </figure>
+      </section>
+
+      <section class="signal-band" aria-label="Core library areas">
+        <div>Models</div>
+        <div>Memory</div>
+        <div>Tools</div>
+        <div>Workflows</div>
+        <div>Guardrails</div>
+      </section>
+
+      <section id="capabilities" class="section-shell capabilities-section">
+        <div class="section-intro reveal">
+          <h2>The pieces you need, without a foreign runtime.</h2>
+          <p>
+            Start with a small agent core. Add the infrastructure your application needs when it needs it.
+          </p>
+        </div>
+
+        <div class="capability-grid">
+          <article class="capability capability-runtime reveal">
+            <span class="capability-kicker">Core runtime</span>
+            <h3>One agent surface.</h3>
+            <p>
+              Generate, stream, attach files, call tools, and coordinate specialists through a clear Go API.
+            </p>
+            <code>agent.New(agent.Options{ ... })</code>
+          </article>
+
+          <article class="capability capability-memory reveal">
+            <span class="capability-kicker">Memory</span>
+            <h3>Keep the right context.</h3>
+            <p>Session memory with pluggable vector stores for long-running agent conversations.</p>
+          </article>
+
+          <article class="capability capability-tools reveal">
+            <span class="capability-kicker">Tools</span>
+            <h3>Call real systems safely.</h3>
+            <p>Structured tools, UTCP orchestration, CodeMode, and input or output guardrails.</p>
+          </article>
+
+          <article class="capability capability-models reveal">
+            <span class="capability-kicker">Providers</span>
+            <h3>Keep models interchangeable.</h3>
+            <p>Use OpenAI, Gemini, Anthropic, OpenRouter, Ollama, or a local dummy model.</p>
+          </article>
+        </div>
+      </section>
+
+      <section id="workflows" class="workflow-section">
+        <div class="workflow-media reveal">
+          <img
+            src="assets/workflow-paths.png"
+            width="1680"
+            height="945"
+            alt="Abstract amber paths converging through dark modular components."
+          />
+        </div>
+        <div class="workflow-copy reveal">
+          <p class="eyebrow">Graph workflows</p>
+          <h2>Make orchestration explicit.</h2>
+          <p>
+            Route work between function nodes, tools, and agents. Fan out, join results, and keep control flow visible in code.
+          </p>
+          <dl class="workflow-list">
+            <div>
+              <dt>Route</dt>
+              <dd>Use emitted events to select the next node.</dd>
+            </div>
+            <div>
+              <dt>Join</dt>
+              <dd>Collect direct predecessor outputs before continuing.</dd>
+            </div>
+            <div>
+              <dt>Bound</dt>
+              <dd>Set step limits and join timeouts for predictable runs.</dd>
+            </div>
+          </dl>
+        </div>
+      </section>
+
+      <section id="start" class="section-shell start-section">
+        <div class="start-copy reveal">
+          <h2>Start with one package.</h2>
+          <p>
+            The dummy model and in-memory store make the first integration safe to run locally.
+          </p>
+        </div>
+        <div class="install-panel reveal">
+          <div class="install-command">
+            <code id="install-command">go get github.com/Protocol-Lattice/go-agent</code>
+            <button id="copy-install" type="button" aria-describedby="copy-feedback">Copy install</button>
+          </div>
+          <p id="copy-feedback" class="copy-feedback" role="status" aria-live="polite">
+            Add a model and memory provider, then create your first agent.
+          </p>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <a class="brand" href="#top" aria-label="go-agent home">
+        <span class="brand-mark" aria-hidden="true">go</span>
+        <span>go-agent</span>
+      </a>
+      <p>Open-source primitives for agents that belong in Go services.</p>
+      <div class="footer-links">
+        <a href="https://github.com/Protocol-Lattice/go-agent">GitHub</a>
+        <a href="https://pkg.go.dev/github.com/Protocol-Lattice/go-agent">Package docs</a>
+        <a href="https://github.com/Protocol-Lattice/go-agent/blob/main/LICENSE">MIT License</a>
+      </div>
+    </footer>
+  </body>
+</html>
