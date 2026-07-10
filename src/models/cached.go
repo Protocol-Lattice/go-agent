@@ -85,6 +85,17 @@ func (c *CachedLLM) Generate(ctx context.Context, prompt string) (any, error) {
 	return res, nil
 }
 
+// GenerateWithTools forwards native tool calling when the wrapped model
+// supports it. Tool-call responses are deliberately not cached because tool
+// execution may have side effects.
+func (c *CachedLLM) GenerateWithTools(ctx context.Context, prompt string, tools []ToolDefinition) (ToolCallResponse, error) {
+	native, ok := c.Agent.(ToolCallingAgent)
+	if !ok {
+		return ToolCallResponse{}, fmt.Errorf("%w: wrapped model", ErrToolCallingUnsupported)
+	}
+	return native.GenerateWithTools(ctx, prompt, tools)
+}
+
 // GenerateWithFiles checks the cache (including file hashes) before calling the underlying agent.
 func (c *CachedLLM) GenerateWithFiles(ctx context.Context, prompt string, files []File) (any, error) {
 	// Create a cache key that includes the prompt and all file contents

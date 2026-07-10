@@ -94,6 +94,7 @@ Supported provider names:
 | OpenAI | `openai` | `OPENAI_API_KEY` or `OPENAI_KEY` |
 | Anthropic | `anthropic`, `claude` | `ANTHROPIC_API_KEY` |
 | Ollama | `ollama` | optional `OLLAMA_HOST`, defaults to `http://localhost:11434` |
+| OpenRouter | `openrouter` | `OPENROUTER_API_KEY` or `OPENROUTER_KEY` |
 
 Embeddings are selected with `memory.AutoEmbedder()`.
 
@@ -312,6 +313,8 @@ a, err := agent.New(agent.Options{
 ```
 
 For model-selected tool execution across providers and processes, wire execution through UTCP. Agents can also be exposed as UTCP tools.
+
+Models that implement `models.ToolCallingAgent` use provider-native tool calls automatically. The OpenAI adapter supports this path; other models continue through the prompt-based planner. Native tool calls are not cached because they may execute side effects.
 
 ## Agents As Tools
 

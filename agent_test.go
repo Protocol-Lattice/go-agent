@@ -980,6 +980,16 @@ func TestShorthandInvocationCallsUTCP(t *testing.T) {
 	}
 }
 
+func TestExtractJSONStopsAtFirstObjectBeforePromptBraces(t *testing.T) {
+	response := `{"use_tool":true,"tool_name":"echo","arguments":{"input":"hi"}} | JSON shape: {"use_tool":true}`
+
+	got := extractJSON(response)
+	want := `{"use_tool":true,"tool_name":"echo","arguments":{"input":"hi"}}`
+	if got != want {
+		t.Fatalf("extractJSON() = %q, want %q", got, want)
+	}
+}
+
 func TestDirectJsonStreamInvocationCallsUTCPStream(t *testing.T) {
 	ctx := context.Background()
 	model := &stubModel{}

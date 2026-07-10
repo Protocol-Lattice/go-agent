@@ -2,10 +2,20 @@ package models
 
 import (
 	"context"
+	"errors"
 	"sync/atomic"
 	"testing"
 	"time"
 )
+
+func TestCachedLLMGenerateWithToolsUnsupported(t *testing.T) {
+	cached := NewCachedLLM(&MockAgent{}, 10, time.Minute, "")
+
+	_, err := cached.GenerateWithTools(context.Background(), "use a tool", []ToolDefinition{{Name: "echo"}})
+	if !errors.Is(err, ErrToolCallingUnsupported) {
+		t.Fatalf("expected ErrToolCallingUnsupported, got %v", err)
+	}
+}
 
 type MockAgent struct {
 	CallCount int32

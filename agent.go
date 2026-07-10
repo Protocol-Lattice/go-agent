@@ -375,7 +375,19 @@ func (a *Agent) executeTool(
 		return result.Value, nil
 	}
 
-	// 1. Remote UTCP tool.
+	// 1. Locally registered tool.
+	if tool, _, ok := a.lookupTool(toolName); ok {
+		response, err := tool.Invoke(ctx, ToolRequest{
+			SessionID: sessionID,
+			Arguments: args,
+		})
+		if err != nil {
+			return nil, err
+		}
+		return response.Content, nil
+	}
+
+	// 2. Remote UTCP tool.
 	if a.UTCPClient != nil {
 		if streamFlag, ok := args["stream"].(bool); ok && streamFlag {
 			stream, err := a.UTCPClient.CallToolStream(ctx, toolName, args)
@@ -1080,13 +1092,18 @@ func (a *Agent) ToolSpecs() []tools.Tool {
 				continue
 			}
 
+			inputs := tools.ToolInputOutputSchema{Type: "object"}
+			if encoded, err := json.Marshal(spec.InputSchema); err == nil {
+				_ = json.Unmarshal(encoded, &inputs)
+			}
+			if strings.TrimSpace(inputs.Type) == "" {
+				inputs.Type = "object"
+			}
+
 			allSpecs = append(allSpecs, tools.Tool{
 				Name:        name,
 				Description: spec.Description,
-				Inputs: tools.ToolInputOutputSchema{
-					Type:       "object",
-					Properties: spec.InputSchema,
-				},
+				Inputs:      inputs,
 			})
 			seen[key] = true
 		}
@@ -1804,6 +1821,12 @@ func (a *Agent) toolOrchestrator(
 	if len(toolList) == 0 {
 		return false, "", nil
 	}
+	if native, ok := a.model.(models.ToolCallingAgent); ok && len(files) == 0 {
+		handled, output, err := a.toolOrchestratorNative(ctx, sessionID, userInput, records, toolList, native)
+		if !errors.Is(err, models.ErrToolCallingUnsupported) {
+			return handled, output, err
+		}
+	}
 
 	toolDesc := a.cachedToolPrompt(toolList)
 	memoryDesc := a.renderMemory(records)
@@ -1811,7 +1834,11 @@ func (a *Agent) toolOrchestrator(
 	workspaceRules := fileBackedWorkspaceRules(files)
 	maxSteps := configuredToolLoopMaxSteps()
 
-	var observations []string
+	var (
+		observations      []string
+		lastToolCallKey   string
+		lastToolCallValue string
+	)
 	for step := 1; step <= maxSteps; step++ {
 		choicePrompt := fmt.Sprintf(`
 You are an agentic UTCP tool execution loop.
@@ -1922,6 +1949,14 @@ JSON shape:
 			tc.Arguments = map[string]any{}
 		}
 
+		// A planner that repeats the exact same tool request has not learned
+		// anything from the previous observation. Stop before replaying a
+		// potentially non-idempotent side effect.
+		toolCallKey := toolName + "\x00" + compactJSON(tc.Arguments)
+		if toolCallKey == lastToolCallKey {
+			return true, lastToolCallValue, nil
+		}
+
 		result, err := a.executeTool(ctx, sessionID, toolName, tc.Arguments)
 		if err != nil {
 			a.storeMemory(sessionID, "assistant",
@@ -1935,6 +1970,8 @@ JSON shape:
 		}
 
 		rawOut := fmt.Sprint(result)
+		lastToolCallKey = toolCallKey
+		lastToolCallValue = rawOut
 		observations = append(observations, formatToolObservation(step, toolName, tc.Arguments, rawOut))
 
 		toonBytes, _ := gotoon.Encode(rawOut)
@@ -1956,84 +1993,171 @@ JSON shape:
 	return true, final, nil
 }
 
+func (a *Agent) toolOrchestratorNative(
+	ctx context.Context,
+	sessionID string,
+	userInput string,
+	records []memory.MemoryRecord,
+	toolList []tools.Tool,
+	native models.ToolCallingAgent,
+) (bool, string, error) {
+	definitions := nativeToolDefinitions(toolList)
+	if len(definitions) == 0 {
+		return false, "", nil
+	}
+
+	memoryDesc := a.renderMemory(records)
+	maxSteps := configuredToolLoopMaxSteps()
+	var (
+		observations      []string
+		lastToolCallKey   string
+		lastToolCallValue string
+	)
+
+	for step := 1; step <= maxSteps; step++ {
+		prompt := fmt.Sprintf(`
+You are an agentic tool execution loop using native tool calls.
+
+USER REQUEST:
+%q
+
+CONVERSATION MEMORY:
+%s
+
+PREVIOUS TOOL OBSERVATIONS:
+%s
+
+OBJECTIVE:
+Continue until the user request is complete. Call a tool when needed; when no
+more tools are needed, answer the user directly. Use only the provided tools.
+`, userInput, memoryDesc, strings.Join(observations, "\n\n"))
+
+		response, err := native.GenerateWithTools(ctx, prompt, definitions)
+		if err != nil {
+			return false, "", err
+		}
+		if len(response.ToolCalls) == 0 {
+			final := strings.TrimSpace(response.Content)
+			if final == "" {
+				if len(observations) == 0 {
+					return false, "", nil
+				}
+				final = fmt.Sprintf("Done. Last observation:\n%s", lastToolObservation(observations))
+			}
+			a.storeMemory(sessionID, "assistant", final, map[string]string{"source": "native_tool_loop"})
+			return true, final, nil
+		}
+
+		for _, call := range response.ToolCalls {
+			toolName := strings.TrimSpace(call.Name)
+			if toolName == "" {
+				return true, "", fmt.Errorf("native tool loop selected empty tool name")
+			}
+			if !toolSpecExists(toolList, toolName) {
+				return true, "", fmt.Errorf("native tool unknown: %s", toolName)
+			}
+			if call.Arguments == nil {
+				call.Arguments = map[string]any{}
+			}
+
+			toolCallKey := toolName + "\x00" + compactJSON(call.Arguments)
+			if toolCallKey == lastToolCallKey {
+				return true, lastToolCallValue, nil
+			}
+
+			result, err := a.executeTool(ctx, sessionID, toolName, call.Arguments)
+			if err != nil {
+				a.storeMemory(sessionID, "assistant",
+					fmt.Sprintf("tool %s error: %v", toolName, err),
+					map[string]string{"tool": toolName, "source": "native_tool_loop"},
+				)
+				return true, "", err
+			}
+
+			rawOut := fmt.Sprint(result)
+			lastToolCallKey = toolCallKey
+			lastToolCallValue = rawOut
+			observations = append(observations, formatToolObservation(step, toolName, call.Arguments, rawOut))
+			toonBytes, _ := gotoon.Encode(rawOut)
+			a.storeMemory(sessionID, "assistant",
+				fmt.Sprintf("%s\n\n.toon:\n%s", rawOut, string(toonBytes)),
+				map[string]string{"tool": toolName, "source": "native_tool_loop"},
+			)
+		}
+	}
+
+	final := fmt.Sprintf(
+		"Stopped after %d native tool step(s) before the model reported completion. Last observation:\n%s",
+		maxSteps,
+		lastToolObservation(observations),
+	)
+	a.storeMemory(sessionID, "assistant", final, map[string]string{"source": "native_tool_loop"})
+	return true, final, nil
+}
+
+func nativeToolDefinitions(specs []tools.Tool) []models.ToolDefinition {
+	definitions := make([]models.ToolDefinition, 0, len(specs))
+	seen := make(map[string]struct{}, len(specs))
+	for _, spec := range specs {
+		name := strings.TrimSpace(spec.Name)
+		if name == "" {
+			continue
+		}
+		key := strings.ToLower(name)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+
+		schema := map[string]any{}
+		if encoded, err := json.Marshal(spec.Inputs); err == nil {
+			_ = json.Unmarshal(encoded, &schema)
+		}
+		if schemaType, _ := schema["type"].(string); strings.TrimSpace(schemaType) == "" {
+			schema["type"] = "object"
+		}
+		definitions = append(definitions, models.ToolDefinition{
+			Name:        name,
+			Description: spec.Description,
+			InputSchema: schema,
+		})
+	}
+	return definitions
+}
+
 // extractJSON attempts to extract valid JSON from a response that may contain
 // markdown code fences, extra text, or concatenated content.
 func extractJSON(response string) string {
 	response = strings.TrimSpace(response)
 
-	// Case 1: Pure JSON (starts and ends with braces)
-	if strings.HasPrefix(response, "{") && strings.HasSuffix(response, "}") {
-		return response
-	}
-
-	// Case 2: JSON wrapped in markdown code fence
+	// Strip a markdown code fence before looking for the first JSON value.
 	// ```json\n{...}\n```
 	if strings.Contains(response, "```") {
-		// Remove opening fence
-		response = strings.TrimSpace(response)
 		response = strings.TrimPrefix(response, "```json")
 		response = strings.TrimPrefix(response, "```")
 		response = strings.TrimSpace(response)
 
-		// Remove closing fence
 		if idx := strings.Index(response, "```"); idx != -1 {
 			response = response[:idx]
 		}
 		response = strings.TrimSpace(response)
-
-		if strings.HasPrefix(response, "{") && strings.HasSuffix(response, "}") {
-			return response
-		}
 	}
 
-	// Case 3: JSON followed by extra content (e.g., " | prompt text")
-	// Find the first { and try to extract a complete JSON object
-	startIdx := strings.Index(response, "{")
-	if startIdx == -1 {
-		return ""
-	}
-
-	// Find the matching closing brace
-	depth := 0
-	inString := false
-	escaped := false
-
-	for i := startIdx; i < len(response); i++ {
-		ch := response[i]
-
-		if escaped {
-			escaped = false
-			continue
+	// Decode from each opening brace. json.Decoder stops after the first
+	// complete value, so planner JSON followed by arbitrary prompt text (even
+	// more JSON-shaped text) is handled without a hand-rolled brace scanner.
+	for start := strings.IndexByte(response, '{'); start >= 0; {
+		decoder := json.NewDecoder(strings.NewReader(response[start:]))
+		var value json.RawMessage
+		if err := decoder.Decode(&value); err == nil && len(value) > 0 {
+			return string(value)
 		}
 
-		if ch == '\\' {
-			escaped = true
-			continue
+		next := strings.IndexByte(response[start+1:], '{')
+		if next < 0 {
+			break
 		}
-
-		if ch == '"' {
-			inString = !inString
-			continue
-		}
-
-		if inString {
-			continue
-		}
-
-		if ch == '{' {
-			depth++
-		} else if ch == '}' {
-			depth--
-			if depth == 0 {
-				// Found the matching closing brace
-				candidate := response[startIdx : i+1]
-				// Validate it's actually valid JSON
-				var test interface{}
-				if json.Unmarshal([]byte(candidate), &test) == nil {
-					return candidate
-				}
-			}
-		}
+		start += next + 1
 	}
 
 	return ""

@@ -3,6 +3,7 @@ package models
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -25,6 +26,67 @@ func NewOpenAILLM(model string, promptPrefix string) *OpenAILLM {
 	}
 	client := openai.NewClient(apiKey)
 	return &OpenAILLM{Client: client, Model: model, PromptPrefix: promptPrefix}
+}
+
+// GenerateWithTools uses OpenAI's native function-calling API. The generic
+// Agent interface remains unchanged; callers can opt into this capability via
+// models.ToolCallingAgent.
+func (o *OpenAILLM) GenerateWithTools(ctx context.Context, prompt string, definitions []ToolDefinition) (ToolCallResponse, error) {
+	fullPrompt := prompt
+	if o.PromptPrefix != "" {
+		fullPrompt = o.PromptPrefix + "\n" + prompt
+	}
+
+	request := openai.ChatCompletionRequest{
+		Model: o.Model,
+		Messages: []openai.ChatCompletionMessage{{
+			Role:    openai.ChatMessageRoleUser,
+			Content: fullPrompt,
+		}},
+	}
+	for _, definition := range definitions {
+		name := strings.TrimSpace(definition.Name)
+		if name == "" {
+			continue
+		}
+		parameters := definition.InputSchema
+		if parameters == nil {
+			parameters = map[string]any{"type": "object"}
+		}
+		request.Tools = append(request.Tools, openai.Tool{
+			Type: openai.ToolTypeFunction,
+			Function: &openai.FunctionDefinition{
+				Name:        name,
+				Description: definition.Description,
+				Parameters:  parameters,
+			},
+		})
+	}
+
+	resp, err := o.Client.CreateChatCompletion(ctx, request)
+	if err != nil {
+		return ToolCallResponse{}, err
+	}
+	if len(resp.Choices) == 0 {
+		return ToolCallResponse{}, errors.New("no response from OpenAI")
+	}
+
+	choice := resp.Choices[0].Message
+	result := ToolCallResponse{Content: choice.Content}
+	for _, call := range choice.ToolCalls {
+		arguments := map[string]any{}
+		if strings.TrimSpace(call.Function.Arguments) != "" {
+			if err := json.Unmarshal([]byte(call.Function.Arguments), &arguments); err != nil {
+				return ToolCallResponse{}, fmt.Errorf("openai tool %s arguments: %w", call.Function.Name, err)
+			}
+		}
+		result.ToolCalls = append(result.ToolCalls, ToolCall{
+			ID:        call.ID,
+			Name:      call.Function.Name,
+			Arguments: arguments,
+		})
+	}
+	return result, nil
 }
 
 func (o *OpenAILLM) Generate(ctx context.Context, prompt string) (any, error) {
