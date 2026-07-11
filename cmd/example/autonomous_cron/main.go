@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Protocol-Lattice/go-agent"
+	"github.com/Protocol-Lattice/go-agent/cmd/example/internal/filestore"
 	"github.com/Protocol-Lattice/go-agent/src/adk"
 	"github.com/Protocol-Lattice/go-agent/src/adk/modules"
 	"github.com/Protocol-Lattice/go-agent/src/memory"
@@ -63,7 +64,7 @@ func main() {
 			modules.NewModelModule("model", func(_ context.Context) (models.Agent, error) {
 				return orchestratorModel, nil
 			}),
-			FileBackedMemoryModule("agent_memory.json", 10000, memory.AutoEmbedder(), &memOpts),
+			filestore.FileBackedMemoryModule("agent_memory.json", 10000, memory.AutoEmbedder(), &memOpts),
 		),
 		adk.WithCodeModeUtcp(client, orchestratorModel),
 	)

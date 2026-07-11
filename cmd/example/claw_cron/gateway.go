@@ -65,7 +65,7 @@ func (g *PermissionGateway) handleRequestPermission(ctx context.Context, inputs 
 	reason, _ := inputs["reason"].(string)
 
 	prompt := fmt.Sprintf("%s (Reason: %s)", action, reason)
-	
+
 	respCh := make(chan bool)
 	req := permissionReq{
 		action: prompt,

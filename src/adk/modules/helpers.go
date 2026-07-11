@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log"
 	"os"
+	"sync"
 
 	agent "github.com/Protocol-Lattice/go-agent"
 	kit "github.com/Protocol-Lattice/go-agent/src/adk"
@@ -21,6 +22,68 @@ var (
 	newPostgresStore       = memory.NewPostgresStore
 	newMongoStore          = memorystore.NewMongoStore
 )
+
+const defaultMemoryWindow = 8
+
+type memoryStoreFactory func() (memorystore.VectorStore, error)
+
+func memoryOptions(opts *memory.Options) memory.Options {
+	if opts == nil {
+		return memory.DefaultOptions()
+	}
+	return *opts
+}
+
+func memoryBundle(store memorystore.VectorStore, window int, embedder memory.Embedder, opts *memory.Options) kit.MemoryBundle {
+	if window <= 0 {
+		window = defaultMemoryWindow
+	}
+
+	bank := newMemoryBankWithStore(store)
+	mem := newSessionMemory(bank, window)
+	mem.WithEmbedder(embedder)
+	engine := newEngine(bank.Store, memoryOptions(opts))
+	engine.WithLogger(log.New(os.Stderr, "memory-engine: ", log.LstdFlags))
+	mem.WithEngine(engine)
+
+	shared := func(local string, spaces ...string) *memory.SharedSession {
+		return newSharedSession(mem, local, spaces...)
+	}
+	return kit.MemoryBundle{Session: mem, Shared: shared}
+}
+
+func eagerMemoryModule(name string, store memorystore.VectorStore, window int, embedder memory.Embedder, opts *memory.Options) *MemoryModule {
+	bundle := memoryBundle(store, window, embedder, opts)
+	provider := func(context.Context) (kit.MemoryBundle, error) {
+		return bundle, nil
+	}
+	return NewMemoryModule(name, provider)
+}
+
+func lazyMemoryModule(name string, factory memoryStoreFactory, window int, embedder memory.Embedder, opts *memory.Options) *MemoryModule {
+	var (
+		once    sync.Once
+		bundle  kit.MemoryBundle
+		initErr error
+	)
+
+	provider := func(context.Context) (kit.MemoryBundle, error) {
+		once.Do(func() {
+			store, err := factory()
+			if err != nil {
+				initErr = err
+				return
+			}
+			bundle = memoryBundle(store, window, embedder, opts)
+		})
+		if initErr != nil {
+			return kit.MemoryBundle{}, initErr
+		}
+		return bundle, nil
+	}
+
+	return NewMemoryModule(name, provider)
+}
 
 // StaticModelProvider returns a provider that always yields the supplied model.
 func StaticModelProvider(model models.Agent) kit.ModelProvider {
@@ -46,168 +109,43 @@ func StaticMemoryProvider(mem *memory.SessionMemory) kit.MemoryProvider {
 // InMemoryMemoryModule constructs a memory module backed by the in-memory
 // store. The underlying bank is initialised once and reused so agents built
 // from the same kit share memories and collaborative spaces.
-func InMemoryMemoryModule(window int, embeeder memory.Embedder, opts *memory.Options) *MemoryModule {
-	size := window
-	if size <= 0 {
-		size = 8
-	}
-	bank := newMemoryBankWithStore(memory.NewInMemoryStore())
-	mem := newSessionMemory(bank, size)
-	mem.WithEmbedder(embeeder)
-	engine := newEngine(bank.Store, *opts)
-	mem.WithEngine(engine)
-	engineLogger := log.New(os.Stderr, "memory-engine: ", log.LstdFlags)
-	mem.Engine.WithLogger(engineLogger)
-
-	provider := func(context.Context) (kit.MemoryBundle, error) {
-		shared := func(local string, spaces ...string) *memory.SharedSession {
-			return memory.NewSharedSession(mem, local, spaces...)
-		}
-		return kit.MemoryBundle{Session: mem, Shared: shared}, nil
-	}
-	return NewMemoryModule("memory", provider)
+func InMemoryMemoryModule(window int, embedder memory.Embedder, opts *memory.Options) *MemoryModule {
+	return eagerMemoryModule("memory", memory.NewInMemoryStore(), window, embedder, opts)
 }
 
-func InQdrantMemory(window int, baseURL string, collection string, embeeder memory.Embedder, opts *memory.Options) *MemoryModule {
-	size := window
-	if size <= 0 {
-		size = 8
-	}
-	bank := newMemoryBankWithStore(memory.NewQdrantStore(baseURL, collection, ""))
-	mem := newSessionMemory(bank, size)
-	mem.WithEmbedder(embeeder)
-	engine := newEngine(bank.Store, *opts)
-	mem.WithEngine(engine)
-	engineLogger := log.New(os.Stderr, "memory-engine: ", log.LstdFlags)
-	mem.Engine.WithLogger(engineLogger)
-
-	provider := func(context.Context) (kit.MemoryBundle, error) {
-		shared := func(local string, spaces ...string) *memory.SharedSession {
-			return memory.NewSharedSession(mem, local, spaces...)
-		}
-		return kit.MemoryBundle{Session: mem, Shared: shared}, nil
-	}
-	return NewMemoryModule("qdrant", provider)
+func InQdrantMemory(window int, baseURL string, collection string, embedder memory.Embedder, opts *memory.Options) *MemoryModule {
+	return eagerMemoryModule("qdrant", memory.NewQdrantStore(baseURL, collection, ""), window, embedder, opts)
 }
 
-func InPostgresMemory(ctx context.Context, window int, connStr string, embeeder memory.Embedder, opts *memory.Options) *MemoryModule {
-	var (
-		cached    *memory.SessionMemory
-		cachedErr error
-	)
-	provider := func(context.Context) (kit.MemoryBundle, error) {
-		if cached == nil && cachedErr == nil {
-			ps, err := newPostgresStore(ctx, connStr)
-			if err != nil {
-				cachedErr = err
-				return kit.MemoryBundle{}, err
-			}
-			bank := newMemoryBankWithStore(ps)
-			size := window
-			if size <= 0 {
-				size = 8
-			}
-			mem := newSessionMemory(bank, size)
-			mem.WithEmbedder(embeeder)
-			engine := newEngine(bank.Store, *opts)
-			mem.WithEngine(engine)
-			engineLogger := log.New(os.Stderr, "memory-engine: ", log.LstdFlags)
-			mem.Engine.WithLogger(engineLogger)
-			cached = mem
-		}
-		if cached == nil {
-			return kit.MemoryBundle{}, cachedErr
-		}
-		shared := func(local string, spaces ...string) *memory.SharedSession {
-			return newSharedSession(cached, local, spaces...)
-		}
-		return kit.MemoryBundle{Session: cached, Shared: shared}, nil
+func InPostgresMemory(ctx context.Context, window int, connStr string, embedder memory.Embedder, opts *memory.Options) *MemoryModule {
+	factory := func() (memorystore.VectorStore, error) {
+		return newPostgresStore(ctx, connStr)
 	}
-	return NewMemoryModule("postgres", provider)
+	return lazyMemoryModule("postgres", factory, window, embedder, opts)
 }
 
-func InMongoMemory(ctx context.Context, window int, uri, database, collection string, embeeder memory.Embedder, opts *memory.Options) *MemoryModule {
-	var (
-		cached    *memory.SessionMemory
-		cachedErr error
-	)
-
-	provider := func(context.Context) (kit.MemoryBundle, error) {
-		if cached == nil && cachedErr == nil {
-			ms, err := newMongoStore(ctx, uri, database, collection)
-			if err != nil {
-				cachedErr = err
-				return kit.MemoryBundle{}, err
-			}
-			bank := newMemoryBankWithStore(ms)
-			size := window
-			if size <= 0 {
-				size = 8
-			}
-			mem := newSessionMemory(bank, size)
-			mem.WithEmbedder(embeeder)
-			engine := newEngine(bank.Store, *opts)
-			mem.WithEngine(engine)
-			engineLogger := log.New(os.Stderr, "memory-engine: ", log.LstdFlags)
-			mem.Engine.WithLogger(engineLogger)
-			cached = mem
-		}
-		if cached == nil {
-			return kit.MemoryBundle{}, cachedErr
-		}
-		shared := func(local string, spaces ...string) *memory.SharedSession {
-			return newSharedSession(cached, local, spaces...)
-		}
-		return kit.MemoryBundle{Session: cached, Shared: shared}, nil
+func InMongoMemory(ctx context.Context, window int, uri, database, collection string, embedder memory.Embedder, opts *memory.Options) *MemoryModule {
+	factory := func() (memorystore.VectorStore, error) {
+		return newMongoStore(ctx, uri, database, collection)
 	}
-
-	return NewMemoryModule("mongo", provider)
+	return lazyMemoryModule("mongo", factory, window, embedder, opts)
 }
 
-func InNeo4jMemory(ctx context.Context, window int, factory func(context.Context) (*memory.Neo4jStore, error), embeeder memory.Embedder, opts *memory.Options) *MemoryModule {
-	var (
-		cached    *memory.SessionMemory
-		cachedErr error
-	)
-
-	provider := func(context.Context) (kit.MemoryBundle, error) {
-		if cached == nil && cachedErr == nil {
-			if factory == nil {
-				cachedErr = errors.New("neo4j store factory is nil")
-				return kit.MemoryBundle{}, cachedErr
-			}
-			store, err := factory(ctx)
-			if err != nil {
-				cachedErr = err
-				return kit.MemoryBundle{}, err
-			}
-			if store == nil {
-				cachedErr = errors.New("neo4j store is nil")
-				return kit.MemoryBundle{}, cachedErr
-			}
-			bank := newMemoryBankWithStore(store)
-			size := window
-			if size <= 0 {
-				size = 8
-			}
-			mem := newSessionMemory(bank, size)
-			mem.WithEmbedder(embeeder)
-			engine := newEngine(bank.Store, *opts)
-			mem.WithEngine(engine)
-			engineLogger := log.New(os.Stderr, "memory-engine: ", log.LstdFlags)
-			mem.Engine.WithLogger(engineLogger)
-			cached = mem
+func InNeo4jMemory(ctx context.Context, window int, factory func(context.Context) (*memory.Neo4jStore, error), embedder memory.Embedder, opts *memory.Options) *MemoryModule {
+	storeFactory := func() (memorystore.VectorStore, error) {
+		if factory == nil {
+			return nil, errors.New("neo4j store factory is nil")
 		}
-		if cached == nil {
-			return kit.MemoryBundle{}, cachedErr
+		store, err := factory(ctx)
+		if err != nil {
+			return nil, err
 		}
-		shared := func(local string, spaces ...string) *memory.SharedSession {
-			return newSharedSession(cached, local, spaces...)
+		if store == nil {
+			return nil, errors.New("neo4j store is nil")
 		}
-		return kit.MemoryBundle{Session: cached, Shared: shared}, nil
+		return store, nil
 	}
-
-	return NewMemoryModule("neo4j", provider)
+	return lazyMemoryModule("neo4j", storeFactory, window, embedder, opts)
 }
 
 // StaticToolProvider wraps a fixed tool slice and optional catalog into a

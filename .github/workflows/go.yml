@@ -24,6 +24,9 @@ jobs:
     - name: Vet
       run: go vet ./...
 
+    - name: Test website JavaScript
+      run: node --test website/site.test.js
+
     - name: Run Tests with Coverage
       run: |
         go test -v -coverprofile=coverage.out ./...

@@ -30,7 +30,7 @@ cd go-agent
 go test ./...
 ```
 
-The module currently targets Go `1.25.0`.
+The module currently targets Go `1.25.10`.
 
 ## Quick Start
 

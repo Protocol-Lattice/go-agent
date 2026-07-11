@@ -28,39 +28,9 @@ func (s *InMemoryStore) StoreMemory(_ context.Context, sessionID, content string
 		s.records = make(map[int64]model.MemoryRecord)
 	}
 	now := time.Now().UTC()
-	importance, source, summary, lastEmbedded, metadataJSON := model.NormalizeMetadata(metadata, now)
-	meta := model.DecodeMetadata(metadataJSON)
-	space := model.StringFromAny(meta["space"])
-	if space == "" {
-		space = sessionID
-	}
-	matrix := model.ValidEmbeddingMatrix(meta)
-	storedEmbedding := append([]float32(nil), embedding...)
-	if len(storedEmbedding) == 0 {
-		for _, vec := range matrix {
-			if len(vec) == 0 {
-				continue
-			}
-			storedEmbedding = append([]float32(nil), vec...)
-			break
-		}
-	}
+	record := prepareMemoryRecord(sessionID, content, metadata, embedding, now, false)
 	s.nextID++
-	record := model.MemoryRecord{
-		ID:              s.nextID,
-		SessionID:       sessionID,
-		Space:           space,
-		Content:         content,
-		Metadata:        metadataJSON,
-		Embedding:       storedEmbedding,
-		Importance:      importance,
-		Source:          source,
-		Summary:         summary,
-		CreatedAt:       now,
-		LastEmbedded:    lastEmbedded,
-		GraphEdges:      model.ValidGraphEdges(meta),
-		EmbeddingMatrix: matrix,
-	}
+	record.ID = s.nextID
 	s.records[record.ID] = record
 	return nil
 }

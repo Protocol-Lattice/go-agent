@@ -75,8 +75,6 @@ func NewLLMProvider(ctx context.Context, provider string, model string, promptPr
 
 // sanitizeForGemini coerces edge cases again and filters to what Gemini will accept.
 // Return "" to skip attaching (fallback to text-only).
-// sanitizeForGemini coerces edge cases again and filters to what Gemini will accept.
-// Return "" to skip attaching (fallback to text-only).
 func sanitizeForGemini(mt string) string {
 	mt = strings.ToLower(strings.TrimSpace(mt))
 
@@ -115,10 +113,10 @@ func sanitizeForGemini(mt string) string {
 	}
 }
 
+const mimeCacheLimit = 1000
+
 // normalizeMIME fixes messy/alias MIMEs and falls back to file extension.
-// Optimized version with caching and lookup tables.
 func normalizeMIME(name, m string) string {
-	// Fast path: check cache first
 	cacheKey := name + "|" + m
 	mimeCacheMu.RLock()
 	if cached, ok := mimeCache[cacheKey]; ok {
@@ -127,46 +125,23 @@ func normalizeMIME(name, m string) string {
 	}
 	mimeCacheMu.RUnlock()
 
-	strip := func(s string) string {
-		if i := strings.IndexByte(s, ';'); i >= 0 {
-			return strings.TrimSpace(s[:i])
-		}
-		return strings.TrimSpace(s)
+	result := normalizeMIMEUncached(name, m)
+	mimeCacheMu.Lock()
+	if len(mimeCache) < mimeCacheLimit {
+		mimeCache[cacheKey] = result
 	}
+	mimeCacheMu.Unlock()
+	return result
+}
 
-	fromExt := func() string {
-		ext := strings.ToLower(filepath.Ext(name))
-		if ext == "" {
-			return ""
-		}
-
-		// Fast lookup in our map
-		if mt, ok := mimeExtMap[ext]; ok {
-			return mt
-		}
-
-		// Fallback to mime package
-		if mt := mime.TypeByExtension(ext); mt != "" {
-			return strip(mt)
-		}
-		return ""
-	}
-
+func normalizeMIMEUncached(name, m string) string {
 	raw := strings.ToLower(strings.TrimSpace(m))
 	if raw == "" {
-		result := fromExt()
-		// Cache the result
-		mimeCacheMu.Lock()
-		if len(mimeCache) < 1000 { // Limit cache size
-			mimeCache[cacheKey] = result
-		}
-		mimeCacheMu.Unlock()
-		return result
+		return mimeFromExtension(name)
 	}
 
-	raw = strip(raw)
+	raw = stripMIMEParameters(raw)
 
-	// FIX DUPLICATES - optimized with strings.Count
 	for strings.HasPrefix(raw, "image/image/") || strings.HasPrefix(raw, "video/video/") {
 		if strings.HasPrefix(raw, "image/image/") {
 			raw = "image/" + strings.TrimPrefix(raw, "image/image/")
@@ -176,36 +151,35 @@ func normalizeMIME(name, m string) string {
 		}
 	}
 
-	// Fast alias lookup
 	if normalized, ok := mimeAliasMap[raw]; ok {
-		mimeCacheMu.Lock()
-		if len(mimeCache) < 1000 {
-			mimeCache[cacheKey] = normalized
-		}
-		mimeCacheMu.Unlock()
 		return normalized
 	}
 
-	// Malformed MIME -> use extension
 	if !strings.Contains(raw, "/") || strings.HasSuffix(raw, "/") {
-		if via := fromExt(); via != "" {
-			mimeCacheMu.Lock()
-			if len(mimeCache) < 1000 {
-				mimeCache[cacheKey] = via
-			}
-			mimeCacheMu.Unlock()
+		if via := mimeFromExtension(name); via != "" {
 			return via
 		}
 	}
 
-	// Cache the result
-	mimeCacheMu.Lock()
-	if len(mimeCache) < 1000 {
-		mimeCache[cacheKey] = raw
-	}
-	mimeCacheMu.Unlock()
-
 	return raw
+}
+
+func stripMIMEParameters(value string) string {
+	if index := strings.IndexByte(value, ';'); index >= 0 {
+		return strings.TrimSpace(value[:index])
+	}
+	return strings.TrimSpace(value)
+}
+
+func mimeFromExtension(name string) string {
+	ext := strings.ToLower(filepath.Ext(name))
+	if ext == "" {
+		return ""
+	}
+	if mediaType, ok := mimeExtMap[ext]; ok {
+		return mediaType
+	}
+	return stripMIMEParameters(mime.TypeByExtension(ext))
 }
 
 func isTextMIME(m string) bool {

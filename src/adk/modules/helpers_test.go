@@ -3,6 +3,7 @@ package modules
 import (
 	"context"
 	"errors"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -247,6 +248,49 @@ func TestInQdrantMemory(t *testing.T) {
 	}
 }
 
+func TestMemoryModulesAcceptNilOptions(t *testing.T) {
+	tests := []struct {
+		name   string
+		module func() *MemoryModule
+	}{
+		{
+			name: "in-memory",
+			module: func() *MemoryModule {
+				return InMemoryMemoryModule(4, memory.DummyEmbedder{}, nil)
+			},
+		},
+		{
+			name: "qdrant",
+			module: func() *MemoryModule {
+				return InQdrantMemory(4, "http://localhost:6333", "collection", memory.DummyEmbedder{}, nil)
+			},
+		},
+		{
+			name: "neo4j",
+			module: func() *MemoryModule {
+				return InNeo4jMemory(context.Background(), 4, func(context.Context) (*memory.Neo4jStore, error) {
+					return &memory.Neo4jStore{}, nil
+				}, memory.DummyEmbedder{}, nil)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			bundle, err := tt.module().provider(context.Background())
+			if err != nil {
+				t.Fatalf("provider returned error: %v", err)
+			}
+			if bundle.Session == nil || bundle.Session.Engine == nil {
+				t.Fatalf("expected fully initialized session memory")
+			}
+			if bundle.Shared == nil || bundle.Shared("local") == nil {
+				t.Fatalf("expected shared session factory")
+			}
+		})
+	}
+}
+
 func TestInPostgresMemoryCachesError(t *testing.T) {
 	original := newPostgresStore
 	defer func() { newPostgresStore = original }()
@@ -269,6 +313,51 @@ func TestInPostgresMemoryCachesError(t *testing.T) {
 	}
 	if calls != 1 {
 		t.Fatalf("expected single attempt to create store, got %d", calls)
+	}
+}
+
+func TestInPostgresMemoryInitializesOnceConcurrently(t *testing.T) {
+	original := newPostgresStore
+	defer func() { newPostgresStore = original }()
+
+	var calls int32
+	newPostgresStore = func(context.Context, string) (*memory.PostgresStore, error) {
+		atomic.AddInt32(&calls, 1)
+		time.Sleep(10 * time.Millisecond)
+		return &memory.PostgresStore{}, nil
+	}
+
+	module := InPostgresMemory(context.Background(), 4, "postgres://test", memory.DummyEmbedder{}, nil)
+	const workers = 32
+	results := make([]*memory.SessionMemory, workers)
+	errs := make([]error, workers)
+
+	var wg sync.WaitGroup
+	wg.Add(workers)
+	for i := range workers {
+		go func() {
+			defer wg.Done()
+			bundle, err := module.provider(context.Background())
+			errs[i] = err
+			results[i] = bundle.Session
+		}()
+	}
+	wg.Wait()
+
+	if got := atomic.LoadInt32(&calls); got != 1 {
+		t.Fatalf("expected one store initialization, got %d", got)
+	}
+	first := results[0]
+	if first == nil {
+		t.Fatalf("expected initialized session memory")
+	}
+	for i := range workers {
+		if errs[i] != nil {
+			t.Fatalf("provider call %d returned error: %v", i, errs[i])
+		}
+		if results[i] != first {
+			t.Fatalf("provider call %d returned a different session", i)
+		}
 	}
 }
 

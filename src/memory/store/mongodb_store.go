@@ -50,31 +50,8 @@ func (ms *MongoStore) StoreMemory(ctx context.Context, sessionID, content string
 	if ms == nil || ms.collection == nil {
 		return nil
 	}
-	if metadata == nil {
-		metadata = map[string]any{}
-	}
-	if _, ok := metadata["space"]; !ok {
-		metadata["space"] = sessionID
-	}
 	now := time.Now().UTC()
-	importance, source, summary, lastEmbedded, metadataJSON := model.NormalizeMetadata(metadata, now)
-	meta := model.DecodeMetadata(metadataJSON)
-	space := model.StringFromAny(meta["space"])
-	if space == "" {
-		space = sessionID
-	}
-	edges := model.ValidGraphEdges(meta)
-	matrix := model.ValidEmbeddingMatrix(meta)
-	storedEmbedding := append([]float32(nil), embedding...)
-	if len(storedEmbedding) == 0 {
-		for _, vec := range matrix {
-			if len(vec) == 0 {
-				continue
-			}
-			storedEmbedding = append([]float32(nil), vec...)
-			break
-		}
-	}
+	record := prepareMemoryRecord(sessionID, content, metadata, embedding, now, true)
 
 	id, err := ms.nextID(ctx)
 	if err != nil {
@@ -84,21 +61,21 @@ func (ms *MongoStore) StoreMemory(ctx context.Context, sessionID, content string
 	doc := bson.M{
 		"_id":           id,
 		"session_id":    sessionID,
-		"space":         space,
+		"space":         record.Space,
 		"content":       content,
-		"metadata":      metadataJSON,
-		"embedding":     float64Embedding(storedEmbedding),
-		"importance":    importance,
-		"source":        source,
-		"summary":       summary,
+		"metadata":      record.Metadata,
+		"embedding":     float64Embedding(record.Embedding),
+		"importance":    record.Importance,
+		"source":        record.Source,
+		"summary":       record.Summary,
 		"created_at":    now,
-		"last_embedded": lastEmbedded,
+		"last_embedded": record.LastEmbedded,
 	}
-	if len(matrix) > 0 {
-		doc["embedding_matrix"] = float64Matrix(matrix)
+	if len(record.EmbeddingMatrix) > 0 {
+		doc["embedding_matrix"] = float64Matrix(record.EmbeddingMatrix)
 	}
-	if len(edges) > 0 {
-		doc["graph_edges"] = edges
+	if len(record.GraphEdges) > 0 {
+		doc["graph_edges"] = record.GraphEdges
 	}
 	_, err = ms.collection.InsertOne(ctx, doc)
 	return err

@@ -11,7 +11,6 @@ import (
 	"github.com/Protocol-Lattice/go-agent/src/models"
 )
 
-
 // MockModel simulates an LLM for answering questions.
 // It also prints the final prompt it receives so we can verify input transformation (like PII masking).
 type MockModel struct{}
@@ -188,4 +187,3 @@ func main() {
 		fmt.Printf("Agent: %s\n", resp5)
 	}
 }
-

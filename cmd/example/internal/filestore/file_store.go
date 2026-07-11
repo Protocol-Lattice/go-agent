@@ -1,4 +1,7 @@
-package main
+// Package filestore provides the lightweight JSON-backed memory used by the
+// autonomous examples. Keeping it here avoids duplicating the example store in
+// every command while making clear that it is not a production backend.
+package filestore
 
 import (
 	"context"
@@ -61,17 +64,18 @@ func (s *FileBackedStore) load() {
 }
 
 func (s *FileBackedStore) save() error {
-	var records []model.MemoryRecord
+	records := make([]model.MemoryRecord, 0, len(s.records))
 	for _, rec := range s.records {
 		records = append(records, rec)
 	}
+	sort.Slice(records, func(i, j int) bool { return records[i].ID < records[j].ID })
 
 	data, err := json.MarshalIndent(records, "", "  ")
 	if err != nil {
 		return err
 	}
 
-	return os.WriteFile(s.filePath, data, 0644)
+	return os.WriteFile(s.filePath, data, 0o644)
 }
 
 func (s *FileBackedStore) StoreMemory(ctx context.Context, sessionID, content string, metadata map[string]any, embedding []float32) error {

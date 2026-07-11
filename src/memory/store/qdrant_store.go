@@ -234,56 +234,35 @@ func (qs *QdrantStore) StoreMemory(ctx context.Context, sessionID, content strin
 		return errors.New("qdrant collection is empty")
 	}
 	now := time.Now().UTC()
-	if metadata == nil {
-		metadata = map[string]any{}
-	}
-	if _, ok := metadata["space"]; !ok {
-		metadata["space"] = sessionID
-	}
-	edges := model.SanitizeGraphEdges(metadata)
-	importance, source, summary, lastEmbedded, normalized := model.NormalizeMetadata(metadata, now)
-	metaMap := model.DecodeMetadata(normalized)
-	space := model.StringFromAny(metaMap["space"])
-	if space == "" {
-		space = sessionID
-	}
-	matrix := model.ValidEmbeddingMatrix(metaMap)
-	storedEmbedding := append([]float32(nil), embedding...)
-	if len(storedEmbedding) == 0 {
-		for _, vec := range matrix {
-			if len(vec) == 0 {
-				continue
-			}
-			storedEmbedding = append([]float32(nil), vec...)
-			break
-		}
+	// Qdrant historically serializes sanitized edges directly from the input,
+	// before JSON normalization can coerce large integer targets through float64.
+	graphEdges := model.SanitizeGraphEdges(metadata)
+	record := prepareMemoryRecord(sessionID, content, metadata, embedding, now, true)
+	if len(graphEdges) > 0 {
+		record.GraphEdges = graphEdges
 	}
 	payload := map[string]any{
 		"session_id":    sessionID,
 		"content":       content,
-		"metadata":      model.DecodeMetadata(normalized),
-		"importance":    importance,
-		"source":        source,
-		"summary":       summary,
+		"metadata":      model.DecodeMetadata(record.Metadata),
+		"importance":    record.Importance,
+		"source":        record.Source,
+		"summary":       record.Summary,
 		"created_at":    now.Format(time.RFC3339Nano),
-		"last_embedded": lastEmbedded.Format(time.RFC3339Nano),
-		"space":         space,
+		"last_embedded": record.LastEmbedded.Format(time.RFC3339Nano),
+		"space":         record.Space,
 	}
-	if len(edges) == 0 {
-		if metaEdges := model.ValidGraphEdges(metaMap); len(metaEdges) > 0 {
-			payload["graph_edges"] = metaEdges
-		}
-	} else {
-		payload["graph_edges"] = edges
+	if len(record.GraphEdges) > 0 {
+		payload["graph_edges"] = record.GraphEdges
 	}
-	if len(matrix) > 0 {
-		payload[model.EmbeddingMatrixKey] = matrix
+	if len(record.EmbeddingMatrix) > 0 {
+		payload[model.EmbeddingMatrixKey] = record.EmbeddingMatrix
 	}
 	pointID := qs.generateID()
 	req := map[string]any{
 		"points": []map[string]any{{
 			"id":      pointID,
-			"vector":  storedEmbedding,
+			"vector":  record.Embedding,
 			"payload": payload,
 		}},
 	}

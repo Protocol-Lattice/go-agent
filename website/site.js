@@ -1,52 +1,100 @@
-const root = document.documentElement;
-const menuToggle = document.querySelector('.menu-toggle');
-const mainNav = document.querySelector('#main-nav');
-const themeToggle = document.querySelector('#theme-toggle');
-const copyInstall = document.querySelector('#copy-install');
-const installCommand = document.querySelector('#install-command');
-const copyFeedback = document.querySelector('#copy-feedback');
+const THEME_STORAGE_KEY = 'go-agent-theme';
 
-function setTheme(theme) {
-  root.dataset.theme = theme;
-  window.localStorage.setItem('go-agent-theme', theme);
-  themeToggle.textContent = theme === 'dark' ? 'Use light theme' : 'Use dark theme';
+function prefersDarkTheme() {
+  return typeof window.matchMedia === 'function'
+    && window.matchMedia('(prefers-color-scheme: dark)').matches;
 }
 
-const savedTheme = window.localStorage.getItem('go-agent-theme');
-if (savedTheme === 'light' || savedTheme === 'dark') {
-  setTheme(savedTheme);
-} else {
-  const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-  themeToggle.textContent = prefersDark ? 'Use light theme' : 'Use dark theme';
-}
-
-menuToggle.addEventListener('click', () => {
-  const open = menuToggle.getAttribute('aria-expanded') === 'true';
-  menuToggle.setAttribute('aria-expanded', String(!open));
-  mainNav.dataset.open = String(!open);
-});
-
-mainNav.addEventListener('click', () => {
-  menuToggle.setAttribute('aria-expanded', 'false');
-  mainNav.dataset.open = 'false';
-});
-
-themeToggle.addEventListener('click', () => {
-  const isDark = root.dataset.theme === 'dark' || (!root.dataset.theme && window.matchMedia('(prefers-color-scheme: dark)').matches);
-  setTheme(isDark ? 'light' : 'dark');
-});
-
-copyInstall.addEventListener('click', async () => {
-  const command = installCommand.textContent.trim();
+function readStoredTheme() {
   try {
-    await navigator.clipboard.writeText(command);
-    copyInstall.textContent = 'Copied';
-    copyFeedback.textContent = 'Install command copied to your clipboard.';
+    const theme = window.localStorage.getItem(THEME_STORAGE_KEY);
+    return theme === 'light' || theme === 'dark' ? theme : null;
   } catch {
-    copyFeedback.textContent = 'Copy was blocked. Select the command and copy it manually.';
+    return null;
+  }
+}
+
+function writeStoredTheme(theme) {
+  try {
+    window.localStorage.setItem(THEME_STORAGE_KEY, theme);
+  } catch {
+    // Theme switching still works when storage is unavailable.
+  }
+}
+
+function updateThemeLabel(toggle, isDark) {
+  toggle.textContent = isDark ? 'Use light theme' : 'Use dark theme';
+}
+
+function initTheme() {
+  const root = document.documentElement;
+  const toggle = document.querySelector('#theme-toggle');
+  if (!root || !toggle) {
+    return;
   }
 
-  window.setTimeout(() => {
-    copyInstall.textContent = 'Copy install';
-  }, 1600);
-});
+  const storedTheme = readStoredTheme();
+  if (storedTheme) {
+    root.dataset.theme = storedTheme;
+  }
+  updateThemeLabel(toggle, storedTheme ? storedTheme === 'dark' : prefersDarkTheme());
+
+  toggle.addEventListener('click', () => {
+    const isDark = root.dataset.theme === 'dark'
+      || (!root.dataset.theme && prefersDarkTheme());
+    const nextTheme = isDark ? 'light' : 'dark';
+    root.dataset.theme = nextTheme;
+    writeStoredTheme(nextTheme);
+    updateThemeLabel(toggle, nextTheme === 'dark');
+  });
+}
+
+function setMenuOpen(toggle, nav, open) {
+  toggle.setAttribute('aria-expanded', String(open));
+  nav.dataset.open = String(open);
+}
+
+function initMenu() {
+  const toggle = document.querySelector('.menu-toggle');
+  const nav = document.querySelector('#main-nav');
+  if (!toggle || !nav) {
+    return;
+  }
+
+  toggle.addEventListener('click', () => {
+    const open = toggle.getAttribute('aria-expanded') !== 'true';
+    setMenuOpen(toggle, nav, open);
+  });
+  nav.addEventListener('click', () => setMenuOpen(toggle, nav, false));
+}
+
+function initCopyInstall() {
+  const button = document.querySelector('#copy-install');
+  const command = document.querySelector('#install-command');
+  const feedback = document.querySelector('#copy-feedback');
+  if (!button || !command) {
+    return;
+  }
+
+  button.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(command.textContent.trim());
+      button.textContent = 'Copied';
+      if (feedback) {
+        feedback.textContent = 'Install command copied to your clipboard.';
+      }
+    } catch {
+      if (feedback) {
+        feedback.textContent = 'Copy was blocked. Select the command and copy it manually.';
+      }
+    }
+
+    window.setTimeout(() => {
+      button.textContent = 'Copy install';
+    }, 1600);
+  });
+}
+
+initMenu();
+initTheme();
+initCopyInstall();

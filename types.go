@@ -138,4 +138,3 @@ func (g *InputGuardrails) ValidateAndTransform(ctx context.Context, input string
 	}
 	return final, nil
 }
-

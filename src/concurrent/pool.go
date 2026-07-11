@@ -5,30 +5,34 @@ import (
 	"sync"
 )
 
+const defaultMaxConcurrency = 10
+
 // WorkerPool manages a pool of workers for concurrent operations
 type WorkerPool struct {
-	maxWorkers int
-	sem        chan struct{}
+	sem chan struct{}
 }
 
 // NewWorkerPool creates a new worker pool with the specified max workers
 func NewWorkerPool(maxWorkers int) *WorkerPool {
-	if maxWorkers <= 0 {
-		maxWorkers = 10
-	}
+	maxWorkers = normalizedMaxConcurrency(maxWorkers)
 	return &WorkerPool{
-		maxWorkers: maxWorkers,
-		sem:        make(chan struct{}, maxWorkers),
+		sem: make(chan struct{}, maxWorkers),
 	}
 }
 
 // Do executes a function with worker pool concurrency control
 func (wp *WorkerPool) Do(ctx context.Context, fn func() error) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
 	case wp.sem <- struct{}{}:
 		defer func() { <-wp.sem }()
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		return fn()
 	}
 }
@@ -39,39 +43,14 @@ func ParallelMap[T, R any](ctx context.Context, items []T, fn func(T) (R, error)
 		return nil, nil
 	}
 
-	if maxConcurrency <= 0 {
-		maxConcurrency = 10
-	}
-
 	results := make([]R, len(items))
-	errors := make([]error, len(items))
-
-	var wg sync.WaitGroup
-	sem := make(chan struct{}, maxConcurrency)
-
-	for i, item := range items {
-		wg.Add(1)
-		go func(idx int, val T) {
-			defer wg.Done()
-
-			select {
-			case <-ctx.Done():
-				errors[idx] = ctx.Err()
-				return
-			case sem <- struct{}{}:
-				defer func() { <-sem }()
-				results[idx], errors[idx] = fn(val)
-			}
-		}(i, item)
-	}
-
-	wg.Wait()
-
-	// Check for errors
-	for _, err := range errors {
-		if err != nil {
-			return results, err
-		}
+	errors := executeIndexed(ctx, len(items), maxConcurrency, func(index int) error {
+		var err error
+		results[index], err = fn(items[index])
+		return err
+	})
+	if err := firstError(errors); err != nil {
+		return results, err
 	}
 
 	return results, nil
@@ -83,37 +62,65 @@ func ParallelForEach[T any](ctx context.Context, items []T, fn func(T) error, ma
 		return nil
 	}
 
-	if maxConcurrency <= 0 {
-		maxConcurrency = 10
+	return firstError(executeIndexed(ctx, len(items), maxConcurrency, func(index int) error {
+		return fn(items[index])
+	}))
+}
+
+func executeIndexed(ctx context.Context, itemCount, maxConcurrency int, fn func(int) error) []error {
+	errors := make([]error, itemCount)
+	workerCount := normalizedMaxConcurrency(maxConcurrency)
+	if workerCount > itemCount {
+		workerCount = itemCount
 	}
 
-	var wg sync.WaitGroup
-	sem := make(chan struct{}, maxConcurrency)
-	errChan := make(chan error, len(items))
-
-	for _, item := range items {
-		wg.Add(1)
-		go func(val T) {
-			defer wg.Done()
-
-			select {
-			case <-ctx.Done():
-				errChan <- ctx.Err()
-				return
-			case sem <- struct{}{}:
-				defer func() { <-sem }()
-				if err := fn(val); err != nil {
-					errChan <- err
+	indices := make(chan int)
+	var workers sync.WaitGroup
+	workers.Add(workerCount)
+	for range workerCount {
+		go func() {
+			defer workers.Done()
+			for index := range indices {
+				select {
+				case <-ctx.Done():
+					errors[index] = ctx.Err()
+				default:
+					errors[index] = fn(index)
 				}
 			}
-		}(item)
+		}()
 	}
 
-	wg.Wait()
-	close(errChan)
+	nextIndex := 0
+dispatch:
+	for ; nextIndex < itemCount; nextIndex++ {
+		select {
+		case <-ctx.Done():
+			break dispatch
+		case indices <- nextIndex:
+		}
+	}
+	close(indices)
 
-	// Return first error if any
-	for err := range errChan {
+	if err := ctx.Err(); err != nil {
+		for ; nextIndex < itemCount; nextIndex++ {
+			errors[nextIndex] = err
+		}
+	}
+
+	workers.Wait()
+	return errors
+}
+
+func normalizedMaxConcurrency(maxConcurrency int) int {
+	if maxConcurrency <= 0 {
+		return defaultMaxConcurrency
+	}
+	return maxConcurrency
+}
+
+func firstError(errors []error) error {
+	for _, err := range errors {
 		if err != nil {
 			return err
 		}

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Protocol-Lattice/go-agent"
+	"github.com/Protocol-Lattice/go-agent/cmd/example/internal/filestore"
 	"github.com/Protocol-Lattice/go-agent/src/adk"
 	"github.com/Protocol-Lattice/go-agent/src/adk/modules"
 	"github.com/Protocol-Lattice/go-agent/src/memory"
@@ -77,7 +78,7 @@ func main() {
 			modules.NewModelModule("model", func(_ context.Context) (models.Agent, error) {
 				return orchestratorModel, nil
 			}),
-			FileBackedMemoryModule("cmd/example/claw_cron/claw_memory.json", 10000, memory.AutoEmbedder(), &memOpts),
+			filestore.FileBackedMemoryModule("cmd/example/claw_cron/claw_memory.json", 10000, memory.AutoEmbedder(), &memOpts),
 		),
 		adk.WithCodeModeUtcp(client, orchestratorModel),
 	)
@@ -148,12 +149,12 @@ func main() {
 			fmt.Printf("\n[CLAW PERMISSION REQUEST] %s\n", req.action)
 			fmt.Print("Approve? (y/n): ")
 			// We need to read from stdin here, but the main loop is already reading from it in a goroutine.
-			// This is a bit tricky for a CLI example. 
+			// This is a bit tricky for a CLI example.
 			// Let's assume the user types 'y' or 'n' in the main input.
 			// Actually, let's simplify: the main gateway goroutine could handle this if we send a signal.
 			// For this example, I'll just auto-approve for the demonstration or wait for a specific input.
 			// Better: let's have the user type 'y' or 'n' and have the goroutine detect it.
-			
+
 			// For now, let's just wait for the next userInputCh and see if it's y/n
 			select {
 			case answer := <-userInputCh:

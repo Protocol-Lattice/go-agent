@@ -36,57 +36,21 @@ func (ps *PostgresStore) StoreMemory(ctx context.Context, sessionID, content str
 	if ps == nil || ps.DB == nil {
 		return nil
 	}
-	if metadata == nil {
-		metadata = map[string]any{}
-	}
-	if _, ok := metadata["space"]; !ok {
-		metadata["space"] = sessionID
-	}
-	importance, source, summary, lastEmbedded, metadataJSON := model.NormalizeMetadata(metadata, time.Now().UTC())
-	meta := model.DecodeMetadata(metadataJSON)
-	matrix := model.ValidEmbeddingMatrix(meta)
-	storedEmbedding := append([]float32(nil), embedding...)
-	if len(storedEmbedding) == 0 {
-		for _, vec := range matrix {
-			if len(vec) == 0 {
-				continue
-			}
-			storedEmbedding = append([]float32(nil), vec...)
-			break
-		}
-	}
+	record := prepareMemoryRecord(sessionID, content, metadata, embedding, time.Now().UTC(), true)
 	query := `
                 INSERT INTO memory_bank (session_id, content, metadata, embedding, importance, source, summary, last_embedded, embedding_matrix)
                 VALUES ($1, $2, $3::jsonb, $4::vector, $5, $6, $7, $8, $9::jsonb)
                 RETURNING id;
         `
-	jsonEmbed, _ := json.Marshal(storedEmbedding)
+	jsonEmbed, _ := json.Marshal(record.Embedding)
 	var matrixJSON []byte
-	if len(matrix) > 0 {
-		matrixJSON, _ = json.Marshal(matrix)
+	if len(record.EmbeddingMatrix) > 0 {
+		matrixJSON, _ = json.Marshal(record.EmbeddingMatrix)
 	}
-	var id int64
-	if err := ps.DB.QueryRow(ctx, query, sessionID, content, metadataJSON, vectorFromJSON(jsonEmbed), importance, source, summary, lastEmbedded, matrixJSON).Scan(&id); err != nil {
+	if err := ps.DB.QueryRow(ctx, query, sessionID, content, record.Metadata, vectorFromJSON(jsonEmbed), record.Importance, record.Source, record.Summary, record.LastEmbedded, matrixJSON).Scan(&record.ID); err != nil {
 		return err
 	}
-	rec := model.MemoryRecord{
-		ID:              id,
-		SessionID:       sessionID,
-		Space:           model.StringFromAny(meta["space"]),
-		Content:         content,
-		Metadata:        metadataJSON,
-		Embedding:       storedEmbedding,
-		Importance:      importance,
-		Source:          source,
-		Summary:         summary,
-		LastEmbedded:    lastEmbedded,
-		GraphEdges:      model.ValidGraphEdges(meta),
-		EmbeddingMatrix: matrix,
-	}
-	if rec.Space == "" {
-		rec.Space = sessionID
-	}
-	if err := ps.UpsertGraph(ctx, rec, rec.GraphEdges); err != nil {
+	if err := ps.UpsertGraph(ctx, record, record.GraphEdges); err != nil {
 		return err
 	}
 	return nil

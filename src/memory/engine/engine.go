@@ -1,7 +1,6 @@
 package engine
 
 import (
-	"container/heap"
 	"context"
 	"errors"
 	"fmt"
@@ -13,7 +12,6 @@ import (
 	"sync"
 	"time"
 	"unicode"
-	"unicode/utf8"
 
 	"github.com/Protocol-Lattice/go-agent/src/memory/embed"
 	"github.com/Protocol-Lattice/go-agent/src/memory/model"
@@ -282,204 +280,6 @@ func (e *Engine) Retrieve(ctx context.Context, sessionID, query string, limit in
 
 	return selected, nil
 }
-
-// Prune applies TTL, size and deduplication policies.
-// Prune applies TTL, size and deduplication policies.
-// Faster version: single Iterate pass for TTL+dedupe, no full sort, top-K heap for evictions.
-func (e *Engine) Prune(ctx context.Context) error {
-	if e.store == nil {
-		return nil
-	}
-
-	now := e.clock().UTC()
-
-	// Accumulate TTL/dedup deletions in batches to keep memory/network usage bounded.
-	const delBatch = 1024
-
-	type pendingDeletion struct {
-		id  int64
-		ttl bool
-	}
-
-	batchDelete := func(pending *[]pendingDeletion) error {
-		if len(*pending) == 0 {
-			return nil
-		}
-		ids := make([]int64, len(*pending))
-		ttlCount := 0
-		for i := range *pending {
-			ids[i] = (*pending)[i].id
-			if (*pending)[i].ttl {
-				ttlCount++
-			}
-		}
-		if err := e.store.DeleteMemory(ctx, ids); err != nil {
-			return err
-		}
-		if e.metrics != nil {
-			e.metrics.IncPruned(len(ids))
-			if ttlCount > 0 {
-				e.metrics.IncTTLExpired(ttlCount)
-			}
-		}
-		*pending = (*pending)[:0]
-		return nil
-	}
-
-	// canonical seen set for dedupe (single-allocation lower+trim)
-	seen := make(map[string]int64, 1024)
-
-	// survivors we may need to score for size-based eviction (kept minimal)
-	type cand struct {
-		id         int64
-		createdAt  time.Time
-		importance float64
-		content    string
-		metadata   string
-	}
-	candidates := make([]cand, 0, 1024)
-
-	toDelete := make([]pendingDeletion, 0, delBatch)
-	survivors := 0
-
-	err := e.store.Iterate(ctx, func(rec model.MemoryRecord) bool {
-		// TTL
-		if !rec.CreatedAt.IsZero() && now.Sub(rec.CreatedAt) > e.opts.TTL {
-			toDelete = append(toDelete, pendingDeletion{id: rec.ID, ttl: true})
-			if len(toDelete) >= delBatch {
-				if err := batchDelete(&toDelete); err != nil {
-					// Stop iteration on error; propagate after Iterate returns.
-					// We can't return false here because Iterate signature suggests bool continue.
-					// Instead, stash the error via closure capture (below) if your Iterate supports it.
-				}
-			}
-			return true
-		}
-
-		// Dedup (case-insensitive, whitespace-trimmed)
-		key := canonicalKey(rec.Content)
-		if prevID, ok := seen[key]; ok {
-			_ = prevID // kept for potential debugging/metrics
-			toDelete = append(toDelete, pendingDeletion{id: rec.ID})
-			if e.metrics != nil {
-				e.metrics.IncDeduplicated()
-			}
-			if len(toDelete) >= delBatch {
-				if err := batchDelete(&toDelete); err != nil {
-					// same note as above
-				}
-			}
-			return true
-		}
-		seen[key] = rec.ID
-
-		// Keep as survivor; only minimal info needed for later scoring.
-		candidates = append(candidates, cand{
-			id:         rec.ID,
-			createdAt:  rec.CreatedAt,
-			importance: rec.Importance,
-			content:    rec.Content,
-			metadata:   rec.Metadata,
-		})
-		survivors++
-		return true
-	})
-	if err != nil {
-		return err
-	}
-	// Flush any pending TTL/dedup deletes.
-	if err := batchDelete(&toDelete); err != nil {
-		return err
-	}
-
-	// If we fit under MaxSize after TTL+dedupe, we are done.
-	if survivors <= e.opts.MaxSize {
-		return nil
-	}
-
-	overflow := survivors - e.opts.MaxSize
-
-	h := make(minHeap, 0, overflow)
-	heap.Init(&h)
-
-	// Score survivors once; compute importance lazily where zero.
-	for i := range candidates {
-		c := &candidates[i]
-		imp := c.importance
-		if imp == 0 {
-			imp = importanceScore(c.content, model.DecodeMetadata(c.metadata))
-			c.importance = imp // cache (useful if future policies reuse)
-		}
-		ageHours := now.Sub(c.createdAt).Hours() + 1 // +1 to avoid zero bias
-		score := ageHours * (1 - imp)
-
-		if len(h) < overflow {
-			heap.Push(&h, item{id: c.id, score: score})
-		} else if score > h[0].score {
-			// replace current minimum (keep the largest K)
-			h[0] = item{id: c.id, score: score}
-			heap.Fix(&h, 0)
-		}
-	}
-
-	// Extract IDs to evict (any order is fine).
-	evict := make([]int64, 0, h.Len())
-	for h.Len() > 0 {
-		evict = append(evict, heap.Pop(&h).(item).id)
-	}
-
-	if len(evict) > 0 {
-		// Delete in batches to avoid huge payloads.
-		for i := 0; i < len(evict); i += delBatch {
-			j := i + delBatch
-			if j > len(evict) {
-				j = len(evict)
-			}
-			chunk := evict[i:j]
-			if err := e.store.DeleteMemory(ctx, chunk); err != nil {
-				return err
-			}
-			if e.metrics != nil {
-				e.metrics.IncPruned(len(chunk))
-				e.metrics.IncSizeEvicted(len(chunk))
-			}
-		}
-	}
-
-	return nil
-}
-
-// canonicalKey lowercases and trims whitespace in a single pass to reduce allocations.
-func canonicalKey(s string) string {
-	// Trim leading/trailing unicode whitespace without allocating.
-	start, end := 0, len(s)
-	for start < end {
-		r, size := utf8.DecodeRuneInString(s[start:end])
-		if !unicode.IsSpace(r) {
-			break
-		}
-		start += size
-	}
-	for start < end {
-		r, size := utf8.DecodeLastRuneInString(s[start:end])
-		if !unicode.IsSpace(r) {
-			break
-		}
-		end -= size
-	}
-	if start >= end {
-		return ""
-	}
-	// Lowercase into a single new string.
-	var b strings.Builder
-	// Over-allocate a bit to avoid growth; rune count <= byte count.
-	b.Grow(end - start)
-	for _, r := range s[start:end] {
-		b.WriteRune(unicode.ToLower(r))
-	}
-	return b.String()
-}
-
 func (e *Engine) embed(ctx context.Context, text string) ([]float32, error) {
 	if e.embedder == nil {
 		e.embedder = embed.AutoEmbedder()
@@ -835,26 +635,4 @@ func clamp(val, minVal, maxVal float64) float64 {
 		return maxVal
 	}
 	return val
-}
-
-// Top-K (K=overflow) heap of *largest* prune scores (the ones to evict).
-type item struct {
-	id    int64
-	score float64
-}
-
-type minHeap []item
-
-// We keep the K largest scores in a min-heap by score:
-// if heap not full -> push; else if score > min -> replace min.
-func (h minHeap) Len() int           { return len(h) }
-func (h minHeap) Less(i, j int) bool { return h[i].score < h[j].score }
-func (h minHeap) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
-func (h *minHeap) Push(x any)        { *h = append(*h, x.(item)) }
-func (h *minHeap) Pop() any {
-	old := *h
-	n := len(old)
-	x := old[n-1]
-	*h = old[:n-1]
-	return x
 }
