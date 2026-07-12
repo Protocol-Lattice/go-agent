@@ -266,6 +266,14 @@ func coerceInput[I any](input any) (I, error) {
 		reflect.ValueOf(&out).Elem().Set(value.Convert(target))
 		return out, nil
 	}
+	// Durable workflow stores deserialize generic JSON values such as maps and
+	// numbers. A JSON round trip restores those values into the node's declared
+	// input type while preserving the fast path for ordinary in-process runs.
+	if data, err := json.Marshal(input); err == nil {
+		if err := json.Unmarshal(data, &out); err == nil {
+			return out, nil
+		}
+	}
 	return out, fmt.Errorf("expected %s, got %T", target.String(), input)
 }
 

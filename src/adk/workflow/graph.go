@@ -19,6 +19,7 @@ type GraphConfig struct {
 type Graph struct {
 	edges       []Edge
 	adj         map[string][]Edge
+	nodes       map[string]Node
 	joins       map[string]joinSpec
 	maxStep     int
 	joinTimeout time.Duration
@@ -39,6 +40,7 @@ func NewGraph(edges []Edge, config GraphConfig) (*Graph, error) {
 	}
 
 	adj := make(map[string][]Edge)
+	nodes := make(map[string]Node)
 	joins := make(map[string]joinSpec)
 	hasStart := false
 	for i, edge := range edges {
@@ -61,6 +63,11 @@ func NewGraph(edges []Edge, config GraphConfig) (*Graph, error) {
 		}
 		if from == nodeKey(Start) {
 			hasStart = true
+		} else if _, exists := nodes[from]; !exists {
+			nodes[from] = edge.From
+		}
+		if _, exists := nodes[to]; !exists {
+			nodes[to] = edge.To
 		}
 		if isJoinNode(edge.To) {
 			if from == nodeKey(Start) {
@@ -92,10 +99,276 @@ func NewGraph(edges []Edge, config GraphConfig) (*Graph, error) {
 	return &Graph{
 		edges:       copied,
 		adj:         adj,
+		nodes:       nodes,
 		joins:       joins,
 		maxStep:     maxSteps,
 		joinTimeout: config.JoinTimeout,
 	}, nil
+}
+
+// StartRun creates and executes a durable workflow run. Every completed node
+// transition is saved to store before the next node begins. If execution is
+// interrupted or a node returns an error, call ResumeRun with the same ID.
+func (g *Graph) StartRun(ctx context.Context, store RunStore, runID, sessionID string, input any) (any, error) {
+	if g == nil {
+		return nil, fmt.Errorf("nil workflow graph")
+	}
+	if store == nil {
+		return nil, fmt.Errorf("workflow run store is nil")
+	}
+	if err := validateRunID(runID); err != nil {
+		return nil, err
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	invocation := newContext(ctx, sessionID)
+	state := &RunState{
+		ID:           runID,
+		SessionID:    sessionID,
+		InvocationID: invocation.InvocationID,
+		Status:       RunStatusRunning,
+		Queue:        g.initialQueue(input),
+		JoinStates:   make(map[string]JoinState, len(g.joins)),
+		ContextState: invocation.State,
+		CreatedAt:    time.Now().UTC(),
+		UpdatedAt:    time.Now().UTC(),
+	}
+	if len(state.Queue) == 0 {
+		return nil, fmt.Errorf("workflow graph has no START target")
+	}
+	if err := store.Create(ctx, state); err != nil {
+		return nil, fmt.Errorf("create workflow run %s: %w", runID, err)
+	}
+	return g.executeRun(ctx, store, state)
+}
+
+// ResumeRun loads a previously started durable run and continues it. Resuming
+// a completed run returns its persisted result without invoking nodes again.
+func (g *Graph) ResumeRun(ctx context.Context, store RunStore, runID string) (any, error) {
+	if g == nil {
+		return nil, fmt.Errorf("nil workflow graph")
+	}
+	if store == nil {
+		return nil, fmt.Errorf("workflow run store is nil")
+	}
+	if err := validateRunID(runID); err != nil {
+		return nil, err
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	state, err := store.Load(ctx, runID)
+	if err != nil {
+		return nil, fmt.Errorf("load workflow run %s: %w", runID, err)
+	}
+	if state.Status == RunStatusCompleted {
+		return state.Result, nil
+	}
+	if state.Status == RunStatusFailed {
+		return nil, fmt.Errorf("workflow run %s failed: %s", runID, state.LastError)
+	}
+	if state.Status != RunStatusRunning {
+		return nil, fmt.Errorf("workflow run %s has unknown status %q", runID, state.Status)
+	}
+	return g.executeRun(ctx, store, state)
+}
+
+func (g *Graph) initialQueue(input any) []QueuedNode {
+	queue := make([]QueuedNode, 0)
+	for _, edge := range g.matchingEdges(Start, Event{Output: input}) {
+		queue = append(queue, QueuedNode{From: nodeKey(Start), Node: nodeKey(edge.To), Input: input})
+	}
+	return queue
+}
+
+func (g *Graph) executeRun(ctx context.Context, store RunStore, state *RunState) (any, error) {
+	if state == nil {
+		return nil, fmt.Errorf("nil workflow run state")
+	}
+	if state.InvocationID == "" {
+		state.InvocationID = newContext(ctx, state.SessionID).InvocationID
+	}
+	if state.ContextState == nil {
+		state.ContextState = make(map[string]any)
+	}
+	if state.JoinStates == nil {
+		state.JoinStates = make(map[string]JoinState, len(g.joins))
+	}
+	wctx := Context{
+		Context:      ctx,
+		SessionID:    state.SessionID,
+		InvocationID: state.InvocationID,
+		State:        state.ContextState,
+	}
+
+	for len(state.Queue) > 0 {
+		if err := wctx.Err(); err != nil {
+			return nil, err
+		}
+		if err := g.durableJoinTimeoutError(state.JoinStates); err != nil {
+			return g.failRun(ctx, store, state, err)
+		}
+		if state.Steps >= g.maxStep {
+			return g.failRun(ctx, store, state, fmt.Errorf("workflow graph exceeded max steps %d", g.maxStep))
+		}
+
+		item := state.Queue[0]
+		node, ok := g.nodes[item.Node]
+		if !ok || node == nil {
+			return g.failRun(ctx, store, state, fmt.Errorf("workflow run references unknown node %q", item.Node))
+		}
+
+		input := item.Input
+		if isJoinNode(node) {
+			joinedInput, ready, err := g.recordDurableJoinInput(item, state.JoinStates)
+			if err != nil {
+				return g.failRun(ctx, store, state, err)
+			}
+			if !ready {
+				state.Queue = state.Queue[1:]
+				state.Steps++
+				state.LastError = ""
+				if err := saveRun(ctx, store, state); err != nil {
+					return nil, err
+				}
+				continue
+			}
+			input = joinedInput
+		}
+
+		events, err := node.run(wctx, input)
+		if err != nil {
+			state.LastError = fmt.Sprintf("workflow node %s: %v", node.Name(), err)
+			if saveErr := saveRun(ctx, store, state); saveErr != nil {
+				return nil, fmt.Errorf("%s (also failed to checkpoint: %w)", state.LastError, saveErr)
+			}
+			return nil, fmt.Errorf("%s", state.LastError)
+		}
+
+		state.Queue = state.Queue[1:]
+		for _, ev := range events {
+			matches := g.matchingEdges(node, ev)
+			if len(matches) == 0 {
+				state.Finals = append(state.Finals, eventResult(ev))
+				continue
+			}
+			for _, edge := range matches {
+				state.Queue = append(state.Queue, QueuedNode{
+					From:  nodeKey(node),
+					Node:  nodeKey(edge.To),
+					Input: ev.Output,
+				})
+			}
+		}
+		state.Steps++
+		state.LastError = ""
+		if err := saveRun(ctx, store, state); err != nil {
+			return nil, err
+		}
+	}
+
+	if err := g.durableIncompleteJoinError(state.JoinStates); err != nil {
+		return g.failRun(ctx, store, state, err)
+	}
+	state.Result = durableResult(state.Finals)
+	state.Status = RunStatusCompleted
+	state.LastError = ""
+	if err := saveRun(ctx, store, state); err != nil {
+		return nil, err
+	}
+	return state.Result, nil
+}
+
+func (g *Graph) recordDurableJoinInput(item QueuedNode, states map[string]JoinState) (map[string]any, bool, error) {
+	spec, ok := g.joins[item.Node]
+	if !ok {
+		return nil, false, fmt.Errorf("workflow join node %s is not configured", item.Node)
+	}
+	if _, expected := spec.sources[item.From]; !expected {
+		return nil, false, fmt.Errorf("workflow join node %s received output from unexpected predecessor %s", item.Node, item.From)
+	}
+
+	state, ok := states[item.Node]
+	if !ok {
+		state = JoinState{Values: make(map[string]any, len(spec.sources)), FirstArrival: time.Now().UTC()}
+	}
+	if _, duplicate := state.Values[item.From]; duplicate {
+		return nil, false, fmt.Errorf("workflow join node %s received multiple outputs from predecessor %s", item.Node, item.From)
+	}
+	state.Values[item.From] = item.Input
+	states[item.Node] = state
+	if len(state.Values) != len(spec.sources) {
+		return nil, false, nil
+	}
+
+	inputs := make(map[string]any, len(state.Values))
+	for source, output := range state.Values {
+		inputs[source] = output
+	}
+	return inputs, true, nil
+}
+
+func (g *Graph) durableJoinTimeoutError(states map[string]JoinState) error {
+	if g.joinTimeout <= 0 {
+		return nil
+	}
+	now := time.Now()
+	for name, state := range states {
+		if len(state.Values) == 0 || now.Sub(state.FirstArrival) <= g.joinTimeout {
+			continue
+		}
+		return fmt.Errorf("workflow join node %s timed out after %s", name, g.joinTimeout)
+	}
+	return nil
+}
+
+func (g *Graph) durableIncompleteJoinError(states map[string]JoinState) error {
+	for name, state := range states {
+		if len(state.Values) == 0 {
+			continue
+		}
+		spec := g.joins[name]
+		missing := make([]string, 0, len(spec.sources)-len(state.Values))
+		for source := range spec.sources {
+			if _, received := state.Values[source]; !received {
+				missing = append(missing, source)
+			}
+		}
+		if len(missing) > 0 {
+			return fmt.Errorf("workflow join node %s did not receive outputs from %s", name, strings.Join(missing, ", "))
+		}
+	}
+	return nil
+}
+
+func (g *Graph) failRun(ctx context.Context, store RunStore, state *RunState, runErr error) (any, error) {
+	state.Status = RunStatusFailed
+	state.LastError = runErr.Error()
+	if err := saveRun(ctx, store, state); err != nil {
+		return nil, fmt.Errorf("%w (also failed to checkpoint: %v)", runErr, err)
+	}
+	return nil, runErr
+}
+
+func saveRun(ctx context.Context, store RunStore, state *RunState) error {
+	state.UpdatedAt = time.Now().UTC()
+	if err := store.Save(ctx, state); err != nil {
+		return fmt.Errorf("checkpoint workflow run %s: %w", state.ID, err)
+	}
+	return nil
+}
+
+func durableResult(finals []any) any {
+	switch len(finals) {
+	case 0:
+		return nil
+	case 1:
+		return finals[0]
+	default:
+		return finals
+	}
 }
 
 // Edges returns a copy of graph edges.

@@ -221,6 +221,37 @@ func main() {
 
 See `cmd/example/graph_workflow` for a runnable no-key example.
 
+### Durable Workflow Runs
+
+For multi-step work that must survive a process restart or a transient node
+failure, execute the graph through a `workflow.RunStore`. Each completed node
+transition is checkpointed. Resume the same run ID to continue from its saved
+queue; a completed run returns its saved result without invoking nodes again.
+
+```go
+store, err := workflow.NewFileRunStore("./workflow-runs")
+if err != nil {
+	log.Fatal(err)
+}
+
+out, err := graph.StartRun(ctx, store, "invoice-1042", "customer-7", input)
+if err != nil {
+	// Resolve transient dependencies, restart the process, then continue.
+	out, err = graph.ResumeRun(ctx, store, "invoice-1042")
+}
+if err != nil {
+	log.Fatal(err)
+}
+fmt.Println(out)
+```
+
+`workflow.NewInMemoryRunStore()` is available for tests. `FileRunStore` uses
+one atomically replaced JSON file per run; production applications can provide
+a database-backed `workflow.RunStore`. Persisted inputs, outputs, join values,
+and `workflow.Context.State` must be JSON-serializable. Execution is
+at-least-once: a crash after a node side effect but before its checkpoint may
+invoke that node again, so side-effecting nodes should be idempotent.
+
 ## Memory
 
 Every agent needs a `*memory.SessionMemory`. The session layer keeps recent conversation turns and can retrieve long-term records from a vector store.

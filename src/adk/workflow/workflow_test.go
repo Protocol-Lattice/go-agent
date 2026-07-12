@@ -303,6 +303,144 @@ func TestNewGraphRejectsJoinWithOnePredecessor(t *testing.T) {
 	}
 }
 
+func TestGraphDurableRunResumesFromFailedNode(t *testing.T) {
+	t.Parallel()
+
+	prepareCalls := 0
+	flakyCalls := 0
+	finishCalls := 0
+	prepare := workflow.NewFunctionNode[string, string]("prepare",
+		func(ctx workflow.Context, input string) (string, error) {
+			prepareCalls++
+			ctx.State["prepared"] = "yes"
+			return input + ":prepared", nil
+		},
+		workflow.NodeConfig{},
+	)
+	flaky := workflow.NewFunctionNode[string, string]("flaky",
+		func(_ workflow.Context, input string) (string, error) {
+			flakyCalls++
+			if flakyCalls == 1 {
+				return "", errors.New("temporary downstream outage")
+			}
+			return input + ":retried", nil
+		},
+		workflow.NodeConfig{},
+	)
+	finish := workflow.NewFunctionNode[string, string]("finish",
+		func(ctx workflow.Context, input string) (string, error) {
+			finishCalls++
+			return input + ":" + ctx.State["prepared"].(string), nil
+		},
+		workflow.NodeConfig{},
+	)
+
+	graph, err := workflow.NewGraph(workflow.Chain(workflow.Start, prepare, flaky, finish), workflow.GraphConfig{})
+	if err != nil {
+		t.Fatalf("NewGraph: %v", err)
+	}
+	store := workflow.NewInMemoryRunStore()
+
+	_, err = graph.StartRun(context.Background(), store, "retry-run", "session", "task")
+	if err == nil || !strings.Contains(err.Error(), "temporary downstream outage") {
+		t.Fatalf("expected persisted transient error, got %v", err)
+	}
+	state, err := store.Load(context.Background(), "retry-run")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if state.Status != workflow.RunStatusRunning {
+		t.Fatalf("status = %q, want running", state.Status)
+	}
+	if len(state.Queue) != 1 || state.Queue[0].Node != "flaky" {
+		t.Fatalf("pending queue = %#v, want flaky node", state.Queue)
+	}
+	if state.ContextState["prepared"] != "yes" {
+		t.Fatalf("context state was not checkpointed: %#v", state.ContextState)
+	}
+
+	out, err := graph.ResumeRun(context.Background(), store, "retry-run")
+	if err != nil {
+		t.Fatalf("ResumeRun: %v", err)
+	}
+	if out != "task:prepared:retried:yes" {
+		t.Fatalf("unexpected resumed output: %q", out)
+	}
+	if prepareCalls != 1 || flakyCalls != 2 || finishCalls != 1 {
+		t.Fatalf("unexpected calls: prepare=%d flaky=%d finish=%d", prepareCalls, flakyCalls, finishCalls)
+	}
+
+	state, err = store.Load(context.Background(), "retry-run")
+	if err != nil {
+		t.Fatalf("Load completed run: %v", err)
+	}
+	if state.Status != workflow.RunStatusCompleted || state.Result != "task:prepared:retried:yes" {
+		t.Fatalf("completed state = %#v", state)
+	}
+
+	out, err = graph.ResumeRun(context.Background(), store, "retry-run")
+	if err != nil {
+		t.Fatalf("ResumeRun completed run: %v", err)
+	}
+	if out != "task:prepared:retried:yes" || prepareCalls != 1 || flakyCalls != 2 || finishCalls != 1 {
+		t.Fatalf("completed run should not execute nodes again; output=%q calls=%d/%d/%d", out, prepareCalls, flakyCalls, finishCalls)
+	}
+}
+
+func TestGraphDurableRunSurvivesFileStoreRestart(t *testing.T) {
+	t.Parallel()
+
+	type payload struct {
+		Name string `json:"name"`
+	}
+
+	attempts := 0
+	prepare := workflow.NewFunctionNode[payload, payload]("prepare",
+		func(ctx workflow.Context, input payload) (payload, error) {
+			ctx.State["source"] = "durable"
+			input.Name = strings.ToUpper(input.Name)
+			return input, nil
+		},
+		workflow.NodeConfig{},
+	)
+	flaky := workflow.NewFunctionNode[payload, string]("flaky",
+		func(ctx workflow.Context, input payload) (string, error) {
+			attempts++
+			if attempts == 1 {
+				return "", errors.New("restart required")
+			}
+			return input.Name + ":" + ctx.State["source"].(string), nil
+		},
+		workflow.NodeConfig{},
+	)
+	graph, err := workflow.NewGraph(workflow.Chain(workflow.Start, prepare, flaky), workflow.GraphConfig{})
+	if err != nil {
+		t.Fatalf("NewGraph: %v", err)
+	}
+
+	dir := t.TempDir()
+	store, err := workflow.NewFileRunStore(dir)
+	if err != nil {
+		t.Fatalf("NewFileRunStore: %v", err)
+	}
+	_, err = graph.StartRun(context.Background(), store, "file-restart", "session", payload{Name: "agent"})
+	if err == nil || !strings.Contains(err.Error(), "restart required") {
+		t.Fatalf("expected transient failure, got %v", err)
+	}
+
+	reopened, err := workflow.NewFileRunStore(dir)
+	if err != nil {
+		t.Fatalf("reopen file store: %v", err)
+	}
+	out, err := graph.ResumeRun(context.Background(), reopened, "file-restart")
+	if err != nil {
+		t.Fatalf("ResumeRun after restart: %v", err)
+	}
+	if out != "AGENT:durable" {
+		t.Fatalf("unexpected resumed output: %q", out)
+	}
+}
+
 type fakeSessionGenerator struct{}
 
 func (f *fakeSessionGenerator) Generate(_ context.Context, sessionID, input string) (any, error) {
