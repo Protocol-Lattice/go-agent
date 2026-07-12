@@ -17,6 +17,50 @@ type InMemoryStore struct {
 	records map[int64]model.MemoryRecord
 }
 
+type scoredMemoryRecord struct {
+	record model.MemoryRecord
+	score  float64
+}
+
+// topMemoryRecords is a specialized min-heap that retains only the best k
+// records while scanning the in-memory store. Keeping it typed avoids the
+// interface allocations used by container/heap on a hot retrieval path.
+type topMemoryRecords []scoredMemoryRecord
+
+func (h *topMemoryRecords) push(item scoredMemoryRecord) {
+	items := append(*h, item)
+	child := len(items) - 1
+	for child > 0 {
+		parent := (child - 1) / 2
+		if items[parent].score <= item.score {
+			break
+		}
+		items[child] = items[parent]
+		child = parent
+	}
+	items[child] = item
+	*h = items
+}
+
+func (h topMemoryRecords) replaceMin(item scoredMemoryRecord) {
+	parent := 0
+	for {
+		child := parent*2 + 1
+		if child >= len(h) {
+			break
+		}
+		if right := child + 1; right < len(h) && h[right].score < h[child].score {
+			child = right
+		}
+		if h[child].score >= item.score {
+			break
+		}
+		h[parent] = h[child]
+		parent = child
+	}
+	h[parent] = item
+}
+
 func NewInMemoryStore() *InMemoryStore {
 	return &InMemoryStore{records: make(map[int64]model.MemoryRecord)}
 }
@@ -41,28 +85,28 @@ func (s *InMemoryStore) SearchMemory(_ context.Context, sessionID string, queryE
 	if limit <= 0 {
 		return nil, nil
 	}
-	type scored struct {
-		rec   model.MemoryRecord
-		score float64
-	}
-	scoredRecords := make([]scored, 0, len(s.records))
+	scoredRecords := make(topMemoryRecords, 0, min(limit, len(s.records)))
 	for _, rec := range s.records {
 		if sessionID != "" && rec.SessionID != sessionID {
 			continue
 		}
 		score := model.MaxCosineSimilarity(queryEmbedding, rec)
 		rec.Score = score
-		scoredRecords = append(scoredRecords, scored{rec: rec, score: score})
+		candidate := scoredMemoryRecord{record: rec, score: score}
+		if len(scoredRecords) < limit {
+			scoredRecords.push(candidate)
+			continue
+		}
+		if candidate.score > scoredRecords[0].score {
+			scoredRecords.replaceMin(candidate)
+		}
 	}
 	sort.Slice(scoredRecords, func(i, j int) bool {
 		return scoredRecords[i].score > scoredRecords[j].score
 	})
-	if len(scoredRecords) > limit {
-		scoredRecords = scoredRecords[:limit]
-	}
 	result := make([]model.MemoryRecord, len(scoredRecords))
 	for i, sc := range scoredRecords {
-		result[i] = sc.rec
+		result[i] = sc.record
 	}
 	return result, nil
 }

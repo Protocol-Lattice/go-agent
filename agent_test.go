@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/Protocol-Lattice/go-agent/src/memory"
@@ -129,6 +130,7 @@ func (m *captureFilePlannerModel) GenerateStream(ctx context.Context, prompt str
 
 type stubUTCPClient struct {
 	callCount       int
+	searchCount     int
 	lastToolName    string
 	searchTools     []utcpTools.Tool
 	lastSearchQuery string
@@ -159,9 +161,20 @@ func (c *stubUTCPClient) CallTool(ctx context.Context, toolName string, args map
 }
 
 func (c *stubUTCPClient) SearchTools(query string, limit int) ([]utcpTools.Tool, error) {
+	c.searchCount++
 	c.lastSearchQuery = query
 	c.lastSearchLimit = limit
 	return c.searchTools, nil
+}
+
+type searchCountingStore struct {
+	*memory.InMemoryStore
+	searchCalls atomic.Int32
+}
+
+func (s *searchCountingStore) SearchMemory(ctx context.Context, sessionID string, queryEmbedding []float32, limit int) ([]memory.MemoryRecord, error) {
+	s.searchCalls.Add(1)
+	return s.InMemoryStore.SearchMemory(ctx, sessionID, queryEmbedding, limit)
 }
 
 func (c *stubUTCPClient) DeregisterToolProvider(ctx context.Context, name string) error {
@@ -894,6 +907,100 @@ func TestGenerate_ExecutesUTCPCalledTool(t *testing.T) {
 	}
 }
 
+func TestGenerateSkipsToolDiscoveryForOrdinaryPrompt(t *testing.T) {
+	utcp := &stubUTCPClient{searchTools: []utcpTools.Tool{{Name: "echo"}}}
+	mem := memory.NewSessionMemory(&memory.MemoryBank{}, 4).WithEmbedder(memory.DummyEmbedder{})
+
+	agent, err := New(Options{
+		Model:      &stubModel{response: "ok"},
+		Memory:     mem,
+		UTCPClient: utcp,
+	})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+
+	if _, err := agent.Generate(context.Background(), "s1", "hello there"); err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	if utcp.searchCount != 0 {
+		t.Fatalf("ordinary prompt unexpectedly discovered tools %d time(s)", utcp.searchCount)
+	}
+}
+
+func TestDirectToolInvocationSkipsContextRetrieval(t *testing.T) {
+	store := &searchCountingStore{InMemoryStore: memory.NewInMemoryStore()}
+	mem := memory.NewSessionMemory(memory.NewMemoryBankWithStore(store), 4).WithEmbedder(memory.DummyEmbedder{})
+	utcp := &stubUTCPClient{searchTools: []utcpTools.Tool{{Name: "echo"}}}
+
+	agent, err := New(Options{
+		Model:      &stubModel{response: "ignored"},
+		Memory:     mem,
+		UTCPClient: utcp,
+	})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+
+	if _, err := agent.Generate(context.Background(), "s1", `{"tool":"echo","arguments":{"input":"hi"}}`); err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	if calls := store.searchCalls.Load(); calls != 0 {
+		t.Fatalf("direct tool invocation unexpectedly retrieved context %d time(s)", calls)
+	}
+}
+
+func TestGenerateStreamDirectToolSkipsContextRetrieval(t *testing.T) {
+	store := &searchCountingStore{InMemoryStore: memory.NewInMemoryStore()}
+	mem := memory.NewSessionMemory(memory.NewMemoryBankWithStore(store), 4).WithEmbedder(memory.DummyEmbedder{})
+	utcp := &stubUTCPClient{searchTools: []utcpTools.Tool{{Name: "echo"}}}
+
+	agent, err := New(Options{
+		Model:      &stubModel{response: "ignored"},
+		Memory:     mem,
+		UTCPClient: utcp,
+	})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+
+	stream, err := agent.GenerateStream(context.Background(), "s1", `{"tool":"echo","arguments":{"input":"hi"}}`)
+	if err != nil {
+		t.Fatalf("GenerateStream returned error: %v", err)
+	}
+	for range stream {
+	}
+	if calls := store.searchCalls.Load(); calls != 0 {
+		t.Fatalf("direct streamed tool invocation unexpectedly retrieved context %d time(s)", calls)
+	}
+}
+
+func TestSubagentCommandStoresOneMemoryRecord(t *testing.T) {
+	mem := memory.NewSessionMemory(&memory.MemoryBank{}, 4).WithEmbedder(memory.DummyEmbedder{})
+	agent, err := New(Options{
+		Model:  &stubModel{response: "ignored"},
+		Memory: mem,
+		SubAgents: []SubAgent{&stubSubAgent{
+			name:        "researcher",
+			description: "researches requests",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+
+	if _, err := agent.Generate(context.Background(), "s1", "subagent:researcher summarize this"); err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	records, err := mem.RetrieveContext(context.Background(), "s1", "", 4)
+	if err != nil {
+		t.Fatalf("RetrieveContext returned error: %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("expected one subagent memory record, got %d", len(records))
+	}
+}
+
 func TestDirectJsonToolInvocationCallsUTCP(t *testing.T) {
 	ctx := context.Background()
 	model := &stubModel{response: "ignored"}
@@ -1142,7 +1249,7 @@ func TestCodeModeOrchestrator_NoToolsNeeded(t *testing.T) {
 
 	model := &dynamicStubModel{
 		responses: map[string]string{
-			"Decide if the following user query requires using ANY UTCP tools.": `{"needs": false}`,
+			"Select the UTCP tools required to fulfill the user's intent.": `{"tools": []}`,
 		},
 	}
 	mem := memory.NewSessionMemory(&memory.MemoryBank{}, 4)
@@ -1184,7 +1291,8 @@ func TestCodeModeOrchestrator_NoToolsNeeded(t *testing.T) {
 		t.Fatalf("expected 0 UTCP calls, got %d", utcpClient.callCount)
 	}
 
-	// Verify that the model was asked to generate a normal response (after the "decide if tools needed" prompt)
+	// Verify that the model was asked to generate a normal response after
+	// CodeMode selected no tools.
 	if !strings.Contains(model.lastPrompt, userInput) {
 		t.Fatalf("expected model to generate normal response for user input, last prompt: %s", model.lastPrompt)
 	}
@@ -1195,8 +1303,7 @@ func TestCodeModeOrchestrator_ToolsNeededButNoneSelected(t *testing.T) {
 
 	model := &dynamicStubModel{
 		responses: map[string]string{
-			"Decide if the following user query requires using ANY UTCP tools.": `{"needs": true}`,
-			"Select ALL UTCP tools that match the user's intent.":               `{"tools": []}`, // No tools selected
+			"Select the UTCP tools required to fulfill the user's intent.": `{"tools": []}`, // No tools selected
 		},
 	}
 	mem := memory.NewSessionMemory(&memory.MemoryBank{}, 4)
@@ -1249,9 +1356,8 @@ func TestCodeModeOrchestrator_SnippetGenerationError(t *testing.T) {
 
 	model := &dynamicStubModel{
 		responses: map[string]string{
-			"Decide if the following user query requires using ANY UTCP tools.": `{"needs": true}`,
-			"Select ALL UTCP tools that match the user's intent.":               `{"tools": ["echo"]}`,
-			"Generate a Go snippet that uses ONLY the following UTCP tools:":    `invalid json`, // Simulate bad snippet generation
+			"Select the UTCP tools required to fulfill the user's intent.":   `{"tools": ["echo"]}`,
+			"Generate a Go snippet that uses ONLY the following UTCP tools:": `invalid json`, // Simulate bad snippet generation
 		},
 	}
 	mem := memory.NewSessionMemory(&memory.MemoryBank{}, 4)
@@ -1302,9 +1408,8 @@ func TestCodeModeOrchestrator_SnippetExecutionSuccess(t *testing.T) {
 	codeSnippet := `__out = codemode.CallTool("echo", map[string]any{"input": "hello"})`
 	model := &dynamicStubModel{
 		responses: map[string]string{
-			"Decide if the following user query requires using ANY UTCP tools.": `{"needs": true}`,
-			"Select ALL UTCP tools that match the user's intent.":               `{"tools": ["echo"]}`,
-			"Generate a Go snippet that uses ONLY the following UTCP tools:":    fmt.Sprintf(`{"code": %q, "stream": false}`, codeSnippet),
+			"Select the UTCP tools required to fulfill the user's intent.":   `{"tools": ["echo"]}`,
+			"Generate a Go snippet that uses ONLY the following UTCP tools:": fmt.Sprintf(`{"code": %q, "stream": false}`, codeSnippet),
 		},
 	}
 	mem := memory.NewSessionMemory(&memory.MemoryBank{}, 4)

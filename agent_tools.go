@@ -234,50 +234,10 @@ func (a *Agent) executeTool(
 
 func (a *Agent) detectDirectToolCall(s string) (string, map[string]any, bool) {
 	s = strings.TrimSpace(s)
+	if s == "" {
+		return "", nil, false
+	}
 	lower := strings.ToLower(s)
-
-	// Build a lowercase lookup of all registered tool names
-	valid := make(map[string]string)      // lowerName → exactName
-	prefixes := make(map[string]struct{}) // provider prefixes
-	bases := make(map[string][]string)    // short name → list of full names
-
-	for _, spec := range a.ToolSpecs() {
-		exact := spec.Name
-		lowerName := strings.ToLower(exact)
-		valid[lowerName] = exact
-
-		// Collect prefix (provider)
-		if parts := strings.Split(lowerName, "."); len(parts) >= 2 {
-			prefixes[parts[0]] = struct{}{}
-			short := parts[len(parts)-1]
-			bases[short] = append(bases[short], exact)
-		}
-	}
-
-	// helper: try matching tool name dynamically using full registry
-	normalize := func(name string) (string, bool) {
-		nameLower := strings.ToLower(strings.TrimSpace(name))
-
-		// 1) Exact match
-		if exact, ok := valid[nameLower]; ok {
-			return exact, true
-		}
-
-		// 2) Match by fully-qualified suffix (e.g. "math.add")
-		for fullLower, exact := range valid {
-			if strings.HasSuffix(fullLower, "."+nameLower) {
-				return exact, true
-			}
-		}
-
-		// 3) Match by base (last segment only)
-		if list, ok := bases[nameLower]; ok && len(list) > 0 {
-			// if multiple tools share the same short name, choose the first or return false
-			return list[0], true
-		}
-
-		return "", false
-	}
 
 	// ---------------------------------------------------------
 	// Case 1: Raw JSON {"tool":"...", "arguments":{...}}
@@ -288,7 +248,7 @@ func (a *Agent) detectDirectToolCall(s string) (string, map[string]any, bool) {
 			Arguments map[string]any `json:"arguments"`
 		}
 		if err := json.Unmarshal([]byte(s), &payload); err == nil && payload.Tool != "" {
-			if real, ok := normalize(payload.Tool); ok {
+			if real, ok := a.resolveDirectToolName(payload.Tool); ok {
 				return real, payload.Arguments, ok
 			}
 			return "", nil, false
@@ -308,7 +268,7 @@ func (a *Agent) detectDirectToolCall(s string) (string, map[string]any, bool) {
 			var args map[string]any
 			_ = json.Unmarshal([]byte(argsStr), &args)
 
-			if real, ok := normalize(tool); ok {
+			if real, ok := a.resolveDirectToolName(tool); ok {
 				return real, args, ok
 			}
 			return "", nil, false
@@ -325,7 +285,7 @@ func (a *Agent) detectDirectToolCall(s string) (string, map[string]any, bool) {
 
 		var args map[string]any
 		if err := json.Unmarshal([]byte(argsStr), &args); err == nil {
-			if real, ok := normalize(tool); ok {
+			if real, ok := a.resolveDirectToolName(tool); ok {
 				return real, args, ok
 			}
 			return "", nil, false
@@ -333,6 +293,30 @@ func (a *Agent) detectDirectToolCall(s string) (string, map[string]any, bool) {
 	}
 
 	return "", nil, false
+}
+
+// resolveDirectToolName resolves a syntactically valid direct invocation. Tool
+// discovery is deliberately deferred until this point so ordinary prompts do
+// not trigger a potentially remote ToolSpecs refresh.
+func (a *Agent) resolveDirectToolName(name string) (string, bool) {
+	nameLower := strings.ToLower(strings.TrimSpace(name))
+	if nameLower == "" {
+		return "", false
+	}
+
+	for _, spec := range a.ToolSpecs() {
+		exact := spec.Name
+		fullLower := strings.ToLower(exact)
+
+		if fullLower == nameLower {
+			return exact, true
+		}
+		if strings.HasSuffix(fullLower, "."+nameLower) {
+			return exact, true
+		}
+	}
+
+	return "", false
 }
 
 func (a *Agent) handleCommand(ctx context.Context, sessionID, userInput string) (bool, string, map[string]string, error) {
@@ -355,7 +339,6 @@ func (a *Agent) handleCommand(ctx context.Context, sessionID, userInput string) 
 			return true, "", nil, err
 		}
 		meta := map[string]string{"subagent": sa.Name()}
-		a.storeMemory(sessionID, "subagent", fmt.Sprintf("%s => %s", sa.Name(), strings.TrimSpace(result)), meta)
 		return true, result, meta, nil
 	default:
 		return false, "", nil, nil

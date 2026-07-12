@@ -22,6 +22,8 @@ type PostgresStore struct {
 	DB *pgxpool.Pool
 }
 
+const postgresCosineDistanceOperator = "<=>"
+
 // NewPostgresStore connects to Postgres and returns a Postgres-backed VectorStore implementation.
 func NewPostgresStore(ctx context.Context, connStr string) (*PostgresStore, error) {
 	db, err := pgxpool.New(ctx, connStr)
@@ -64,8 +66,11 @@ func (ps *PostgresStore) SearchMemory(ctx context.Context, sessionID string, que
 	jsonEmbed, _ := json.Marshal(queryEmbedding)
 
 	var queryBuilder strings.Builder
+	// The ivfflat index in defaultPostgresSchema uses vector_cosine_ops, so
+	// retrieval must use pgvector's cosine-distance operator (<=>). Using the
+	// L2 operator (<->) prevents that index from serving the ORDER BY query.
 	queryBuilder.WriteString(`
-        SELECT id, session_id, content, metadata::text, importance, source, summary, created_at, last_embedded, embedding::text, embedding_matrix::text, (embedding <-> $1::vector) AS score
+        SELECT id, session_id, content, metadata::text, importance, source, summary, created_at, last_embedded, embedding::text, embedding_matrix::text, (embedding ` + postgresCosineDistanceOperator + ` $1::vector) AS score
         FROM memory_bank
         `)
 
@@ -74,7 +79,7 @@ func (ps *PostgresStore) SearchMemory(ctx context.Context, sessionID string, que
 		queryBuilder.WriteString(" WHERE session_id = $" + strconv.Itoa(len(args)+1))
 		args = append(args, sessionID)
 	}
-	queryBuilder.WriteString(" ORDER BY embedding <-> $1::vector LIMIT $" + strconv.Itoa(len(args)+1))
+	queryBuilder.WriteString(" ORDER BY embedding " + postgresCosineDistanceOperator + " $1::vector LIMIT $" + strconv.Itoa(len(args)+1))
 	args = append(args, limit)
 
 	rows, err := ps.DB.Query(ctx, queryBuilder.String(), args...)

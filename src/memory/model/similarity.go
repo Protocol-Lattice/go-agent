@@ -38,14 +38,22 @@ func CosineSimilarityMatrix(query []float32, matrix [][]float32) float64 {
 // MaxCosineSimilarity returns the highest cosine similarity between the query
 // vector and any embedding associated with the record.
 func MaxCosineSimilarity(query []float32, rec MemoryRecord) float64 {
-	vectors := AllEmbeddings(rec)
-	if len(vectors) == 0 {
-		return 0
+	var (
+		best      float64
+		hasVector bool
+	)
+	if len(rec.Embedding) > 0 {
+		best = CosineSimilarity(query, rec.Embedding)
+		hasVector = true
 	}
-	best := CosineSimilarity(query, vectors[0])
-	for _, vec := range vectors[1:] {
-		if sim := CosineSimilarity(query, vec); sim > best {
+	for _, vec := range rec.EmbeddingMatrix {
+		if len(vec) == 0 {
+			continue
+		}
+		sim := CosineSimilarity(query, vec)
+		if !hasVector || sim > best {
 			best = sim
+			hasVector = true
 		}
 	}
 	return best
@@ -54,16 +62,34 @@ func MaxCosineSimilarity(query []float32, rec MemoryRecord) float64 {
 // RecordSimilarity computes the maximum similarity between any pair of
 // embeddings contained within the two records.
 func RecordSimilarity(a, b MemoryRecord) float64 {
-	aVectors := AllEmbeddings(a)
-	bVectors := AllEmbeddings(b)
-	if len(aVectors) == 0 || len(bVectors) == 0 {
-		return 0
-	}
-	best := CosineSimilarity(aVectors[0], bVectors[0])
-	for _, va := range aVectors {
-		for _, vb := range bVectors {
-			if sim := CosineSimilarity(va, vb); sim > best {
+	var (
+		best      float64
+		hasVector bool
+	)
+	for ai := -1; ai < len(a.EmbeddingMatrix); ai++ {
+		var av []float32
+		if ai < 0 {
+			av = a.Embedding
+		} else {
+			av = a.EmbeddingMatrix[ai]
+		}
+		if len(av) == 0 {
+			continue
+		}
+		for bi := -1; bi < len(b.EmbeddingMatrix); bi++ {
+			var bv []float32
+			if bi < 0 {
+				bv = b.Embedding
+			} else {
+				bv = b.EmbeddingMatrix[bi]
+			}
+			if len(bv) == 0 {
+				continue
+			}
+			sim := CosineSimilarity(av, bv)
+			if !hasVector || sim > best {
 				best = sim
+				hasVector = true
 			}
 		}
 	}

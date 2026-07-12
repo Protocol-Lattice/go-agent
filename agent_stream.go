@@ -27,23 +27,6 @@ func (a *Agent) GenerateStream(ctx context.Context, sessionID, userInput string)
 		return nil, errors.New("user input is empty")
 	}
 
-	// -------------------------------------------------------------
-	// PREFETCH: Start context retrieval and tool discovery in parallel
-	// -------------------------------------------------------------
-	var (
-		prefetchWG sync.WaitGroup
-		records    []memory.MemoryRecord
-	)
-
-	prefetchWG.Add(1)
-	go func() {
-		defer prefetchWG.Done()
-		records, _ = a.retrieveContext(ctx, sessionID, userInput, a.contextLimit)
-	}()
-
-	// ToolSpecs discovery is internally cached and thread-safe.
-	_ = a.ToolSpecs()
-
 	// Helper to wrap immediate result in a stream
 	immediateStream := func(val any, err error) (<-chan models.StreamChunk, error) {
 		ch := make(chan models.StreamChunk, 1)
@@ -71,6 +54,21 @@ func (a *Agent) GenerateStream(ctx context.Context, sessionID, userInput string)
 		a.storeMemory(sessionID, "subagent", out, meta)
 		return immediateStream(out, nil)
 	}
+
+	// CodeMode can make an LLM-backed selection pass before deciding that it
+	// does not handle the request, so overlap it with context retrieval. Direct
+	// tool and sub-agent commands above remain free of speculative retrieval.
+	prefetchCtx, cancelPrefetch := context.WithCancel(ctx)
+	defer cancelPrefetch()
+	var (
+		prefetchWG sync.WaitGroup
+		records    []memory.MemoryRecord
+	)
+	prefetchWG.Add(1)
+	go func() {
+		defer prefetchWG.Done()
+		records, _ = a.retrieveContext(prefetchCtx, sessionID, userInput, a.contextLimit)
+	}()
 
 	// 2. CODEMODE
 	if a.CodeMode != nil {

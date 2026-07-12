@@ -1,6 +1,9 @@
 package store
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestTrimJSON(t *testing.T) {
 	cases := map[string]string{
@@ -12,5 +15,14 @@ func TestTrimJSON(t *testing.T) {
 		if got := trimJSON(input); got != want {
 			t.Fatalf("trimJSON(%q) = %q, want %q", input, got, want)
 		}
+	}
+}
+
+func TestPostgresSimilarityOperatorMatchesCosineIndex(t *testing.T) {
+	if postgresCosineDistanceOperator != "<=>" {
+		t.Fatalf("postgres similarity operator = %q, want cosine distance operator <=>", postgresCosineDistanceOperator)
+	}
+	if !strings.Contains(defaultPostgresSchema, "vector_cosine_ops") {
+		t.Fatal("default schema must keep the cosine vector index")
 	}
 }

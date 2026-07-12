@@ -3,7 +3,6 @@ package embed
 import (
 	"context"
 	"errors"
-	"log"
 	"os"
 	"strings"
 )
@@ -62,7 +61,6 @@ func AutoEmbedder() Embedder {
 		}
 	}
 
-	log.Printf("AutoEmbedder: falling back to DummyEmbedder")
 	return DummyEmbedder{}
 }
 

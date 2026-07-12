@@ -151,23 +151,6 @@ func (a *Agent) Generate(ctx context.Context, sessionID, userInput string) (any,
 		return "", errors.New("user input is empty")
 	}
 
-	// -------------------------------------------------------------
-	// PREFETCH: Start context retrieval and tool discovery in parallel
-	// -------------------------------------------------------------
-	var (
-		prefetchWG sync.WaitGroup
-		records    []memory.MemoryRecord
-	)
-
-	prefetchWG.Add(1)
-	go func() {
-		defer prefetchWG.Done()
-		records, _ = a.retrieveContext(ctx, sessionID, userInput, a.contextLimit)
-	}()
-
-	// ToolSpecs discovery is internally cached and thread-safe.
-	_ = a.ToolSpecs()
-
 	// ---------------------------------------------
 	// 0. DIRECT TOOL INVOCATION (bypass everything)
 	// ---------------------------------------------
@@ -198,6 +181,22 @@ func (a *Agent) Generate(ctx context.Context, sessionID, userInput string) (any,
 		a.storeMemory(sessionID, "subagent", out, meta)
 		return out, nil
 	}
+
+	// CodeMode may perform an LLM-backed tool-selection pass even when it
+	// ultimately declines the request. Retrieve context concurrently with that
+	// pass, while keeping direct tool and sub-agent commands above free of this
+	// speculative work.
+	prefetchCtx, cancelPrefetch := context.WithCancel(ctx)
+	defer cancelPrefetch()
+	var (
+		prefetchWG sync.WaitGroup
+		records    []memory.MemoryRecord
+	)
+	prefetchWG.Add(1)
+	go func() {
+		defer prefetchWG.Done()
+		records, _ = a.retrieveContext(prefetchCtx, sessionID, userInput, a.contextLimit)
+	}()
 
 	// ---------------------------------------------
 	// 2. CODEMODE (Go-like DSL)
@@ -314,19 +313,6 @@ func (a *Agent) GenerateWithFiles(
 
 	fileBacked := len(allFiles) > 0
 
-	var (
-		prefetchWG sync.WaitGroup
-		records    []memory.MemoryRecord
-	)
-
-	prefetchWG.Add(1)
-	go func() {
-		defer prefetchWG.Done()
-		records, _ = a.retrieveContext(ctx, sessionID, userInput, a.contextLimit)
-	}()
-
-	_ = a.ToolSpecs()
-
 	// Direct tool calls are only safe for text-only requests.
 	// File-backed requests must go through the file-aware orchestration path.
 	if trimmed != "" && !fileBacked {
@@ -346,6 +332,21 @@ func (a *Agent) GenerateWithFiles(
 		a.storeMemory(sessionID, "subagent", out, meta)
 		return out, nil
 	}
+
+	// Keep context retrieval overlapped with CodeMode's possible LLM-backed
+	// tool-selection pass. Direct tool and sub-agent requests returned before
+	// this point do not incur this speculative lookup.
+	prefetchCtx, cancelPrefetch := context.WithCancel(ctx)
+	defer cancelPrefetch()
+	var (
+		prefetchWG sync.WaitGroup
+		records    []memory.MemoryRecord
+	)
+	prefetchWG.Add(1)
+	go func() {
+		defer prefetchWG.Done()
+		records, _ = a.retrieveContext(prefetchCtx, sessionID, userInput, a.contextLimit)
+	}()
 
 	// Direct CodeMode does not receive files.
 	// If files are present, CodeMode must be disabled unless it receives full attachment context.

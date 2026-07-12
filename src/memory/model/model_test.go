@@ -256,3 +256,27 @@ func TestCosineSimilarity(t *testing.T) {
 		t.Fatalf("expected orthogonal vectors to have zero similarity, got %v", sim)
 	}
 }
+
+func TestMaxCosineSimilarityPreservesNegativeScoresAndUsesMatrix(t *testing.T) {
+	query := []float32{1, 0}
+	negativeOnly := MemoryRecord{Embedding: []float32{-1, 0}}
+	if got := MaxCosineSimilarity(query, negativeOnly); math.Abs(got+1) > 1e-9 {
+		t.Fatalf("negative-only similarity = %v, want -1", got)
+	}
+
+	withMatrix := MemoryRecord{
+		Embedding:       []float32{-1, 0},
+		EmbeddingMatrix: [][]float32{{0, 1}, {1, 0}},
+	}
+	if got := MaxCosineSimilarity(query, withMatrix); math.Abs(got-1) > 1e-9 {
+		t.Fatalf("matrix maximum similarity = %v, want 1", got)
+	}
+}
+
+func TestRecordSimilarityUsesAllEmbeddings(t *testing.T) {
+	a := MemoryRecord{Embedding: []float32{-1, 0}, EmbeddingMatrix: [][]float32{{0, 1}}}
+	b := MemoryRecord{Embedding: []float32{1, 0}, EmbeddingMatrix: [][]float32{{0, 1}}}
+	if got := RecordSimilarity(a, b); math.Abs(got-1) > 1e-9 {
+		t.Fatalf("record similarity = %v, want 1", got)
+	}
+}
