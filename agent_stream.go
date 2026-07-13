@@ -72,7 +72,11 @@ func (a *Agent) GenerateStream(ctx context.Context, sessionID, userInput string)
 
 	// 2. CODEMODE
 	if a.CodeMode != nil {
-		if handled, output, err := a.CodeMode.CallTool(ctx, userInput); handled {
+		handled, output, err := a.CodeMode.CallTool(ctx, userInput)
+		if err != nil {
+			return immediateStream(output, err)
+		}
+		if handled {
 			return immediateStream(output, err)
 		}
 	}
