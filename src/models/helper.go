@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"mime"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -48,6 +49,18 @@ var (
 
 // NewLLMProvider returns a concrete Agent.
 func NewLLMProvider(ctx context.Context, provider string, model string, promptPrefix string) (Agent, error) {
+	return newLLMProvider(ctx, provider, model, promptPrefix, NewVertexLLM)
+}
+
+type vertexProviderFactory func(context.Context, string, string, string, string) (Agent, error)
+
+func newLLMProvider(
+	ctx context.Context,
+	provider string,
+	model string,
+	promptPrefix string,
+	newVertex vertexProviderFactory,
+) (Agent, error) {
 	var agent Agent
 	var err error
 
@@ -56,6 +69,13 @@ func NewLLMProvider(ctx context.Context, provider string, model string, promptPr
 		agent = NewOpenAILLM(model, promptPrefix)
 	case "gemini", "google":
 		agent, err = NewGeminiLLM(ctx, model, promptPrefix)
+	case "vertex", "vertexai", "vertex-ai":
+		project := strings.TrimSpace(os.Getenv("GOOGLE_CLOUD_PROJECT"))
+		location := strings.TrimSpace(os.Getenv("GOOGLE_CLOUD_LOCATION"))
+		if location == "" {
+			location = strings.TrimSpace(os.Getenv("GOOGLE_CLOUD_REGION"))
+		}
+		agent, err = newVertex(ctx, model, promptPrefix, project, location)
 	case "ollama":
 		agent, err = NewOllamaLLM(model, promptPrefix)
 	case "anthropic", "claude":

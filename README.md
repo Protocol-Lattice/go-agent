@@ -92,6 +92,7 @@ Supported provider names:
 | Provider | Aliases | Required environment |
 | --- | --- | --- |
 | Gemini | `gemini`, `google` | `GOOGLE_API_KEY` or `GEMINI_API_KEY` |
+| Vertex AI | `vertex`, `vertexai`, `vertex-ai` | `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION` (or `GOOGLE_CLOUD_REGION`), and Application Default Credentials |
 | OpenAI | `openai` | `OPENAI_API_KEY` or `OPENAI_KEY` |
 | Anthropic | `anthropic`, `claude` | `ANTHROPIC_API_KEY` |
 | Ollama | `ollama` | optional `OLLAMA_HOST`, defaults to `http://localhost:11434` |
@@ -105,6 +106,15 @@ Embeddings are selected with `memory.AutoEmbedder()`.
 | `ADK_EMBED_MODEL` | Provider-specific embedding model |
 
 If no embedding provider can be created, Lattice falls back to `DummyEmbedder`.
+
+Vertex AI uses the Google GenAI SDK and Application Default Credentials. For
+local development, authenticate with `gcloud auth application-default login`,
+then set the project and location before selecting the `vertex` provider:
+
+```bash
+export GOOGLE_CLOUD_PROJECT="my-project"
+export GOOGLE_CLOUD_LOCATION="global"
+```
 
 ## Model Middleware
 
