@@ -1249,7 +1249,7 @@ func TestCodeModeOrchestrator_NoToolsNeeded(t *testing.T) {
 
 	model := &dynamicStubModel{
 		responses: map[string]string{
-			"Select the UTCP tools required to fulfill the user's intent.": `{"tools": []}`,
+			"Decide which UTCP tools are required and generate the complete CodeMode Go snippet in this same response.": `{"tools":[],"code":"","stream":false}`,
 		},
 	}
 	mem := memory.NewSessionMemory(&memory.MemoryBank{}, 4)
@@ -1303,7 +1303,7 @@ func TestCodeModeOrchestrator_ToolsNeededButNoneSelected(t *testing.T) {
 
 	model := &dynamicStubModel{
 		responses: map[string]string{
-			"Select the UTCP tools required to fulfill the user's intent.": `{"tools": []}`, // No tools selected
+			"Decide which UTCP tools are required and generate the complete CodeMode Go snippet in this same response.": `{"tools":[],"code":"","stream":false}`,
 		},
 	}
 	mem := memory.NewSessionMemory(&memory.MemoryBank{}, 4)
@@ -1354,12 +1354,14 @@ func TestCodeModeOrchestrator_ToolsNeededButNoneSelected(t *testing.T) {
 func TestCodeModeOrchestrator_SnippetGenerationError(t *testing.T) {
 	ctx := context.Background()
 
+	const plannerPromptMarker = "Decide which UTCP tools are required"
+
 	model := &dynamicStubModel{
 		responses: map[string]string{
-			"Select the UTCP tools required to fulfill the user's intent.":   `{"tools": ["echo"]}`,
-			"Generate a Go snippet that uses ONLY the following UTCP tools:": `invalid json`, // Simulate bad snippet generation
+			plannerPromptMarker: "invalid json",
 		},
 	}
+
 	mem := memory.NewSessionMemory(&memory.MemoryBank{}, 4)
 	utcpClient := &stubUTCPClient{
 		searchTools: []utcpTools.Tool{
@@ -1369,7 +1371,9 @@ func TestCodeModeOrchestrator_SnippetGenerationError(t *testing.T) {
 				Inputs: utcpTools.ToolInputOutputSchema{
 					Type: "object",
 					Properties: map[string]any{
-						"input": map[string]any{"type": "string"},
+						"input": map[string]any{
+							"type": "string",
+						},
 					},
 					Required: []string{"input"},
 				},
@@ -1385,31 +1389,50 @@ func TestCodeModeOrchestrator_SnippetGenerationError(t *testing.T) {
 		AllowUnsafeTools: true,
 	})
 	if err != nil {
-		t.Fatalf("New returned error: %v", err)
+		t.Fatalf("New() error = %v", err)
 	}
 
 	_, err = agent.Generate(ctx, "session1", "Run the echo tool.")
 	if err == nil {
-		t.Fatalf("expected error due to invalid snippet JSON, got nil")
-	}
-	if !strings.Contains(err.Error(), "snippet empty") {
-		t.Fatalf("expected 'snippet empty' error, got: %v", err)
+		t.Fatal("Generate() error = nil, want invalid planner response error")
 	}
 
-	// Verify that CodeMode.Execute was not called
-	if utcpClient.callCount != 0 {
-		t.Fatalf("expected 0 UTCP calls, got %d", utcpClient.callCount)
+	const expectedError = "plan generation returned no JSON"
+	if !strings.Contains(err.Error(), expectedError) {
+		t.Fatalf(
+			"Generate() error = %q, want error containing %q",
+			err.Error(),
+			expectedError,
+		)
+	}
+
+	if !strings.Contains(model.lastPrompt, plannerPromptMarker) {
+		t.Fatalf(
+			"expected CodeMode planner prompt containing %q, got %q",
+			plannerPromptMarker,
+			model.lastPrompt,
+		)
+	}
+
+	if got := utcpClient.callCount; got != 0 {
+		t.Fatalf("UTCP call count = %d, want 0", got)
 	}
 }
 
 func TestCodeModeOrchestrator_SnippetExecutionSuccess(t *testing.T) {
 	ctx := context.Background()
 
-	codeSnippet := `__out = codemode.CallTool("echo", map[string]any{"input": "hello"})`
+	codeSnippet := `
+result, err := codemode.CallTool("echo", map[string]any{"input": "hello"})
+if err != nil {
+	__out = err
+	return __out
+}
+__out = result
+`
 	model := &dynamicStubModel{
 		responses: map[string]string{
-			"Select the UTCP tools required to fulfill the user's intent.":   `{"tools": ["echo"]}`,
-			"Generate a Go snippet that uses ONLY the following UTCP tools:": fmt.Sprintf(`{"code": %q, "stream": false}`, codeSnippet),
+			"Decide which UTCP tools are required and generate the complete CodeMode Go snippet in this same response.": fmt.Sprintf(`{"tools":["echo"],"code":%q,"stream":false}`, codeSnippet),
 		},
 	}
 	mem := memory.NewSessionMemory(&memory.MemoryBank{}, 4)
@@ -1445,9 +1468,19 @@ func TestCodeModeOrchestrator_SnippetExecutionSuccess(t *testing.T) {
 		t.Fatalf("Generate returned error: %v", err)
 	}
 
-	// CodeMode should return raw output from the executed snippet
-	if !strings.Contains(out.(codemode.CodeModeResult).Value.(string), "utcp says echo") {
-		t.Fatalf("expected output to contain 'utcp says echo', got %q", out)
+	// Generate returns CodeMode's raw execution envelope when CodeMode handles
+	// the request directly. Use checked assertions so regressions fail cleanly
+	// instead of panicking with an interface conversion error.
+	result, ok := out.(codemode.CodeModeResult)
+	if !ok {
+		t.Fatalf("expected codemode.CodeModeResult, got %T (%v)", out, out)
+	}
+	value, ok := result.Value.(string)
+	if !ok {
+		t.Fatalf("expected CodeMode result value to be string, got %T (%v)", result.Value, result.Value)
+	}
+	if !strings.Contains(value, "utcp says echo") {
+		t.Fatalf("expected output to contain 'utcp says echo', got %q", value)
 	}
 
 	// Verify that CodeMode.Execute called the UTCP client
