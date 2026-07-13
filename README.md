@@ -15,6 +15,7 @@ Use it when you want agent runtime pieces that stay idiomatic in Go:
 - ADK modules for wiring models, memory, tools, sub-agents, CodeMode, and UTCP
 - Agent-as-tool patterns for specialist agents and hierarchical workflows
 - Input/output guardrails and checkpoint/restore support
+- Composable retry, timeout, rate-limit, and token-budget model middleware
 
 ## Install
 
@@ -104,6 +105,81 @@ Embeddings are selected with `memory.AutoEmbedder()`.
 | `ADK_EMBED_MODEL` | Provider-specific embedding model |
 
 If no embedding provider can be created, Lattice falls back to `DummyEmbedder`.
+
+## Model Middleware
+
+Wrap any `models.Agent` with production policies before passing it to
+`agent.New` or returning it from an ADK model provider.
+
+```go
+package main
+
+import (
+	"context"
+	"log"
+	"time"
+
+	"github.com/Protocol-Lattice/go-agent/src/models"
+	modelmw "github.com/Protocol-Lattice/go-agent/src/models/middleware"
+)
+
+func buildModel(ctx context.Context) models.Agent {
+	base, err := models.NewLLMProvider(ctx, "openai", "gpt-4o-mini", "")
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	budget, err := modelmw.NewTokenBudget(50_000, nil)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	model, err := modelmw.Wrap(
+		base,
+		modelmw.TimeoutPolicy{Duration: 30 * time.Second},
+		modelmw.RetryPolicy{
+			MaxAttempts:    3,
+			InitialBackoff: 200 * time.Millisecond,
+			MaxBackoff:     2 * time.Second,
+		},
+		modelmw.RateLimitPolicy{
+			Requests: 60,
+			Per:      time.Minute,
+			Burst:    5,
+			Mode:     modelmw.RateLimitWait,
+		},
+		modelmw.TokenBudgetPolicy{Budget: budget},
+	)
+	if err != nil {
+		log.Fatal(err)
+	}
+	return model
+}
+```
+
+Middleware is listed outermost first. In the order above, the timeout covers
+the complete operation, including retry backoff. Every retry consumes a rate
+limit permit and an estimated input-token charge.
+
+`RateLimitWait` waits for capacity and respects context cancellation;
+`RateLimitReject` returns `middleware.ErrRateLimitExceeded` immediately.
+Retry middleware retries stream setup failures only, because restarting a
+stream after chunks have been delivered could duplicate output.
+
+Token budgets are concurrency-safe. Associate a budget with one request or
+workflow through its context to override the policy's fallback budget:
+
+```go
+requestBudget, _ := modelmw.NewTokenBudget(8_000, nil)
+runCtx := modelmw.ContextWithTokenBudget(ctx, requestBudget)
+```
+
+The default estimator uses approximately one token per four UTF-8 bytes. Pass
+a provider-specific `modelmw.TokenEstimator` when exact tokenizer behavior is
+required. Until provider usage metadata is normalized, budgets are estimates:
+input is rejected before a call, streaming stops before forwarding the chunk
+that crosses the budget, and an oversized non-streaming response is accounted
+for but returned as `middleware.ErrTokenBudgetExceeded`.
 
 ## ADK Setup
 
@@ -555,6 +631,9 @@ type Agent interface {
 Add a memory backend by implementing `memory.VectorStore`. Add `memory.SchemaInitializer` if the backend needs schema/bootstrap support.
 
 Add a tool by implementing `agent.Tool`, then register it through `agent.Options`, an ADK tool provider, or a UTCP provider depending on how it should be discovered and executed.
+
+Add a model policy by implementing `middleware.Middleware`; use
+`middleware.MiddlewareFunc` for small wrappers.
 
 ## Troubleshooting
 
