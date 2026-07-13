@@ -137,13 +137,14 @@ func (s *FileBackedStore) SearchMemory(ctx context.Context, sessionID string, qu
 		rec   model.MemoryRecord
 		score float64
 	}
+	similarityQuery := model.NewCosineQuery(queryEmbedding)
 	scoredRecords := make([]scored, 0, len(s.records))
 
 	for _, rec := range s.records {
 		if sessionID != "" && rec.SessionID != sessionID {
 			continue
 		}
-		score := model.MaxCosineSimilarity(queryEmbedding, rec)
+		score := similarityQuery.MaxSimilarity(rec)
 		rec.Score = score
 		scoredRecords = append(scoredRecords, scored{rec: rec, score: score})
 	}

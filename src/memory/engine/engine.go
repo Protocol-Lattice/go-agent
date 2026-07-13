@@ -191,6 +191,7 @@ func (e *Engine) Retrieve(ctx context.Context, sessionID, query string, limit in
 	if len(candidates) == 0 {
 		return nil, nil
 	}
+	similarityQuery := model.NewCosineQuery(embedding)
 	if graphStore, ok := e.store.(store.GraphStore); ok && e.opts.GraphNeighborhoodLimit > 0 {
 		seedIDs := make([]int64, 0, len(candidates))
 		for _, cand := range candidates {
@@ -230,7 +231,7 @@ func (e *Engine) Retrieve(ctx context.Context, sessionID, query string, limit in
 						}
 						existingKey[key] = struct{}{}
 					}
-					if score := model.MaxCosineSimilarity(embedding, nb); score != 0 {
+					if score := similarityQuery.MaxSimilarity(nb); score != 0 {
 						nb.Score = score
 					}
 					candidates = append(candidates, nb)
@@ -246,7 +247,7 @@ func (e *Engine) Retrieve(ctx context.Context, sessionID, query string, limit in
 		if rec.Importance == 0 {
 			rec.Importance = importanceScore(rec.Content, meta)
 		}
-		rec.Score = model.MaxCosineSimilarity(embedding, *rec)
+		rec.Score = similarityQuery.MaxSimilarity(*rec)
 		rec.KeywordScore = keywordMatchScore(rec.Content, rec.Summary, meta, keywords)
 		recency := recencyScore(now.Sub(rec.CreatedAt), e.opts.HalfLife)
 		if e.metrics != nil {

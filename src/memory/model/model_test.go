@@ -273,6 +273,38 @@ func TestMaxCosineSimilarityPreservesNegativeScoresAndUsesMatrix(t *testing.T) {
 	}
 }
 
+func TestCosineQueryMatchesCosineSimilarity(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		query     []float32
+		candidate []float32
+	}{
+		{name: "same dimensions", query: []float32{1, 2, 3}, candidate: []float32{3, 2, 1}},
+		{name: "short candidate", query: []float32{1, 2, 3}, candidate: []float32{3, 2}},
+		{name: "long candidate", query: []float32{1, 2}, candidate: []float32{3, 2, 1}},
+		{name: "zero query", query: []float32{0, 0}, candidate: []float32{1, 0}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := NewCosineQuery(tc.query).Similarity(tc.candidate)
+			want := CosineSimilarity(tc.query, tc.candidate)
+			if math.Abs(got-want) > 1e-12 {
+				t.Fatalf("prepared similarity = %v, want %v", got, want)
+			}
+		})
+	}
+}
+
+func TestCosineQueryMaxSimilarityUsesAllEmbeddings(t *testing.T) {
+	query := NewCosineQuery([]float32{1, 0})
+	record := MemoryRecord{
+		Embedding:       []float32{-1, 0},
+		EmbeddingMatrix: [][]float32{{0, 1}, {1, 0}},
+	}
+	if got := query.MaxSimilarity(record); math.Abs(got-1) > 1e-9 {
+		t.Fatalf("prepared matrix maximum similarity = %v, want 1", got)
+	}
+}
+
 func TestRecordSimilarityUsesAllEmbeddings(t *testing.T) {
 	a := MemoryRecord{Embedding: []float32{-1, 0}, EmbeddingMatrix: [][]float32{{0, 1}}}
 	b := MemoryRecord{Embedding: []float32{1, 0}, EmbeddingMatrix: [][]float32{{0, 1}}}

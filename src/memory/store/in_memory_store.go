@@ -85,12 +85,13 @@ func (s *InMemoryStore) SearchMemory(_ context.Context, sessionID string, queryE
 	if limit <= 0 {
 		return nil, nil
 	}
+	query := model.NewCosineQuery(queryEmbedding)
 	scoredRecords := make(topMemoryRecords, 0, min(limit, len(s.records)))
 	for _, rec := range s.records {
 		if sessionID != "" && rec.SessionID != sessionID {
 			continue
 		}
-		score := model.MaxCosineSimilarity(queryEmbedding, rec)
+		score := query.MaxSimilarity(rec)
 		rec.Score = score
 		candidate := scoredMemoryRecord{record: rec, score: score}
 		if len(scoredRecords) < limit {

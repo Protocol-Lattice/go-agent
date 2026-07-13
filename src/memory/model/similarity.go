@@ -2,6 +2,47 @@ package model
 
 import "math"
 
+// CosineQuery prepares the invariant portion of cosine similarity for reuse
+// across many candidate vectors. The query slice must not be mutated while the
+// prepared query is in use.
+type CosineQuery struct {
+	vector    []float32
+	magnitude float64
+}
+
+// NewCosineQuery prepares a vector for repeated cosine-similarity comparisons.
+func NewCosineQuery(vector []float32) CosineQuery {
+	var norm float64
+	for _, value := range vector {
+		norm += float64(value) * float64(value)
+	}
+	return CosineQuery{
+		vector:    vector,
+		magnitude: math.Sqrt(norm),
+	}
+}
+
+// Similarity computes cosine similarity against a prepared query. Differing
+// vector dimensions retain CosineSimilarity's truncated-vector semantics.
+func (q CosineQuery) Similarity(vector []float32) float64 {
+	if len(q.vector) == 0 || len(vector) == 0 {
+		return 0
+	}
+	if len(q.vector) != len(vector) {
+		return CosineSimilarity(q.vector, vector)
+	}
+
+	var dot, norm float64
+	for i, value := range q.vector {
+		dot += float64(value) * float64(vector[i])
+		norm += float64(vector[i]) * float64(vector[i])
+	}
+	if q.magnitude == 0 || norm == 0 {
+		return 0
+	}
+	return dot / (q.magnitude * math.Sqrt(norm))
+}
+
 // CosineSimilarity computes the cosine similarity between two vectors.
 func CosineSimilarity(a, b []float32) float64 {
 	if len(a) == 0 || len(b) == 0 {
@@ -26,9 +67,10 @@ func CosineSimilarity(a, b []float32) float64 {
 // CosineSimilarityMatrix computes the best cosine similarity between a query
 // vector and any vector contained within the matrix.
 func CosineSimilarityMatrix(query []float32, matrix [][]float32) float64 {
+	prepared := NewCosineQuery(query)
 	best := 0.0
 	for _, vec := range matrix {
-		if sim := CosineSimilarity(query, vec); sim > best {
+		if sim := prepared.Similarity(vec); sim > best {
 			best = sim
 		}
 	}
@@ -38,19 +80,25 @@ func CosineSimilarityMatrix(query []float32, matrix [][]float32) float64 {
 // MaxCosineSimilarity returns the highest cosine similarity between the query
 // vector and any embedding associated with the record.
 func MaxCosineSimilarity(query []float32, rec MemoryRecord) float64 {
+	return NewCosineQuery(query).MaxSimilarity(rec)
+}
+
+// MaxSimilarity returns the highest cosine similarity between a prepared query
+// and any embedding associated with the record.
+func (q CosineQuery) MaxSimilarity(rec MemoryRecord) float64 {
 	var (
 		best      float64
 		hasVector bool
 	)
 	if len(rec.Embedding) > 0 {
-		best = CosineSimilarity(query, rec.Embedding)
+		best = q.Similarity(rec.Embedding)
 		hasVector = true
 	}
 	for _, vec := range rec.EmbeddingMatrix {
 		if len(vec) == 0 {
 			continue
 		}
-		sim := CosineSimilarity(query, vec)
+		sim := q.Similarity(vec)
 		if !hasVector || sim > best {
 			best = sim
 			hasVector = true

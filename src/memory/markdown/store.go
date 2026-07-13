@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -277,40 +278,34 @@ func (s *Store) SearchMemory(ctx context.Context, sessionID string, queryEmbeddi
 		return nil, err
 	}
 
-	// Filter by sessionID
-	var candidates []Record
-	for _, rec := range all {
-		if sessionID == "" || rec.SessionID == sessionID {
-			candidates = append(candidates, rec)
-		}
-	}
-
-	// Score by embedding similarity
 	type scoredRec struct {
 		Record Record
-		Score  float32
+		Score  float64
 	}
 
-	var scored []scoredRec
-
-	for _, rec := range candidates {
-		score := float32(0)
-		if len(queryEmbedding) > 0 && len(rec.Embedding) > 0 {
-			score = cosineSimilarity(queryEmbedding, rec.Embedding)
+	hasQuery := len(queryEmbedding) > 0
+	query := model.NewCosineQuery(queryEmbedding)
+	scored := make([]scoredRec, 0, len(all))
+	for _, rec := range all {
+		if sessionID != "" && rec.SessionID != sessionID {
+			continue
 		}
-		if score > 0 || len(queryEmbedding) == 0 {
-			scored = append(scored, scoredRec{rec, score})
-		}
-	}
-
-	// Sort by score descending
-	for i := 0; i < len(scored); i++ {
-		for j := i + 1; j < len(scored); j++ {
-			if scored[j].Score > scored[i].Score {
-				scored[i], scored[j] = scored[j], scored[i]
+		score := 0.0
+		if hasQuery {
+			if len(rec.Embedding) == 0 {
+				continue
+			}
+			score = query.Similarity(rec.Embedding)
+			if score <= 0 {
+				continue
 			}
 		}
+		scored = append(scored, scoredRec{Record: rec, Score: score})
 	}
+
+	sort.SliceStable(scored, func(i, j int) bool {
+		return scored[i].Score > scored[j].Score
+	})
 
 	if len(scored) > limit {
 		scored = scored[:limit]
@@ -547,47 +542,4 @@ func readLines(s string) []string {
 		out = append(out, scanner.Text())
 	}
 	return out
-}
-
-// cosineSimilarity computes cosine similarity between two embedding vectors
-func cosineSimilarity(a, b []float32) float32 {
-	if len(a) == 0 || len(b) == 0 {
-		return 0
-	}
-
-	minLen := len(a)
-	if len(b) < minLen {
-		minLen = len(b)
-	}
-
-	var dotProduct, normA, normB float32
-	for i := 0; i < minLen; i++ {
-		dotProduct += a[i] * b[i]
-		normA += a[i] * a[i]
-		normB += b[i] * b[i]
-	}
-
-	if normA == 0 || normB == 0 {
-		return 0
-	}
-
-	// Using simple approximation for sqrt (could use math.Sqrt for precision)
-	return dotProduct / (sqrt(normA) * sqrt(normB))
-}
-
-// sqrt computes integer square root approximation
-func sqrt(x float32) float32 {
-	if x < 0 {
-		return 0
-	}
-	if x == 0 {
-		return 0
-	}
-
-	// Newton's method approximation
-	result := x
-	for i := 0; i < 10; i++ {
-		result = (result + x/result) / 2
-	}
-	return result
 }

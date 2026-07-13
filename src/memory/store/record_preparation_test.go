@@ -181,6 +181,26 @@ func TestPrepareMemoryRecord(t *testing.T) {
 	}
 }
 
+func TestRescoreMemoryRecordsUsesPreparedMatrixAwareScoring(t *testing.T) {
+	records := []model.MemoryRecord{
+		{Content: "backend score", Embedding: []float32{-1, 0}, Score: 0.99},
+		{Content: "matrix match", Embedding: []float32{-1, 0}, EmbeddingMatrix: [][]float32{{1, 0}}},
+		{Content: "primary match", Embedding: []float32{0.8, 0.6}},
+		{Content: "backend only", Score: 0.7},
+	}
+
+	got := rescoreMemoryRecords(records, []float32{1, 0}, 3)
+	if len(got) != 3 {
+		t.Fatalf("rescored %d records, want 3", len(got))
+	}
+	if got[0].Content != "matrix match" || got[1].Content != "primary match" || got[2].Content != "backend only" {
+		t.Fatalf("unexpected rescored order: %q, %q, %q", got[0].Content, got[1].Content, got[2].Content)
+	}
+	if got[0].Score != 1 || got[1].Score < 0.79 || got[1].Score > 0.81 {
+		t.Fatalf("unexpected normalized scores: %#v", got)
+	}
+}
+
 func TestQdrantStoreMemoryPreservesMetadataSideEffects(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

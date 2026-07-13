@@ -94,9 +94,14 @@ func (s *Neo4jStore) StoreMemory(ctx context.Context, sessionID, content string,
 	return s.base.StoreMemory(ctx, sessionID, content, metadata, embedding)
 }
 
-// SearchMemory forwards the call to the underlying vector store.
+// SearchMemory delegates retrieval to the vector store, then normalizes scores
+// across primary and matrix embeddings with one prepared query.
 func (s *Neo4jStore) SearchMemory(ctx context.Context, sessionID string, queryEmbedding []float32, limit int) ([]model.MemoryRecord, error) {
-	return s.base.SearchMemory(ctx, sessionID, queryEmbedding, limit)
+	records, err := s.base.SearchMemory(ctx, sessionID, queryEmbedding, limit)
+	if err != nil {
+		return nil, err
+	}
+	return rescoreMemoryRecords(records, queryEmbedding, limit), nil
 }
 
 // UpdateEmbedding forwards the call to the underlying vector store.

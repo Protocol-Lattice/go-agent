@@ -154,12 +154,13 @@ func fullSortSearchMemory(store *InMemoryStore, sessionID string, query []float3
 		record model.MemoryRecord
 		score  float64
 	}
+	queryVector := model.NewCosineQuery(query)
 	scoredRecords := make([]scored, 0, len(store.records))
 	for _, record := range store.records {
 		if sessionID != "" && record.SessionID != sessionID {
 			continue
 		}
-		score := model.MaxCosineSimilarity(query, record)
+		score := queryVector.MaxSimilarity(record)
 		record.Score = score
 		scoredRecords = append(scoredRecords, scored{record: record, score: score})
 	}

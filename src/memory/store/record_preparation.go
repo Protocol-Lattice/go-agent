@@ -1,10 +1,30 @@
 package store
 
 import (
+	"sort"
 	"time"
 
 	"github.com/Protocol-Lattice/go-agent/src/memory/model"
 )
+
+// rescoreMemoryRecords normalizes backend results using the same prepared
+// cosine query and matrix-aware scoring used by the local vector stores.
+func rescoreMemoryRecords(records []model.MemoryRecord, queryEmbedding []float32, limit int) []model.MemoryRecord {
+	query := model.NewCosineQuery(queryEmbedding)
+	for i := range records {
+		if len(records[i].Embedding) == 0 && len(records[i].EmbeddingMatrix) == 0 {
+			continue
+		}
+		records[i].Score = query.MaxSimilarity(records[i])
+	}
+	sort.SliceStable(records, func(i, j int) bool {
+		return records[i].Score > records[j].Score
+	})
+	if limit > 0 && len(records) > limit {
+		return records[:limit]
+	}
+	return records
+}
 
 // prepareMemoryRecord applies the backend-independent normalization needed
 // before a memory is serialized. Persistent stores historically include a

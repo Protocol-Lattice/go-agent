@@ -128,7 +128,10 @@ func (ms *MongoStore) SearchMemory(ctx context.Context, sessionID string, queryE
 		rec.Score = doc.Score
 		records = append(records, rec)
 	}
-	return records, nil
+	if err := cursor.Err(); err != nil {
+		return nil, err
+	}
+	return rescoreMemoryRecords(records, queryEmbedding, limit), nil
 }
 
 func (ms *MongoStore) UpdateEmbedding(ctx context.Context, id int64, embedding []float32, lastEmbedded time.Time) error {

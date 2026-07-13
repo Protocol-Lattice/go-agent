@@ -300,6 +300,7 @@ func (qs *QdrantStore) SearchMemory(ctx context.Context, sessionID string, query
 	if err := qs.do(ctx, http.MethodPost, fmt.Sprintf("/collections/%s/points/search", url.PathEscape(qs.collection)), reqBody, &resp); err != nil {
 		return nil, err
 	}
+	similarityQuery := model.NewCosineQuery(queryEmbedding)
 	results := make([]model.MemoryRecord, 0, len(resp.Result))
 	for _, point := range resp.Result {
 		id, _ := parseQdrantID(point.ID)
@@ -337,7 +338,7 @@ func (qs *QdrantStore) SearchMemory(ctx context.Context, sessionID string, query
 		if len(record.GraphEdges) == 0 {
 			record.GraphEdges = model.ValidGraphEdges(metaMap)
 		}
-		record.Score = model.MaxCosineSimilarity(queryEmbedding, record)
+		record.Score = similarityQuery.MaxSimilarity(record)
 		results = append(results, record)
 	}
 	sort.SliceStable(results, func(i, j int) bool { return results[i].Score > results[j].Score })

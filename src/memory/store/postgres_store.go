@@ -88,6 +88,7 @@ func (ps *PostgresStore) SearchMemory(ctx context.Context, sessionID string, que
 	}
 	defer rows.Close()
 
+	similarityQuery := model.NewCosineQuery(queryEmbedding)
 	var records []model.MemoryRecord
 	for rows.Next() {
 		var rec model.MemoryRecord
@@ -102,7 +103,7 @@ func (ps *PostgresStore) SearchMemory(ctx context.Context, sessionID string, que
 		if len(rec.EmbeddingMatrix) == 0 && matrixText.Valid && strings.TrimSpace(matrixText.String) != "" {
 			rec.EmbeddingMatrix = model.DecodeEmbeddingMatrix(matrixText.String)
 		}
-		rec.Score = model.MaxCosineSimilarity(queryEmbedding, rec)
+		rec.Score = similarityQuery.MaxSimilarity(rec)
 		if rec.Space == "" {
 			rec.Space = rec.SessionID
 		}
