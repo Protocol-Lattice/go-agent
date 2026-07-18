@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/Protocol-Lattice/go-agent/src/memory"
 	"github.com/Protocol-Lattice/go-agent/src/models"
@@ -65,6 +66,75 @@ func (m *fileEchoModel) GenerateStream(ctx context.Context, prompt string) (<-ch
 	ch <- models.StreamChunk{Delta: m.response, FullText: m.response, Done: true}
 	close(ch)
 	return ch, nil
+}
+
+type signalingModel struct {
+	response string
+	called   chan struct{}
+	delay    time.Duration
+}
+
+func (m *signalingModel) signal() {
+	if m.called != nil {
+		select {
+		case m.called <- struct{}{}:
+		default:
+		}
+	}
+	if m.delay > 0 {
+		time.Sleep(m.delay)
+	}
+}
+
+func (m *signalingModel) Generate(context.Context, string) (any, error) {
+	m.signal()
+	return m.response, nil
+}
+
+func (m *signalingModel) GenerateWithFiles(context.Context, string, []models.File) (any, error) {
+	m.signal()
+	return m.response, nil
+}
+
+func (m *signalingModel) GenerateStream(context.Context, string) (<-chan models.StreamChunk, error) {
+	ch := make(chan models.StreamChunk, 1)
+	ch <- models.StreamChunk{Delta: m.response, FullText: m.response, Done: true}
+	close(ch)
+	return ch, nil
+}
+
+type gatedEmbedder struct {
+	match   func(string) bool
+	started chan string
+	release <-chan struct{}
+	delay   time.Duration
+}
+
+func (e *gatedEmbedder) Embed(ctx context.Context, text string) ([]float32, error) {
+	if e.match != nil && e.match(text) {
+		e.started <- text
+		select {
+		case <-e.release:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	if e.delay > 0 {
+		time.Sleep(e.delay)
+	}
+	return []float32{1}, nil
+}
+
+func awaitSignal[T any](t *testing.T, ch <-chan T, description string) T {
+	t.Helper()
+	select {
+	case value := <-ch:
+		return value
+	case <-time.After(2 * time.Second):
+		t.Fatalf("timed out waiting for %s", description)
+		var zero T
+		return zero
+	}
 }
 
 type dynamicStubModel struct {
@@ -217,6 +287,157 @@ func TestNewValidatesRequirements(t *testing.T) {
 	model := &stubModel{response: "ok"}
 	if _, err := New(Options{Model: model}); err == nil {
 		t.Fatalf("expected error when memory is missing")
+	}
+}
+
+func TestGenerateOverlapsUserMemoryEmbeddingWithModel(t *testing.T) {
+	const input = "what is latency?"
+
+	release := make(chan struct{})
+	embedStarted := make(chan string, 1)
+	modelCalled := make(chan struct{}, 1)
+	mem := memory.NewSessionMemory(nil, 8).WithEmbedder(&gatedEmbedder{
+		match:   func(text string) bool { return text == input },
+		started: embedStarted,
+		release: release,
+	})
+	model := &signalingModel{response: "ok", called: modelCalled}
+	agent, err := New(Options{Model: model, Memory: mem})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+
+	type result struct {
+		value any
+		err   error
+	}
+	done := make(chan result, 1)
+	go func() {
+		value, generateErr := agent.Generate(context.Background(), "session", input)
+		done <- result{value: value, err: generateErr}
+	}()
+
+	awaitSignal(t, embedStarted, "user memory embedding")
+	awaitSignal(t, modelCalled, "model generation while user embedding is blocked")
+	close(release)
+
+	got := awaitSignal(t, done, "Generate completion")
+	if got.err != nil {
+		t.Fatalf("Generate returned error: %v", got.err)
+	}
+	if got.value != "ok" {
+		t.Fatalf("Generate returned %v, want ok", got.value)
+	}
+
+	records := mem.ExportShortTerm()["session"]
+	if len(records) != 2 {
+		t.Fatalf("stored %d memory records, want user and assistant", len(records))
+	}
+	if metadataRole(records[0].Metadata) != "user" || metadataRole(records[1].Metadata) != "assistant" {
+		t.Fatalf("memory roles = %q, %q; want user, assistant", metadataRole(records[0].Metadata), metadataRole(records[1].Metadata))
+	}
+}
+
+func TestGenerateWithFilesOverlapsAttachmentEmbeddingsWithModel(t *testing.T) {
+	release := make(chan struct{})
+	embedStarted := make(chan string, 2)
+	modelCalled := make(chan struct{}, 1)
+	mem := memory.NewSessionMemory(nil, 8).WithEmbedder(&gatedEmbedder{
+		match:   func(text string) bool { return strings.HasPrefix(text, "Attachment ") },
+		started: embedStarted,
+		release: release,
+	})
+	model := &signalingModel{response: "ok", called: modelCalled}
+	agent, err := New(Options{Model: model, Memory: mem})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+
+	files := []models.File{
+		{Name: "first.txt", MIME: "text/plain", Data: []byte("first")},
+		{Name: "second.txt", MIME: "text/plain", Data: []byte("second")},
+	}
+	type result struct {
+		value string
+		err   error
+	}
+	done := make(chan result, 1)
+	go func() {
+		value, generateErr := agent.GenerateWithFiles(context.Background(), "session", "summarize", files)
+		done <- result{value: value, err: generateErr}
+	}()
+
+	awaitSignal(t, embedStarted, "first attachment embedding")
+	awaitSignal(t, embedStarted, "second attachment embedding")
+	awaitSignal(t, modelCalled, "file-aware model generation while attachment embeddings are blocked")
+	close(release)
+
+	got := awaitSignal(t, done, "GenerateWithFiles completion")
+	if got.err != nil {
+		t.Fatalf("GenerateWithFiles returned error: %v", got.err)
+	}
+	if got.value != "ok" {
+		t.Fatalf("GenerateWithFiles returned %q, want ok", got.value)
+	}
+
+	retrieved, err := agent.RetrieveAttachmentFiles(context.Background(), "session", 8)
+	if err != nil {
+		t.Fatalf("RetrieveAttachmentFiles returned error: %v", err)
+	}
+	if len(retrieved) != 2 || retrieved[0].Name != "first.txt" || retrieved[1].Name != "second.txt" {
+		t.Fatalf("retrieved attachments = %#v; want first.txt, second.txt in order", retrieved)
+	}
+}
+
+func TestGenerateWithFilesOverlapsContextAndAttachmentRetrieval(t *testing.T) {
+	const input = "summarize"
+
+	release := make(chan struct{})
+	retrievalStarted := make(chan string, 3)
+	bank := memory.NewMemoryBankWithStore(memory.NewInMemoryStore())
+	mem := memory.NewSessionMemory(bank, 8).WithEmbedder(&gatedEmbedder{
+		match:   func(text string) bool { return text == input || text == "" },
+		started: retrievalStarted,
+		release: release,
+	})
+	agent, err := New(Options{
+		Model:  &signalingModel{response: "ok"},
+		Memory: mem,
+	})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+
+	type result struct {
+		value string
+		err   error
+	}
+	done := make(chan result, 1)
+	go func() {
+		value, generateErr := agent.GenerateWithFiles(
+			context.Background(),
+			"session",
+			input,
+			[]models.File{{Name: "notes.txt", MIME: "text/plain", Data: []byte("notes")}},
+		)
+		done <- result{value: value, err: generateErr}
+	}()
+
+	started := map[string]bool{
+		awaitSignal(t, retrievalStarted, "first memory retrieval"):  true,
+		awaitSignal(t, retrievalStarted, "second memory retrieval"): true,
+	}
+	if !started[input] || !started[""] {
+		t.Fatalf("retrieval queries = %#v; want semantic and attachment retrieval", started)
+	}
+	close(release)
+
+	got := awaitSignal(t, done, "GenerateWithFiles completion")
+	if got.err != nil {
+		t.Fatalf("GenerateWithFiles returned error: %v", got.err)
+	}
+	if got.value != "ok" {
+		t.Fatalf("GenerateWithFiles returned %q, want ok", got.value)
 	}
 }
 

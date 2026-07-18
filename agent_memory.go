@@ -4,10 +4,28 @@ import (
 	"context"
 	"encoding/json"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Protocol-Lattice/go-agent/src/memory"
 )
+
+type memoryStoreTask struct {
+	once  sync.Once
+	ready <-chan preparedMemoryStore
+}
+
+type preparedMemoryStore struct {
+	agent       *Agent
+	shared      *memory.SharedSession
+	memory      *memory.SessionMemory
+	sessionID   string
+	content     string
+	metadata    map[string]string
+	metadataRaw string
+	embedding   []float32
+	embedded    bool
+}
 
 // Flush persists session memory into the long-term store.
 func (a *Agent) Flush(ctx context.Context, sessionID string) error {
@@ -55,8 +73,42 @@ func (a *Agent) Restore(data []byte) error {
 }
 
 func (a *Agent) storeMemory(sessionID, role, content string, extra map[string]string) {
-	if a == nil || strings.TrimSpace(content) == "" {
+	prepared, ok := a.prepareMemoryStore(sessionID, role, content, extra)
+	if !ok {
 		return
+	}
+	prepared.embed()
+	prepared.commit()
+}
+
+// startMemoryStore computes the session embedding in the background. Wait
+// commits the prepared record, retaining the synchronous visibility and
+// ordering guarantees of storeMemory while allowing callers to overlap the
+// expensive embedding request with model work.
+func (a *Agent) startMemoryStore(sessionID, role, content string, extra map[string]string) *memoryStoreTask {
+	prepared, ok := a.prepareMemoryStore(sessionID, role, content, extra)
+	if !ok {
+		return nil
+	}
+
+	ready := make(chan preparedMemoryStore, 1)
+	task := &memoryStoreTask{ready: ready}
+	if prepared.memory == nil || prepared.memory.Embedder == nil {
+		ready <- prepared
+		return task
+	}
+
+	go func() {
+		prepared.embed()
+		ready <- prepared
+	}()
+
+	return task
+}
+
+func (a *Agent) prepareMemoryStore(sessionID, role, content string, extra map[string]string) (preparedMemoryStore, bool) {
+	if a == nil || strings.TrimSpace(content) == "" {
+		return preparedMemoryStore{}, false
 	}
 
 	// Build metadata safely.
@@ -73,40 +125,70 @@ func (a *Agent) storeMemory(sessionID, role, content string, extra map[string]st
 		}
 	}
 
+	metaBytes, _ := json.Marshal(meta)
+
 	// Snapshot pointers without holding the lock during external calls.
 	a.mu.Lock()
 	shared := a.Shared
 	mem := a.memory
 	a.mu.Unlock()
 
-	// 1) Best-effort write to shared spaces (doesn't require embedder).
-	if shared != nil {
-		shared.AddShortLocal(content, meta)
-		for _, space := range shared.Spaces() {
-			_ = shared.AddShortTo(space, content, meta) // ignore per-space errors
-		}
+	return preparedMemoryStore{
+		agent:       a,
+		shared:      shared,
+		memory:      mem,
+		sessionID:   sessionID,
+		content:     content,
+		metadata:    meta,
+		metadataRaw: string(metaBytes),
+	}, true
+}
+
+func (p *preparedMemoryStore) embed() {
+	if p.memory == nil || p.memory.Embedder == nil {
+		return
 	}
 
-	// 2) Write to session memory if available.
-	if mem == nil || mem.Embedder == nil {
-		return // nothing else to do; avoid panic
-	}
-
-	// Compute embedding with a small timeout to avoid hanging the call.
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	embedding, err := mem.Embedder.Embed(ctx, content)
-	if err != nil {
-		return // silent drop on embed failure; consider logging if desired
+	embedding, err := p.memory.Embedder.Embed(ctx, p.content)
+	if err == nil {
+		p.embedding = embedding
+		p.embedded = true
+	}
+}
+
+// Wait commits a background memory store exactly once. It is safe to call on
+// a nil task and safe to call repeatedly (for example, explicitly and via a
+// deferred cleanup on error paths).
+func (t *memoryStoreTask) Wait() {
+	if t == nil {
+		return
+	}
+	t.once.Do(func() {
+		prepared := <-t.ready
+		prepared.commit()
+	})
+}
+
+func (p preparedMemoryStore) commit() {
+	// Best-effort writes to shared spaces retain the existing behavior. Shared
+	// sessions own their embedding policy, so these calls remain synchronous.
+	if p.shared != nil {
+		p.shared.AddShortLocal(p.content, p.metadata)
+		for _, space := range p.shared.Spaces() {
+			_ = p.shared.AddShortTo(space, p.content, p.metadata)
+		}
 	}
 
-	metaBytes, _ := json.Marshal(meta)
+	if p.memory == nil || !p.embedded {
+		return
+	}
 
-	// Append to short-term memory under lock.
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	mem.AddShortTerm(sessionID, content, string(metaBytes), embedding)
+	p.agent.mu.Lock()
+	defer p.agent.mu.Unlock()
+	p.memory.AddShortTerm(p.sessionID, p.content, p.metadataRaw, p.embedding)
 }
 
 func (a *Agent) retrieveContext(ctx context.Context, sessionID, query string, limit int) ([]memory.MemoryRecord, error) {

@@ -168,6 +168,13 @@ func sanitizeInput(s string) string {
 }
 
 func (a *Agent) storeAttachmentMemories(sessionID string, files []models.File) {
+	waitMemoryStoreTasks(a.startAttachmentMemoryStores(sessionID, files))
+}
+
+// startAttachmentMemoryStores prepares every attachment concurrently while
+// preserving file order when the tasks are committed.
+func (a *Agent) startAttachmentMemoryStores(sessionID string, files []models.File) []*memoryStoreTask {
+	tasks := make([]*memoryStoreTask, 0, len(files))
 	for i, file := range files {
 		name := strings.TrimSpace(file.Name)
 		if name == "" {
@@ -193,7 +200,14 @@ func (a *Agent) storeAttachmentMemories(sessionID string, files []models.File) {
 		} else {
 			extra["text"] = "false"
 		}
-		a.storeMemory(sessionID, "attachment", content, extra)
+		tasks = append(tasks, a.startMemoryStore(sessionID, "attachment", content, extra))
+	}
+	return tasks
+}
+
+func waitMemoryStoreTasks(tasks []*memoryStoreTask) {
+	for _, task := range tasks {
+		task.Wait()
 	}
 }
 
@@ -218,9 +232,6 @@ func (a *Agent) RetrieveAttachmentFiles(ctx context.Context, sessionID string, l
 
 	var attachments []models.File
 	for _, record := range records {
-		if metadataRole(record.Metadata) != "attachment" {
-			continue
-		}
 		file, ok := attachmentFromRecord(record)
 		if !ok {
 			continue
@@ -236,21 +247,27 @@ func attachmentFromRecord(record memory.MemoryRecord) (models.File, bool) {
 		return models.File{}, false
 	}
 
-	var payload map[string]any
+	var payload struct {
+		Role       string `json:"role"`
+		Filename   string `json:"filename"`
+		MIME       string `json:"mime"`
+		DataBase64 string `json:"data_base64"`
+	}
 	if err := json.Unmarshal([]byte(record.Metadata), &payload); err != nil {
 		return models.File{}, false
 	}
+	if payload.Role != "attachment" {
+		return models.File{}, false
+	}
 
-	name, _ := payload["filename"].(string)
-	mime, _ := payload["mime"].(string)
-	dataB64, _ := payload["data_base64"].(string)
+	name := payload.Filename
 	if name == "" {
 		name = "attachment"
 	}
 
 	var data []byte
-	if dataB64 != "" {
-		raw, err := base64.StdEncoding.DecodeString(dataB64)
+	if payload.DataBase64 != "" {
+		raw, err := base64.StdEncoding.DecodeString(payload.DataBase64)
 		if err != nil {
 			return models.File{}, false
 		}
@@ -259,7 +276,7 @@ func attachmentFromRecord(record memory.MemoryRecord) (models.File, bool) {
 		data = extractTextAttachment(record.Content)
 	}
 
-	return models.File{Name: name, MIME: mime, Data: data}, true
+	return models.File{Name: name, MIME: payload.MIME, Data: data}, true
 }
 
 func extractTextAttachment(content string) []byte {
@@ -351,7 +368,6 @@ func (a *Agent) buildAttachmentPrompt(title string, files []models.File) string 
 	if len(files) == 0 {
 		return ""
 	}
-	var fallback strings.Builder
 	entries := make([]map[string]any, 0, len(files))
 	for i, f := range files {
 		name := strings.TrimSpace(f.Name)
@@ -364,6 +380,10 @@ func (a *Agent) buildAttachmentPrompt(title string, files []models.File) string 
 		}
 		sizeBytes := len(f.Data)
 		isText := isTextAttachment(mime, f.Data)
+		preview := ""
+		if isText && len(f.Data) > 0 {
+			preview = previewText(mime, f.Data)
+		}
 		entry := map[string]any{
 			"id":         i + 1,
 			"name":       name,
@@ -371,17 +391,10 @@ func (a *Agent) buildAttachmentPrompt(title string, files []models.File) string 
 			"size_bytes": sizeBytes,
 			"text":       isText,
 		}
-		if isText && len(f.Data) > 0 {
-			entry["preview"] = previewText(mime, f.Data)
+		if preview != "" {
+			entry["preview"] = preview
 		}
 		entries = append(entries, entry)
-
-		fallback.WriteString(fmt.Sprintf("- %s (%s, %s)", name, mime, humanSize(sizeBytes)))
-		if isText && len(f.Data) > 0 {
-			fallback.WriteString("\n  preview:\n  ")
-			fallback.WriteString(escapePromptContent(previewText(mime, f.Data)))
-		}
-		fallback.WriteString("\n")
 	}
 
 	var sb strings.Builder
@@ -392,7 +405,29 @@ func (a *Agent) buildAttachmentPrompt(title string, files []models.File) string 
 		sb.WriteString(indentBlock(toon, "  "))
 		sb.WriteString("\n")
 	} else {
-		sb.WriteString(fallback.String())
+		sb.WriteString(renderAttachmentFallback(files))
+	}
+	return sb.String()
+}
+
+func renderAttachmentFallback(files []models.File) string {
+	var sb strings.Builder
+	for i, file := range files {
+		name := strings.TrimSpace(file.Name)
+		if name == "" {
+			name = fmt.Sprintf("attachment_%d", i+1)
+		}
+		mime := strings.TrimSpace(file.MIME)
+		if mime == "" {
+			mime = "application/octet-stream"
+		}
+
+		sb.WriteString(fmt.Sprintf("- %s (%s, %s)", name, mime, humanSize(len(file.Data))))
+		if isTextAttachment(mime, file.Data) && len(file.Data) > 0 {
+			sb.WriteString("\n  preview:\n  ")
+			sb.WriteString(escapePromptContent(previewText(mime, file.Data)))
+		}
+		sb.WriteString("\n")
 	}
 	return sb.String()
 }

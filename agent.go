@@ -198,6 +198,14 @@ func (a *Agent) Generate(ctx context.Context, sessionID, userInput string) (any,
 		records, _ = a.retrieveContext(prefetchCtx, sessionID, userInput, a.contextLimit)
 	}()
 
+	// Attachment history is independent of semantic conversation retrieval.
+	// Start it now so both lookups also overlap CodeMode's selection pass.
+	attachmentReady := make(chan []models.File, 1)
+	go func() {
+		files, _ := a.RetrieveAttachmentFiles(prefetchCtx, sessionID, a.contextLimit)
+		attachmentReady <- files
+	}()
+
 	// ---------------------------------------------
 	// 2. CODEMODE (Go-like DSL)
 	// ---------------------------------------------
@@ -226,7 +234,8 @@ func (a *Agent) Generate(ctx context.Context, sessionID, userInput string) (any,
 	// ---------------------------------------------
 	// 5. STORE USER MEMORY (ONLY after toolOrchestrator failed)
 	// ---------------------------------------------
-	a.storeMemory(sessionID, "user", userInput, nil)
+	userMemory := a.startMemoryStore(sessionID, "user", userInput, nil)
+	defer userMemory.Wait()
 
 	// If the user input looks like a tool call, but wasn't handled above,
 	// we can reasonably assume it was a malformed/unrecognized tool call.
@@ -252,7 +261,7 @@ func (a *Agent) Generate(ctx context.Context, sessionID, userInput string) (any,
 
 	prompt := sb.String()
 
-	files, _ := a.RetrieveAttachmentFiles(ctx, sessionID, a.contextLimit)
+	files := <-attachmentReady
 
 	var completion any
 	var err error
@@ -275,6 +284,9 @@ func (a *Agent) Generate(ctx context.Context, sessionID, userInput string) (any,
 		completion = finalText
 	}
 
+	// Preserve user-before-assistant memory order while hiding the user's
+	// embedding latency behind attachment retrieval and model generation.
+	userMemory.Wait()
 	a.storeMemory(sessionID, "assistant", finalText, nil)
 	return completion, nil
 }
@@ -306,13 +318,15 @@ func (a *Agent) GenerateWithFiles(
 		return "", errors.New("both user input and files are empty")
 	}
 
-	existingFiles, _ := a.RetrieveAttachmentFiles(ctx, sessionID, a.contextLimit)
-
-	allFiles := make([]models.File, 0, len(existingFiles)+len(files))
-	allFiles = append(allFiles, existingFiles...)
-	allFiles = append(allFiles, files...)
-
-	fileBacked := len(allFiles) > 0
+	// With files supplied for this turn, the request is already known to be
+	// file-backed, so session attachment retrieval can be deferred and later
+	// overlapped with semantic context retrieval. Without new files, existing
+	// attachments must be known before deciding whether a direct tool is safe.
+	var existingFiles []models.File
+	if len(files) == 0 {
+		existingFiles, _ = a.RetrieveAttachmentFiles(ctx, sessionID, a.contextLimit)
+	}
+	fileBacked := len(files) > 0 || len(existingFiles) > 0
 
 	// Direct tool calls are only safe for text-only requests.
 	// File-backed requests must go through the file-aware orchestration path.
@@ -349,6 +363,16 @@ func (a *Agent) GenerateWithFiles(
 		records, _ = a.retrieveContext(prefetchCtx, sessionID, userInput, a.contextLimit)
 	}()
 
+	var existingFilesReady <-chan []models.File
+	if len(files) > 0 {
+		ready := make(chan []models.File, 1)
+		existingFilesReady = ready
+		go func() {
+			retrieved, _ := a.RetrieveAttachmentFiles(prefetchCtx, sessionID, a.contextLimit)
+			ready <- retrieved
+		}()
+	}
+
 	// Direct CodeMode does not receive files.
 	// If files are present, CodeMode must be disabled unless it receives full attachment context.
 	if trimmed != "" && !fileBacked && a.CodeMode != nil {
@@ -362,10 +386,27 @@ func (a *Agent) GenerateWithFiles(
 	}
 
 	prefetchWG.Wait()
-
-	if len(files) > 0 {
-		a.storeAttachmentMemories(sessionID, files)
+	if existingFilesReady != nil {
+		existingFiles = <-existingFilesReady
 	}
+
+	allFiles := make([]models.File, 0, len(existingFiles)+len(files))
+	allFiles = append(allFiles, existingFiles...)
+	allFiles = append(allFiles, files...)
+
+	// Attachment embeddings are independent of planning/model generation.
+	// Prepare them while prompts and model results are built, then commit in
+	// file order before the user/assistant records become visible.
+	attachmentMemories := a.startAttachmentMemoryStores(sessionID, files)
+	var userMemory *memoryStoreTask
+	defer func() {
+		waitMemoryStoreTasks(attachmentMemories)
+		userMemory.Wait()
+	}()
+
+	workspaceRules := fileBackedWorkspaceRules(allFiles)
+	existingFilesPrompt := a.buildAttachmentPrompt("Session attachments rehydrated", existingFiles)
+	turnFilesPrompt := a.buildAttachmentPrompt("Files provided for this turn", files)
 
 	orchestratorInput := userInput
 	if fileBacked {
@@ -376,16 +417,16 @@ func (a *Agent) GenerateWithFiles(
 		ob.WriteString("Use the attached workspace files as the source of truth.\n")
 		ob.WriteString("Do not use CodeMode unless the full attachment context is included.\n")
 		ob.WriteString("Do not invent files, packages, APIs, commands, or project structure.\n\n")
-		ob.WriteString(fileBackedWorkspaceRules(allFiles))
+		ob.WriteString(workspaceRules)
 		ob.WriteString("\n")
 
-		if len(existingFiles) > 0 {
-			ob.WriteString(a.buildAttachmentPrompt("Session attachments rehydrated", existingFiles))
+		if existingFilesPrompt != "" {
+			ob.WriteString(existingFilesPrompt)
 			ob.WriteString("\n")
 		}
 
-		if len(files) > 0 {
-			ob.WriteString(a.buildAttachmentPrompt("Files provided for this turn", files))
+		if turnFilesPrompt != "" {
+			ob.WriteString(turnFilesPrompt)
 			ob.WriteString("\n")
 		}
 
@@ -408,7 +449,7 @@ func (a *Agent) GenerateWithFiles(
 	}
 
 	if trimmed != "" {
-		a.storeMemory(sessionID, "user", userInput, nil)
+		userMemory = a.startMemoryStore(sessionID, "user", userInput, nil)
 	}
 
 	if trimmed != "" && !fileBacked && a.userLooksLikeToolCall(trimmed) {
@@ -428,17 +469,17 @@ func (a *Agent) GenerateWithFiles(
 	sb.WriteString("\n\n")
 
 	if fileBacked {
-		sb.WriteString(fileBackedWorkspaceRules(allFiles))
+		sb.WriteString(workspaceRules)
 		sb.WriteString("\n")
 	}
 
-	if len(existingFiles) > 0 {
-		sb.WriteString(a.buildAttachmentPrompt("Session attachments rehydrated", existingFiles))
+	if existingFilesPrompt != "" {
+		sb.WriteString(existingFilesPrompt)
 		sb.WriteString("\n")
 	}
 
-	if len(files) > 0 {
-		sb.WriteString(a.buildAttachmentPrompt("Files provided for this turn", files))
+	if turnFilesPrompt != "" {
+		sb.WriteString(turnFilesPrompt)
 		sb.WriteString("\n")
 	}
 
@@ -475,6 +516,8 @@ func (a *Agent) GenerateWithFiles(
 		response = validated
 	}
 
+	waitMemoryStoreTasks(attachmentMemories)
+	userMemory.Wait()
 	a.storeMemory(sessionID, "assistant", response, nil)
 	return response, nil
 }
