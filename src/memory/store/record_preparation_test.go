@@ -201,6 +201,60 @@ func TestRescoreMemoryRecordsUsesPreparedMatrixAwareScoring(t *testing.T) {
 	}
 }
 
+func TestMergeBackendCosineScoresOnlyRecomputesMatrixEmbeddings(t *testing.T) {
+	records := []model.MemoryRecord{
+		{Content: "backend winner", Embedding: []float32{0, 1}, Score: 0.9},
+		{Content: "matrix winner", Embedding: []float32{0, 1}, EmbeddingMatrix: [][]float32{{1, 0}}, Score: 0.8},
+		{Content: "third", Embedding: []float32{1, 0}, Score: 0.7},
+	}
+
+	got := mergeBackendCosineScores(records, []float32{1, 0}, 2)
+	if len(got) != 2 {
+		t.Fatalf("merged %d records, want 2", len(got))
+	}
+	if got[0].Content != "matrix winner" || got[0].Score != 1 {
+		t.Fatalf("matrix score did not reorder backend results: %#v", got)
+	}
+	if got[1].Content != "backend winner" || got[1].Score != 0.9 {
+		t.Fatalf("primary embedding was unexpectedly rescored: %#v", got)
+	}
+}
+
+func BenchmarkBackendScoreProcessing(b *testing.B) {
+	const (
+		recordCount = 64
+		dimensions  = 768
+	)
+	records := make([]model.MemoryRecord, recordCount)
+	for i := range records {
+		embedding := make([]float32, dimensions)
+		embedding[i%dimensions] = 1
+		records[i] = model.MemoryRecord{
+			Embedding: embedding,
+			Score:     1 - float64(i)/recordCount,
+		}
+	}
+	query := make([]float32, dimensions)
+	query[0] = 1
+
+	b.Run("full-rescore", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			working := append([]model.MemoryRecord(nil), records...)
+			if got := rescoreMemoryRecords(working, query, 8); len(got) != 8 {
+				b.Fatalf("got %d records, want 8", len(got))
+			}
+		}
+	})
+	b.Run("reuse-backend-scores", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			working := append([]model.MemoryRecord(nil), records...)
+			if got := mergeBackendCosineScores(working, query, 8); len(got) != 8 {
+				b.Fatalf("got %d records, want 8", len(got))
+			}
+		}
+	})
+}
+
 func TestQdrantStoreMemoryPreservesMetadataSideEffects(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -260,5 +314,38 @@ func TestQdrantStoreMemoryPreservesMetadataSideEffects(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestQdrantSearchNormalizesScoresAcrossCollectionDistances(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/collections/memories/points/search" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"status":"ok",
+			"result":[
+				{"id":1,"score":0.9,"vector":[0,1],"payload":{"session_id":"session-1","content":"backend winner","metadata":{}}},
+				{"id":2,"score":0.8,"vector":[0,1],"payload":{"session_id":"session-1","content":"matrix winner","metadata":{"embedding_matrix":[[1,0]]}}}
+			]
+		}`))
+	}))
+	defer server.Close()
+
+	store := NewQdrantStore(server.URL, "memories", "")
+	records, err := store.SearchMemory(context.Background(), "session-1", []float32{1, 0}, 2)
+	if err != nil {
+		t.Fatalf("SearchMemory returned error: %v", err)
+	}
+	if len(records) != 2 {
+		t.Fatalf("SearchMemory returned %d records, want 2", len(records))
+	}
+	if records[0].Content != "matrix winner" || records[0].Score != 1 {
+		t.Fatalf("matrix score did not reorder Qdrant results: %#v", records)
+	}
+	if records[1].Content != "backend winner" || records[1].Score != 0 {
+		t.Fatalf("Qdrant score was not normalized from the returned vector: %#v", records)
 	}
 }

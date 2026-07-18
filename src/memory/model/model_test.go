@@ -294,6 +294,28 @@ func TestCosineQueryMatchesCosineSimilarity(t *testing.T) {
 	}
 }
 
+func TestCosineQueryWithMagnitudeMatchesCosineSimilarity(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		query     []float32
+		candidate []float32
+	}{
+		{name: "same dimensions", query: []float32{1, 2, 3}, candidate: []float32{3, 2, 1}},
+		{name: "short candidate", query: []float32{1, 2, 3}, candidate: []float32{3, 2}},
+		{name: "long candidate", query: []float32{1, 2}, candidate: []float32{3, 2, 1}},
+		{name: "zero candidate", query: []float32{1, 2}, candidate: []float32{0, 0}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			magnitude := VectorMagnitude(tc.candidate)
+			got := NewCosineQuery(tc.query).SimilarityWithMagnitude(tc.candidate, magnitude)
+			want := CosineSimilarity(tc.query, tc.candidate)
+			if math.Abs(got-want) > 1e-12 {
+				t.Fatalf("cached-magnitude similarity = %v, want %v", got, want)
+			}
+		})
+	}
+}
+
 func TestCosineQueryMaxSimilarityUsesAllEmbeddings(t *testing.T) {
 	query := NewCosineQuery([]float32{1, 0})
 	record := MemoryRecord{

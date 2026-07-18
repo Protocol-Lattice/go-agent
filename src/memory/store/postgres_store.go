@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -23,6 +22,7 @@ type PostgresStore struct {
 }
 
 const postgresCosineDistanceOperator = "<=>"
+const postgresCosineScoreExpression = "1 - (embedding " + postgresCosineDistanceOperator + " $1::vector)"
 
 // NewPostgresStore connects to Postgres and returns a Postgres-backed VectorStore implementation.
 func NewPostgresStore(ctx context.Context, connStr string) (*PostgresStore, error) {
@@ -44,12 +44,11 @@ func (ps *PostgresStore) StoreMemory(ctx context.Context, sessionID, content str
                 VALUES ($1, $2, $3::jsonb, $4::vector, $5, $6, $7, $8, $9::jsonb)
                 RETURNING id;
         `
-	jsonEmbed, _ := json.Marshal(record.Embedding)
 	var matrixJSON []byte
 	if len(record.EmbeddingMatrix) > 0 {
 		matrixJSON, _ = json.Marshal(record.EmbeddingMatrix)
 	}
-	if err := ps.DB.QueryRow(ctx, query, sessionID, content, record.Metadata, vectorFromJSON(jsonEmbed), record.Importance, record.Source, record.Summary, record.LastEmbedded, matrixJSON).Scan(&record.ID); err != nil {
+	if err := ps.DB.QueryRow(ctx, query, sessionID, content, record.Metadata, formatVector(record.Embedding), record.Importance, record.Source, record.Summary, record.LastEmbedded, matrixJSON).Scan(&record.ID); err != nil {
 		return err
 	}
 	if err := ps.UpsertGraph(ctx, record, record.GraphEdges); err != nil {
@@ -60,21 +59,19 @@ func (ps *PostgresStore) StoreMemory(ctx context.Context, sessionID, content str
 
 // SearchMemory returns top-k similar memories from Postgres.
 func (ps *PostgresStore) SearchMemory(ctx context.Context, sessionID string, queryEmbedding []float32, limit int) ([]model.MemoryRecord, error) {
-	if ps == nil || ps.DB == nil {
+	if ps == nil || ps.DB == nil || limit <= 0 {
 		return nil, nil
 	}
-	jsonEmbed, _ := json.Marshal(queryEmbedding)
-
 	var queryBuilder strings.Builder
 	// The ivfflat index in defaultPostgresSchema uses vector_cosine_ops, so
 	// retrieval must use pgvector's cosine-distance operator (<=>). Using the
 	// L2 operator (<->) prevents that index from serving the ORDER BY query.
 	queryBuilder.WriteString(`
-        SELECT id, session_id, content, metadata::text, importance, source, summary, created_at, last_embedded, embedding::text, embedding_matrix::text, (embedding ` + postgresCosineDistanceOperator + ` $1::vector) AS score
+        SELECT id, session_id, content, metadata::text, importance, source, summary, created_at, last_embedded, embedding::text, embedding_matrix::text, ` + postgresCosineScoreExpression + ` AS score
         FROM memory_bank
         `)
 
-	args := []any{vectorFromJSON(jsonEmbed)}
+	args := []any{formatVector(queryEmbedding)}
 	if sessionID != "" {
 		queryBuilder.WriteString(" WHERE session_id = $" + strconv.Itoa(len(args)+1))
 		args = append(args, sessionID)
@@ -88,8 +85,7 @@ func (ps *PostgresStore) SearchMemory(ctx context.Context, sessionID string, que
 	}
 	defer rows.Close()
 
-	similarityQuery := model.NewCosineQuery(queryEmbedding)
-	var records []model.MemoryRecord
+	records := make([]model.MemoryRecord, 0, limit)
 	for rows.Next() {
 		var rec model.MemoryRecord
 		var embeddingText string
@@ -103,29 +99,26 @@ func (ps *PostgresStore) SearchMemory(ctx context.Context, sessionID string, que
 		if len(rec.EmbeddingMatrix) == 0 && matrixText.Valid && strings.TrimSpace(matrixText.String) != "" {
 			rec.EmbeddingMatrix = model.DecodeEmbeddingMatrix(matrixText.String)
 		}
-		rec.Score = similarityQuery.MaxSimilarity(rec)
 		if rec.Space == "" {
 			rec.Space = rec.SessionID
 		}
 		records = append(records, rec)
 	}
-	sort.SliceStable(records, func(i, j int) bool { return records[i].Score > records[j].Score })
-	if limit > 0 && len(records) > limit {
-		records = records[:limit]
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
-	return records, nil
+	return mergeBackendCosineScores(records, queryEmbedding, limit), nil
 }
 
 func (ps *PostgresStore) UpdateEmbedding(ctx context.Context, id int64, embedding []float32, lastEmbedded time.Time) error {
 	if ps == nil || ps.DB == nil {
 		return nil
 	}
-	jsonEmbed, _ := json.Marshal(embedding)
 	_, err := ps.DB.Exec(ctx, `
                 UPDATE memory_bank
                 SET embedding = $2::vector, last_embedded = $3
                 WHERE id = $1
-        `, id, vectorFromJSON(jsonEmbed), lastEmbedded)
+	`, id, formatVector(embedding), lastEmbedded)
 	return err
 }
 
@@ -202,18 +195,17 @@ func (ps *PostgresStore) UpsertGraph(ctx context.Context, record model.MemoryRec
 	if _, err = tx.Exec(ctx, `DELETE FROM memory_edges WHERE from_memory = $1`, record.ID); err != nil {
 		return err
 	}
+	targets := make([]int64, 0, len(edges))
+	edgeTypes := make([]string, 0, len(edges))
 	for _, edge := range edges {
 		if err := edge.Validate(); err != nil {
 			continue
 		}
-		if err = ensureNodeTx(ctx, tx, edge.Target, "", ""); err != nil {
-			return err
-		}
-		if _, err = tx.Exec(ctx, `
-                        INSERT INTO memory_edges (from_memory, to_memory, edge_type)
-                        VALUES ($1, $2, $3)
-                        ON CONFLICT (from_memory, to_memory, edge_type) DO NOTHING
-                `, record.ID, edge.Target, string(edge.Type)); err != nil {
+		targets = append(targets, edge.Target)
+		edgeTypes = append(edgeTypes, string(edge.Type))
+	}
+	if len(targets) > 0 {
+		if _, err = tx.Exec(ctx, postgresUpsertEdgesQuery, targets, edgeTypes, record.ID); err != nil {
 			return err
 		}
 	}
@@ -222,6 +214,29 @@ func (ps *PostgresStore) UpsertGraph(ctx context.Context, record model.MemoryRec
 	}
 	return nil
 }
+
+const postgresUpsertEdgesQuery = `
+WITH edge_data AS (
+        SELECT * FROM UNNEST($1::bigint[], $2::text[]) AS edge(target, edge_type)
+),
+upsert_nodes AS (
+        INSERT INTO memory_nodes (memory_id, space, updated_at)
+        SELECT DISTINCT edge.target,
+               COALESCE(NULLIF(existing.space, ''), NULLIF(memory.session_id, ''), '_shared'),
+               NOW()
+        FROM edge_data edge
+        JOIN memory_bank memory ON memory.id = edge.target
+        LEFT JOIN memory_nodes existing ON existing.memory_id = edge.target
+        ON CONFLICT (memory_id) DO UPDATE
+        SET space = COALESCE(NULLIF(memory_nodes.space, ''), EXCLUDED.space),
+            updated_at = NOW()
+        RETURNING memory_id
+)
+INSERT INTO memory_edges (from_memory, to_memory, edge_type)
+SELECT $3, edge.target, edge.edge_type
+FROM edge_data edge
+ON CONFLICT (from_memory, to_memory, edge_type) DO NOTHING
+`
 
 // Neighborhood returns memories connected within the configured hop distance.
 func (ps *PostgresStore) Neighborhood(ctx context.Context, sessionID string, seedIDs []int64, hops, limit int) ([]model.MemoryRecord, error) {
@@ -391,19 +406,37 @@ func vectorFromJSON(jsonEmbed []byte) string {
 	return fmt.Sprintf("[%s]", trimJSON(string(jsonEmbed)))
 }
 
+func formatVector(vector []float32) string {
+	buffer := make([]byte, 0, 2+len(vector)*12)
+	buffer = append(buffer, '[')
+	for i, value := range vector {
+		if i > 0 {
+			buffer = append(buffer, ',')
+		}
+		buffer = strconv.AppendFloat(buffer, float64(value), 'g', -1, 32)
+	}
+	buffer = append(buffer, ']')
+	return string(buffer)
+}
+
 func parseVector(text string) []float32 {
 	text = strings.Trim(text, "[]")
 	if strings.TrimSpace(text) == "" {
 		return nil
 	}
-	parts := strings.Split(text, ",")
-	vec := make([]float32, 0, len(parts))
-	for _, part := range parts {
-		f, err := strconv.ParseFloat(strings.TrimSpace(part), 32)
+	vec := make([]float32, 0, strings.Count(text, ",")+1)
+	start := 0
+	for end := 0; end <= len(text); end++ {
+		if end < len(text) && text[end] != ',' {
+			continue
+		}
+		f, err := strconv.ParseFloat(strings.TrimSpace(text[start:end]), 32)
 		if err != nil {
+			start = end + 1
 			continue
 		}
 		vec = append(vec, float32(f))
+		start = end + 1
 	}
 	return vec
 }

@@ -94,14 +94,11 @@ func (s *Neo4jStore) StoreMemory(ctx context.Context, sessionID, content string,
 	return s.base.StoreMemory(ctx, sessionID, content, metadata, embedding)
 }
 
-// SearchMemory delegates retrieval to the vector store, then normalizes scores
-// across primary and matrix embeddings with one prepared query.
+// SearchMemory delegates retrieval to the vector store. VectorStore requires
+// ordered, normalized results, so rescoring here would duplicate the base
+// store's hottest retrieval work.
 func (s *Neo4jStore) SearchMemory(ctx context.Context, sessionID string, queryEmbedding []float32, limit int) ([]model.MemoryRecord, error) {
-	records, err := s.base.SearchMemory(ctx, sessionID, queryEmbedding, limit)
-	if err != nil {
-		return nil, err
-	}
-	return rescoreMemoryRecords(records, queryEmbedding, limit), nil
+	return s.base.SearchMemory(ctx, sessionID, queryEmbedding, limit)
 }
 
 // UpdateEmbedding forwards the call to the underlying vector store.
@@ -234,21 +231,26 @@ func (s *Neo4jStore) UpsertGraph(ctx context.Context, record model.MemoryRecord,
 	if res != nil {
 		_ = res.Close(ctx)
 	}
+	validEdges := make([]map[string]any, 0, len(edges))
 	for _, edge := range edges {
 		if err := edge.Validate(); err != nil {
 			continue
 		}
-		edgeParams := map[string]any{
+		validEdges = append(validEdges, map[string]any{
+			"target":    edge.Target,
+			"edge_type": string(edge.Type),
+		})
+	}
+	if len(validEdges) > 0 {
+		res, err = tx.Run(ctx, neo4jUpsertEdgesCypher, map[string]any{
 			"from":       record.ID,
-			"target":     edge.Target,
-			"edge_type":  string(edge.Type),
+			"edges":      validEdges,
 			"updated_at": now.UTC().Format(time.RFC3339Nano),
 			"space":      space,
-		}
-		res, err = tx.Run(ctx, neo4jUpsertEdgeCypher, edgeParams)
+		})
 		if err != nil {
 			tx.Rollback(ctx)
-			return fmt.Errorf("neo4j upsert edge: %w", err)
+			return fmt.Errorf("neo4j upsert edges: %w", err)
 		}
 		if res != nil {
 			_ = res.Close(ctx)
@@ -342,12 +344,13 @@ SET m.session_id = $session_id,
     m.last_embedded = $last_embedded,
     m.updated_at = $updated_at
 `
-	neo4jUpsertEdgeCypher = `
+	neo4jUpsertEdgesCypher = `
+UNWIND $edges AS edge
 MATCH (m:Memory {id: $from})
-MERGE (target:Memory {id: $target})
+MERGE (target:Memory {id: edge.target})
 ON CREATE SET target.space = COALESCE(target.space, $space)
-MERGE (m)-[r:RELATED_TO {target_id: $target}]->(target)
-SET r.edge_type = $edge_type,
+MERGE (m)-[r:RELATED_TO {target_id: edge.target}]->(target)
+SET r.edge_type = edge.edge_type,
     r.updated_at = $updated_at
 `
 	neo4jNeighborhoodQuery = `

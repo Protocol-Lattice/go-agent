@@ -300,7 +300,6 @@ func (qs *QdrantStore) SearchMemory(ctx context.Context, sessionID string, query
 	if err := qs.do(ctx, http.MethodPost, fmt.Sprintf("/collections/%s/points/search", url.PathEscape(qs.collection)), reqBody, &resp); err != nil {
 		return nil, err
 	}
-	similarityQuery := model.NewCosineQuery(queryEmbedding)
 	results := make([]model.MemoryRecord, 0, len(resp.Result))
 	for _, point := range resp.Result {
 		id, _ := parseQdrantID(point.ID)
@@ -338,14 +337,12 @@ func (qs *QdrantStore) SearchMemory(ctx context.Context, sessionID string, query
 		if len(record.GraphEdges) == 0 {
 			record.GraphEdges = model.ValidGraphEdges(metaMap)
 		}
-		record.Score = similarityQuery.MaxSimilarity(record)
 		results = append(results, record)
 	}
-	sort.SliceStable(results, func(i, j int) bool { return results[i].Score > results[j].Score })
-	if limit > 0 && len(results) > limit {
-		results = results[:limit]
-	}
-	return results, nil
+	// Qdrant collections can use cosine, dot-product, or Euclidean distance.
+	// Normalize the returned vectors to the VectorStore cosine contract rather
+	// than assuming the server's score uses a particular collection metric.
+	return rescoreMemoryRecords(results, queryEmbedding, limit), nil
 }
 
 // UpdateEmbedding updates the vector and last embedded timestamp.
@@ -666,17 +663,22 @@ func (qs *QdrantStore) do(ctx context.Context, method, path string, body any, ou
 	}
 	defer resp.Body.Close()
 
-	payload, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode >= 400 {
+		payload, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 		return fmt.Errorf("qdrant %s %s -> http %d: %s",
 			method, u, resp.StatusCode, strings.TrimSpace(string(payload)))
 	}
 
-	if out != nil && len(payload) > 0 {
-		if err := json.Unmarshal(payload, out); err != nil {
+	if out != nil {
+		if err := json.NewDecoder(resp.Body).Decode(out); err != nil && !errors.Is(err, io.EOF) {
 			return err
 		}
+		_, _ = io.Copy(io.Discard, resp.Body)
+		return nil
 	}
+	// Drain successful responses so the HTTP transport can reuse the
+	// connection without retaining the response in an intermediate byte slice.
+	_, _ = io.Copy(io.Discard, resp.Body)
 	return nil
 }
 func (qs *QdrantStore) getPoint(ctx context.Context, id int64) (*qdrantPointResult, error) {

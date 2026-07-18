@@ -12,14 +12,21 @@ type CosineQuery struct {
 
 // NewCosineQuery prepares a vector for repeated cosine-similarity comparisons.
 func NewCosineQuery(vector []float32) CosineQuery {
+	return CosineQuery{
+		vector:    vector,
+		magnitude: VectorMagnitude(vector),
+	}
+}
+
+// VectorMagnitude computes the Euclidean magnitude of a vector. Callers that
+// compare an immutable vector repeatedly can cache this value and pass it to
+// SimilarityWithMagnitude.
+func VectorMagnitude(vector []float32) float64 {
 	var norm float64
 	for _, value := range vector {
 		norm += float64(value) * float64(value)
 	}
-	return CosineQuery{
-		vector:    vector,
-		magnitude: math.Sqrt(norm),
-	}
+	return math.Sqrt(norm)
 }
 
 // Similarity computes cosine similarity against a prepared query. Differing
@@ -41,6 +48,27 @@ func (q CosineQuery) Similarity(vector []float32) float64 {
 		return 0
 	}
 	return dot / (q.magnitude * math.Sqrt(norm))
+}
+
+// SimilarityWithMagnitude computes cosine similarity using a previously
+// calculated candidate magnitude. Differing vector dimensions fall back to
+// Similarity so its truncated-vector semantics remain unchanged.
+func (q CosineQuery) SimilarityWithMagnitude(vector []float32, magnitude float64) float64 {
+	if len(q.vector) == 0 || len(vector) == 0 {
+		return 0
+	}
+	if len(q.vector) != len(vector) {
+		return q.Similarity(vector)
+	}
+	if q.magnitude == 0 || magnitude == 0 {
+		return 0
+	}
+
+	var dot float64
+	for i, value := range q.vector {
+		dot += float64(value) * float64(vector[i])
+	}
+	return dot / (q.magnitude * magnitude)
 }
 
 // CosineSimilarity computes the cosine similarity between two vectors.

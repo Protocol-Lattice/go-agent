@@ -16,8 +16,16 @@ import (
 )
 
 type Store struct {
-	root string
-	mu   sync.RWMutex
+	root    string
+	mu      sync.RWMutex
+	cacheMu sync.Mutex
+	cache   map[string]cachedMarkdownFile
+}
+
+type cachedMarkdownFile struct {
+	size    int64
+	modTime time.Time
+	records []Record
 }
 
 func NewStore(root string) (*Store, error) {
@@ -30,7 +38,7 @@ func NewStore(root string) (*Store, error) {
 		return nil, err
 	}
 
-	s := &Store{root: abs}
+	s := &Store{root: abs, cache: make(map[string]cachedMarkdownFile)}
 
 	for _, dir := range []string{
 		filepath.Join(abs, "sessions"),
@@ -92,6 +100,9 @@ func (s *Store) Save(ctx context.Context, rec Record) error {
 	}
 
 	_, err = f.WriteString(block)
+	if err == nil {
+		s.invalidateFile(path)
+	}
 	return err
 }
 
@@ -108,7 +119,7 @@ func (s *Store) List(ctx context.Context, scope, sessionID string) ([]Record, er
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	b, err := os.ReadFile(path)
+	info, err := os.Stat(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
 	}
@@ -116,7 +127,15 @@ func (s *Store) List(ctx context.Context, scope, sessionID string) ([]Record, er
 		return nil, err
 	}
 
-	return s.parseFile(path, b), nil
+	records, err := s.recordsForFile(path, info)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Record, len(records))
+	for i := range records {
+		out[i] = records[i].clone()
+	}
+	return out, nil
 }
 
 func (s *Store) Search(ctx context.Context, query string, limit int) ([]Record, error) {
@@ -137,14 +156,11 @@ func (s *Store) Search(ctx context.Context, query string, limit int) ([]Record, 
 		return nil, err
 	}
 
-	scored := scoreRecords(all, query)
-	if len(scored) > limit {
-		scored = scored[:limit]
-	}
+	scored := scoreRecords(all, query, limit)
 
 	out := make([]Record, 0, len(scored))
 	for _, item := range scored {
-		out = append(out, item.Record)
+		out = append(out, item.Record.clone())
 	}
 
 	return out, nil
@@ -171,12 +187,14 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 			return nil
 		}
 
-		b, err := os.ReadFile(path)
+		info, err := entry.Info()
 		if err != nil {
 			return err
 		}
-
-		records := s.parseFile(path, b)
+		records, err := s.recordsForFile(path, info)
+		if err != nil {
+			return err
+		}
 		var kept []Record
 		changed := false
 
@@ -210,12 +228,17 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 			builder.WriteString(renderBlock(rec))
 		}
 
-		return os.WriteFile(path, []byte(builder.String()), 0o644)
+		if err := os.WriteFile(path, []byte(builder.String()), 0o644); err != nil {
+			return err
+		}
+		s.invalidateFile(path)
+		return nil
 	})
 }
 
 func (s *Store) all(ctx context.Context) ([]Record, error) {
 	var out []Record
+	visited := make(map[string]struct{})
 
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -231,21 +254,32 @@ func (s *Store) all(ctx context.Context) ([]Record, error) {
 			return nil
 		}
 
-		b, err := os.ReadFile(path)
+		info, err := entry.Info()
 		if err != nil {
 			return err
 		}
-
-		out = append(out, s.parseFile(path, b)...)
+		records, err := s.recordsForFile(path, info)
+		if err != nil {
+			return err
+		}
+		visited[path] = struct{}{}
+		out = append(out, records...)
 		return nil
 	})
+	if err == nil {
+		s.pruneFileCache(visited)
+	}
 
 	return out, err
 }
 
 func (s *Store) Count(ctx context.Context) (int, error) {
-	records, err := s.all(ctx)
-	return len(records), err
+	count := 0
+	err := s.walkRecords(ctx, func(Record) bool {
+		count++
+		return true
+	})
+	return count, err
 }
 
 // VectorStore Interface Implementation
@@ -273,49 +307,103 @@ func (s *Store) SearchMemory(ctx context.Context, sessionID string, queryEmbeddi
 		limit = 8
 	}
 
-	all, err := s.all(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	type scoredRec struct {
-		Record Record
-		Score  float64
-	}
-
 	hasQuery := len(queryEmbedding) > 0
 	query := model.NewCosineQuery(queryEmbedding)
-	scored := make([]scoredRec, 0, len(all))
-	for _, rec := range all {
+	scored := make(topVectorRecords, 0, limit)
+	ordinal := 0
+	err := s.walkRecords(ctx, func(rec Record) bool {
+		currentOrdinal := ordinal
+		ordinal++
 		if sessionID != "" && rec.SessionID != sessionID {
-			continue
+			return true
 		}
 		score := 0.0
 		if hasQuery {
 			if len(rec.Embedding) == 0 {
-				continue
+				return true
 			}
 			score = query.Similarity(rec.Embedding)
 			if score <= 0 {
-				continue
+				return true
 			}
 		}
-		scored = append(scored, scoredRec{Record: rec, Score: score})
+		candidate := scoredVectorRecord{record: rec, ordinal: currentOrdinal, score: score}
+		if len(scored) < limit {
+			scored.push(candidate)
+			return true
+		}
+		if vectorRecordBetter(candidate, scored[0]) {
+			scored.replaceWorst(candidate)
+		}
+		return true
+	})
+	if err != nil {
+		return nil, err
 	}
 
 	sort.SliceStable(scored, func(i, j int) bool {
-		return scored[i].Score > scored[j].Score
+		return vectorRecordBetter(scored[i], scored[j])
 	})
 
-	if len(scored) > limit {
-		scored = scored[:limit]
-	}
-
 	result := make([]model.MemoryRecord, len(scored))
-	for i, s := range scored {
-		result[i] = s.Record.toMemoryRecord()
+	for i, item := range scored {
+		result[i] = item.record.toMemoryRecord()
+		result[i].Score = item.score
 	}
 	return result, nil
+}
+
+type scoredVectorRecord struct {
+	record  Record
+	ordinal int
+	score   float64
+}
+
+type topVectorRecords []scoredVectorRecord
+
+func vectorRecordBetter(a, b scoredVectorRecord) bool {
+	if a.score != b.score {
+		return a.score > b.score
+	}
+	return a.ordinal < b.ordinal
+}
+
+func vectorRecordWorse(a, b scoredVectorRecord) bool {
+	return vectorRecordBetter(b, a)
+}
+
+func (h *topVectorRecords) push(item scoredVectorRecord) {
+	items := append(*h, item)
+	child := len(items) - 1
+	for child > 0 {
+		parent := (child - 1) / 2
+		if !vectorRecordWorse(item, items[parent]) {
+			break
+		}
+		items[child] = items[parent]
+		child = parent
+	}
+	items[child] = item
+	*h = items
+}
+
+func (h topVectorRecords) replaceWorst(item scoredVectorRecord) {
+	parent := 0
+	for {
+		child := parent*2 + 1
+		if child >= len(h) {
+			break
+		}
+		if right := child + 1; right < len(h) && vectorRecordWorse(h[right], h[child]) {
+			child = right
+		}
+		if !vectorRecordWorse(h[child], item) {
+			break
+		}
+		h[parent] = h[child]
+		parent = child
+	}
+	h[parent] = item
 }
 
 // UpdateEmbedding updates the embedding vector for a record
@@ -335,12 +423,14 @@ func (s *Store) UpdateEmbedding(ctx context.Context, id int64, embedding []float
 			return nil
 		}
 
-		b, err := os.ReadFile(path)
+		info, err := entry.Info()
 		if err != nil {
 			return err
 		}
-
-		records := s.parseFile(path, b)
+		records, err := s.recordsForFile(path, info)
+		if err != nil {
+			return err
+		}
 		var updated []Record
 		changed := false
 
@@ -372,24 +462,32 @@ func (s *Store) UpdateEmbedding(ctx context.Context, id int64, embedding []float
 			builder.WriteString(renderBlock(rec))
 		}
 
-		return os.WriteFile(path, []byte(builder.String()), 0o644)
+		if err := os.WriteFile(path, []byte(builder.String()), 0o644); err != nil {
+			return err
+		}
+		s.invalidateFile(path)
+		return nil
 	})
 }
 
 // DeleteMemory deletes memories by numeric IDs
 func (s *Store) DeleteMemory(ctx context.Context, ids []int64) error {
-	for _, id := range ids {
-		// Convert int64 back to string ID (would need reverse mapping in practice)
-		// For now, iterate and find matching NumID
-		if err := s.deleteByNumID(ctx, id); err != nil {
-			return err
-		}
+	if len(ids) == 0 {
+		return nil
 	}
-	return nil
+	idSet := make(map[int64]struct{}, len(ids))
+	for _, id := range ids {
+		idSet[id] = struct{}{}
+	}
+	return s.deleteByNumIDs(ctx, idSet)
 }
 
 // deleteByNumID is a helper to delete by numeric ID
 func (s *Store) deleteByNumID(ctx context.Context, id int64) error {
+	return s.deleteByNumIDs(ctx, map[int64]struct{}{id: {}})
+}
+
+func (s *Store) deleteByNumIDs(ctx context.Context, ids map[int64]struct{}) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -405,17 +503,19 @@ func (s *Store) deleteByNumID(ctx context.Context, id int64) error {
 			return nil
 		}
 
-		b, err := os.ReadFile(path)
+		info, err := entry.Info()
 		if err != nil {
 			return err
 		}
-
-		records := s.parseFile(path, b)
+		records, err := s.recordsForFile(path, info)
+		if err != nil {
+			return err
+		}
 		var kept []Record
 		changed := false
 
 		for _, rec := range records {
-			if rec.NumID == id {
+			if _, remove := ids[rec.NumID]; remove {
 				changed = true
 				continue
 			}
@@ -441,8 +541,94 @@ func (s *Store) deleteByNumID(ctx context.Context, id int64) error {
 			builder.WriteString(renderBlock(rec))
 		}
 
-		return os.WriteFile(path, []byte(builder.String()), 0o644)
+		if err := os.WriteFile(path, []byte(builder.String()), 0o644); err != nil {
+			return err
+		}
+		s.invalidateFile(path)
+		return nil
 	})
+}
+
+func (s *Store) recordsForFile(path string, info os.FileInfo) ([]Record, error) {
+	s.cacheMu.Lock()
+	defer s.cacheMu.Unlock()
+
+	if cached, ok := s.cache[path]; ok && cached.size == info.Size() && cached.modTime.Equal(info.ModTime()) {
+		return cached.records, nil
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	records := s.parseFile(path, b)
+	if s.cache == nil {
+		s.cache = make(map[string]cachedMarkdownFile)
+	}
+	s.cache[path] = cachedMarkdownFile{
+		size:    info.Size(),
+		modTime: info.ModTime(),
+		records: records,
+	}
+	return records, nil
+}
+
+func (s *Store) invalidateFile(path string) {
+	s.cacheMu.Lock()
+	delete(s.cache, path)
+	s.cacheMu.Unlock()
+}
+
+func (s *Store) pruneFileCache(visited map[string]struct{}) {
+	s.cacheMu.Lock()
+	for path := range s.cache {
+		if _, ok := visited[path]; !ok {
+			delete(s.cache, path)
+		}
+	}
+	s.cacheMu.Unlock()
+}
+
+var errStopRecordWalk = errors.New("stop markdown record walk")
+
+func (s *Store) walkRecords(ctx context.Context, fn func(Record) bool) error {
+	visited := make(map[string]struct{})
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	err := filepath.WalkDir(s.root, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if entry.IsDir() || filepath.Ext(path) != ".md" {
+			return nil
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		records, err := s.recordsForFile(path, info)
+		if err != nil {
+			return err
+		}
+		visited[path] = struct{}{}
+		for _, rec := range records {
+			if !fn(rec) {
+				return errStopRecordWalk
+			}
+		}
+		return nil
+	})
+	if errors.Is(err, errStopRecordWalk) {
+		return nil
+	}
+	if err == nil {
+		s.pruneFileCache(visited)
+	}
+	return err
 }
 
 // Iterate calls fn for each memory record, stopping if fn returns false
@@ -451,18 +637,9 @@ func (s *Store) Iterate(ctx context.Context, fn func(model.MemoryRecord) bool) e
 		return err
 	}
 
-	all, err := s.all(ctx)
-	if err != nil {
-		return err
-	}
-
-	for _, rec := range all {
-		if !fn(rec.toMemoryRecord()) {
-			break
-		}
-	}
-
-	return nil
+	return s.walkRecords(ctx, func(rec Record) bool {
+		return fn(rec.toMemoryRecord())
+	})
 }
 
 func (s *Store) pathFor(scope, sessionID string) (string, error) {

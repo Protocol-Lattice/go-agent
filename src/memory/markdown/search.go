@@ -10,21 +10,25 @@ import (
 )
 
 type scoredRecord struct {
-	Record Record
-	Score  int
+	Record  Record
+	Score   int
+	ordinal int
 }
 
 var wordRE = regexp.MustCompile(`[a-zA-Z0-9_./:-]+`)
 
-func scoreRecords(records []Record, query string) []scoredRecord {
+func scoreRecords(records []Record, query string, limit int) []scoredRecord {
 	terms := wordRE.FindAllString(strings.ToLower(query), -1)
 	if len(terms) == 0 {
 		return nil
 	}
+	if limit <= 0 || limit > len(records) {
+		limit = len(records)
+	}
 
-	var scored []scoredRecord
+	scored := make(topKeywordRecords, 0, limit)
 
-	for _, rec := range records {
+	for ordinal, rec := range records {
 		haystack := strings.ToLower(rec.Role + " " + strings.Join(rec.Tags, " ") + " " + rec.Content)
 
 		score := 0
@@ -47,20 +51,71 @@ func scoreRecords(records []Record, query string) []scoredRecord {
 			score += 3
 		}
 
-		scored = append(scored, scoredRecord{
-			Record: rec,
-			Score:  score,
-		})
+		candidate := scoredRecord{Record: rec, Score: score, ordinal: ordinal}
+		if len(scored) < limit {
+			scored.push(candidate)
+			continue
+		}
+		if keywordRecordBetter(candidate, scored[0]) {
+			scored.replaceWorst(candidate)
+		}
 	}
 
 	sort.SliceStable(scored, func(i, j int) bool {
-		if scored[i].Score == scored[j].Score {
-			return scored[i].Record.CreatedAt.After(scored[j].Record.CreatedAt)
-		}
-		return scored[i].Score > scored[j].Score
+		return keywordRecordBetter(scored[i], scored[j])
 	})
 
 	return scored
+}
+
+type topKeywordRecords []scoredRecord
+
+func keywordRecordBetter(a, b scoredRecord) bool {
+	if a.Score != b.Score {
+		return a.Score > b.Score
+	}
+	if !a.Record.CreatedAt.Equal(b.Record.CreatedAt) {
+		return a.Record.CreatedAt.After(b.Record.CreatedAt)
+	}
+	return a.ordinal < b.ordinal
+}
+
+func keywordRecordWorse(a, b scoredRecord) bool {
+	return keywordRecordBetter(b, a)
+}
+
+func (h *topKeywordRecords) push(item scoredRecord) {
+	items := append(*h, item)
+	child := len(items) - 1
+	for child > 0 {
+		parent := (child - 1) / 2
+		if !keywordRecordWorse(item, items[parent]) {
+			break
+		}
+		items[child] = items[parent]
+		child = parent
+	}
+	items[child] = item
+	*h = items
+}
+
+func (h topKeywordRecords) replaceWorst(item scoredRecord) {
+	parent := 0
+	for {
+		child := parent*2 + 1
+		if child >= len(h) {
+			break
+		}
+		if right := child + 1; right < len(h) && keywordRecordWorse(h[right], h[child]) {
+			child = right
+		}
+		if !keywordRecordWorse(h[child], item) {
+			break
+		}
+		h[parent] = h[child]
+		parent = child
+	}
+	h[parent] = item
 }
 
 func parseBlocks(doc string) []Record {

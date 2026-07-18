@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/Protocol-Lattice/go-agent/src/memory/model"
+	"go.mongodb.org/mongo-driver/bson"
 )
 
 func TestFloatEmbeddingConversions(t *testing.T) {
@@ -21,6 +22,14 @@ func TestFloatEmbeddingConversions(t *testing.T) {
 	for i := range original {
 		if roundTrip[i] != original[i] {
 			t.Fatalf("value mismatch at %d: got %f want %f", i, roundTrip[i], original[i])
+		}
+	}
+}
+
+func TestMongoCosineSimilarityDenormalizesVectorSearchScore(t *testing.T) {
+	for score, want := range map[float64]float64{1: 1, 0.5: 0, 0: -1, 0.9: 0.8} {
+		if got := mongoCosineSimilarity(score); got != want {
+			t.Fatalf("mongoCosineSimilarity(%v) = %v, want %v", score, got, want)
 		}
 	}
 }
@@ -92,4 +101,45 @@ func TestMongoStoreCreateSchemaOnNilStore(t *testing.T) {
 	if err := store.CreateSchema(context.TODO(), ""); err != nil {
 		t.Fatalf("expected nil error when collection is nil, got %v", err)
 	}
+}
+
+func TestMongoVectorSearchPipelinePushesDownSessionFilter(t *testing.T) {
+	pipeline := mongoVectorSearchPipeline("session-1", []float32{1, 0}, 8)
+	if len(pipeline) != 2 {
+		t.Fatalf("pipeline has %d stages, want 2", len(pipeline))
+	}
+
+	vectorSearch, ok := documentValue(pipeline[0], "$vectorSearch")
+	if !ok {
+		t.Fatalf("missing $vectorSearch stage: %#v", pipeline)
+	}
+	searchDoc, ok := vectorSearch.(bson.D)
+	if !ok {
+		t.Fatalf("$vectorSearch value has type %T, want bson.D", vectorSearch)
+	}
+	filter, ok := documentValue(searchDoc, "filter")
+	if !ok {
+		t.Fatalf("session filter was not pushed into $vectorSearch: %#v", searchDoc)
+	}
+	filterDoc, ok := filter.(bson.D)
+	if !ok {
+		t.Fatalf("filter has type %T, want bson.D", filter)
+	}
+	if got, ok := documentValue(filterDoc, "session_id"); !ok || got != "session-1" {
+		t.Fatalf("session filter = %#v, want session-1", got)
+	}
+	for _, stage := range pipeline {
+		if _, ok := documentValue(stage, "$match"); ok {
+			t.Fatalf("session filter must not use a post-search $match: %#v", pipeline)
+		}
+	}
+}
+
+func documentValue(document bson.D, key string) (any, bool) {
+	for _, element := range document {
+		if element.Key == key {
+			return element.Value, true
+		}
+	}
+	return nil, false
 }

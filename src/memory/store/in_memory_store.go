@@ -14,7 +14,23 @@ import (
 type InMemoryStore struct {
 	mu      sync.RWMutex
 	nextID  int64
-	records map[int64]model.MemoryRecord
+	records map[int64]*inMemoryRecord
+}
+
+// inMemoryRecord keeps search-only derived data beside the record so a scan
+// needs one map lookup and does not copy the comparatively large MemoryRecord
+// value unless that record enters the top-k result heap.
+type inMemoryRecord struct {
+	record     model.MemoryRecord
+	magnitudes recordVectorMagnitudes
+}
+
+// recordVectorMagnitudes caches the invariant half of cosine similarity for
+// immutable stored embeddings. Matrix magnitudes are only allocated for the
+// uncommon records that actually contain a matrix.
+type recordVectorMagnitudes struct {
+	embedding float64
+	matrix    []float64
 }
 
 type scoredMemoryRecord struct {
@@ -62,20 +78,25 @@ func (h topMemoryRecords) replaceMin(item scoredMemoryRecord) {
 }
 
 func NewInMemoryStore() *InMemoryStore {
-	return &InMemoryStore{records: make(map[int64]model.MemoryRecord)}
+	return &InMemoryStore{
+		records: make(map[int64]*inMemoryRecord),
+	}
 }
 
 func (s *InMemoryStore) StoreMemory(_ context.Context, sessionID, content string, metadata map[string]any, embedding []float32) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.records == nil {
-		s.records = make(map[int64]model.MemoryRecord)
+		s.records = make(map[int64]*inMemoryRecord)
 	}
 	now := time.Now().UTC()
 	record := prepareMemoryRecord(sessionID, content, metadata, embedding, now, false)
 	s.nextID++
 	record.ID = s.nextID
-	s.records[record.ID] = record
+	s.records[record.ID] = &inMemoryRecord{
+		record:     record,
+		magnitudes: calculateRecordMagnitudes(record),
+	}
 	return nil
 }
 
@@ -87,19 +108,22 @@ func (s *InMemoryStore) SearchMemory(_ context.Context, sessionID string, queryE
 	}
 	query := model.NewCosineQuery(queryEmbedding)
 	scoredRecords := make(topMemoryRecords, 0, min(limit, len(s.records)))
-	for _, rec := range s.records {
+	for _, stored := range s.records {
+		rec := &stored.record
 		if sessionID != "" && rec.SessionID != sessionID {
 			continue
 		}
-		score := query.MaxSimilarity(rec)
-		rec.Score = score
-		candidate := scoredMemoryRecord{record: rec, score: score}
+		score := maxSimilarityWithMagnitudes(query, rec, stored.magnitudes)
 		if len(scoredRecords) < limit {
-			scoredRecords.push(candidate)
+			resultRecord := *rec
+			resultRecord.Score = score
+			scoredRecords.push(scoredMemoryRecord{record: resultRecord, score: score})
 			continue
 		}
-		if candidate.score > scoredRecords[0].score {
-			scoredRecords.replaceMin(candidate)
+		if score > scoredRecords[0].score {
+			resultRecord := *rec
+			resultRecord.Score = score
+			scoredRecords.replaceMin(scoredMemoryRecord{record: resultRecord, score: score})
 		}
 	}
 	sort.Slice(scoredRecords, func(i, j int) bool {
@@ -115,13 +139,13 @@ func (s *InMemoryStore) SearchMemory(_ context.Context, sessionID string, queryE
 func (s *InMemoryStore) UpdateEmbedding(_ context.Context, id int64, embedding []float32, lastEmbedded time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	rec, ok := s.records[id]
+	stored, ok := s.records[id]
 	if !ok {
 		return errors.New("memory not found")
 	}
-	rec.Embedding = append([]float32(nil), embedding...)
-	rec.LastEmbedded = lastEmbedded
-	s.records[id] = rec
+	stored.record.Embedding = append([]float32(nil), embedding...)
+	stored.record.LastEmbedded = lastEmbedded
+	stored.magnitudes = calculateRecordMagnitudes(stored.record)
 	return nil
 }
 
@@ -134,6 +158,49 @@ func (s *InMemoryStore) DeleteMemory(_ context.Context, ids []int64) error {
 	return nil
 }
 
+func calculateRecordMagnitudes(rec model.MemoryRecord) recordVectorMagnitudes {
+	magnitudes := recordVectorMagnitudes{
+		embedding: model.VectorMagnitude(rec.Embedding),
+	}
+	if len(rec.EmbeddingMatrix) > 0 {
+		magnitudes.matrix = make([]float64, len(rec.EmbeddingMatrix))
+		for i, vector := range rec.EmbeddingMatrix {
+			magnitudes.matrix[i] = model.VectorMagnitude(vector)
+		}
+	}
+	return magnitudes
+}
+
+func maxSimilarityWithMagnitudes(
+	query model.CosineQuery,
+	rec *model.MemoryRecord,
+	magnitudes recordVectorMagnitudes,
+) float64 {
+	var (
+		best      float64
+		hasVector bool
+	)
+	if len(rec.Embedding) > 0 {
+		best = query.SimilarityWithMagnitude(rec.Embedding, magnitudes.embedding)
+		hasVector = true
+	}
+	for i, vector := range rec.EmbeddingMatrix {
+		if len(vector) == 0 {
+			continue
+		}
+		magnitude := 0.0
+		if i < len(magnitudes.matrix) {
+			magnitude = magnitudes.matrix[i]
+		}
+		similarity := query.SimilarityWithMagnitude(vector, magnitude)
+		if !hasVector || similarity > best {
+			best = similarity
+			hasVector = true
+		}
+	}
+	return best
+}
+
 func (s *InMemoryStore) Iterate(_ context.Context, fn func(model.MemoryRecord) bool) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -141,9 +208,11 @@ func (s *InMemoryStore) Iterate(_ context.Context, fn func(model.MemoryRecord) b
 	for id := range s.records {
 		ids = append(ids, id)
 	}
-	sort.Slice(ids, func(i, j int) bool { return s.records[ids[i]].CreatedAt.Before(s.records[ids[j]].CreatedAt) })
+	sort.Slice(ids, func(i, j int) bool {
+		return s.records[ids[i]].record.CreatedAt.Before(s.records[ids[j]].record.CreatedAt)
+	})
 	for _, id := range ids {
-		if !fn(s.records[id]) {
+		if !fn(s.records[id].record) {
 			break
 		}
 	}

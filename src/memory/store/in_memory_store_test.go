@@ -2,9 +2,11 @@ package store
 
 import (
 	"context"
+	"math"
 	"sort"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/Protocol-Lattice/go-agent/src/memory/model"
 )
@@ -27,8 +29,8 @@ func TestInMemoryStoreUsesMatrixVectorWhenEmbeddingMissing(t *testing.T) {
 	}
 
 	var rec model.MemoryRecord
-	for _, r := range store.records {
-		rec = r
+	for _, stored := range store.records {
+		rec = stored.record
 		break
 	}
 
@@ -101,6 +103,39 @@ func TestInMemoryStoreSearchMemoryMatchesFullSortReference(t *testing.T) {
 	}
 }
 
+func TestInMemoryStoreRefreshesAndDeletesCachedMagnitudes(t *testing.T) {
+	store := NewInMemoryStore()
+	ctx := context.Background()
+	if err := store.StoreMemory(ctx, "session", "record", nil, []float32{1, 0}); err != nil {
+		t.Fatalf("StoreMemory returned error: %v", err)
+	}
+	if len(store.records) != 1 {
+		t.Fatalf("stored %d records, want 1", len(store.records))
+	}
+
+	if err := store.UpdateEmbedding(ctx, 1, []float32{0, 2}, time.Time{}); err != nil {
+		t.Fatalf("UpdateEmbedding returned error: %v", err)
+	}
+	if got := store.records[1].magnitudes.embedding; got != 2 {
+		t.Fatalf("updated cached magnitude = %v, want 2", got)
+	}
+
+	results, err := store.SearchMemory(ctx, "session", []float32{0, 1}, 1)
+	if err != nil {
+		t.Fatalf("SearchMemory returned error: %v", err)
+	}
+	if len(results) != 1 || math.Abs(results[0].Score-1) > 1e-9 {
+		t.Fatalf("unexpected results after embedding update: %#v", results)
+	}
+
+	if err := store.DeleteMemory(ctx, []int64{1}); err != nil {
+		t.Fatalf("DeleteMemory returned error: %v", err)
+	}
+	if len(store.records) != 0 {
+		t.Fatalf("stored %d records after delete, want 0", len(store.records))
+	}
+}
+
 func BenchmarkInMemoryStoreSearchMemory(b *testing.B) {
 	const (
 		recordCount = 10_000
@@ -156,7 +191,8 @@ func fullSortSearchMemory(store *InMemoryStore, sessionID string, query []float3
 	}
 	queryVector := model.NewCosineQuery(query)
 	scoredRecords := make([]scored, 0, len(store.records))
-	for _, record := range store.records {
+	for _, stored := range store.records {
+		record := stored.record
 		if sessionID != "" && record.SessionID != sessionID {
 			continue
 		}

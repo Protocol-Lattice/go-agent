@@ -207,6 +207,7 @@ func TestNeo4jStoreUpsertGraph(t *testing.T) {
 	}
 	edges := []model.GraphEdge{
 		{Target: 7, Type: model.EdgeFollows},
+		{Target: 8, Type: model.EdgeExplains},
 		{Target: 0, Type: model.EdgeExplains}, // invalid and skipped
 	}
 	if err := store.UpsertGraph(context.Background(), record, edges); err != nil {
@@ -238,11 +239,15 @@ func TestNeo4jStoreUpsertGraph(t *testing.T) {
 	if tx.runs[1].query != "MATCH (m:Memory {id: $id})-[r:RELATED_TO]->() DELETE r" {
 		t.Fatalf("unexpected delete query: %s", tx.runs[1].query)
 	}
-	if tx.runs[2].query != neo4jUpsertEdgeCypher {
+	if tx.runs[2].query != neo4jUpsertEdgesCypher {
 		t.Fatalf("unexpected edge query: %s", tx.runs[2].query)
 	}
-	if got := tx.runs[2].params["edge_type"].(string); got != string(model.EdgeFollows) {
-		t.Fatalf("unexpected edge type: %s", got)
+	batch, ok := tx.runs[2].params["edges"].([]map[string]any)
+	if !ok || len(batch) != 2 {
+		t.Fatalf("unexpected edge batch: %#v", tx.runs[2].params["edges"])
+	}
+	if got := batch[0]["edge_type"].(string); got != string(model.EdgeFollows) {
+		t.Fatalf("unexpected first edge type: %s", got)
 	}
 	if driver.writeSession.tx.rolledBack {
 		t.Fatalf("transaction should not roll back on success")

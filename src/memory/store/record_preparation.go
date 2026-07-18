@@ -26,6 +26,35 @@ func rescoreMemoryRecords(records []model.MemoryRecord, queryEmbedding []float32
 	return records
 }
 
+// mergeBackendCosineScores retains the cosine score already calculated by a
+// vector database and only evaluates auxiliary matrix embeddings that the
+// backend did not index. Backend results are already ordered, so sorting is
+// skipped unless a matrix actually changes a score.
+func mergeBackendCosineScores(records []model.MemoryRecord, queryEmbedding []float32, limit int) []model.MemoryRecord {
+	query := model.NewCosineQuery(queryEmbedding)
+	changed := false
+	for i := range records {
+		for _, vector := range records[i].EmbeddingMatrix {
+			if len(vector) == 0 {
+				continue
+			}
+			if score := query.Similarity(vector); score > records[i].Score {
+				records[i].Score = score
+				changed = true
+			}
+		}
+	}
+	if changed {
+		sort.SliceStable(records, func(i, j int) bool {
+			return records[i].Score > records[j].Score
+		})
+	}
+	if limit > 0 && len(records) > limit {
+		return records[:limit]
+	}
+	return records
+}
+
 // prepareMemoryRecord applies the backend-independent normalization needed
 // before a memory is serialized. Persistent stores historically include a
 // missing space in metadata; the in-memory store only defaults record.Space.

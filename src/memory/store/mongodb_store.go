@@ -86,28 +86,7 @@ func (ms *MongoStore) SearchMemory(ctx context.Context, sessionID string, queryE
 		return nil, nil
 	}
 
-	// Use $vectorSearch for efficient similarity search in MongoDB Atlas.
-	pipeline := mongo.Pipeline{
-		{
-			{Key: "$vectorSearch", Value: bson.D{
-				{Key: "index", Value: "vector_index"},
-				{Key: "path", Value: "embedding"},
-				{Key: "queryVector", Value: float64Embedding(queryEmbedding)},
-				{Key: "numCandidates", Value: int64(limit * 10)}, // Oversample for better accuracy
-				{Key: "limit", Value: int64(limit)},
-			}},
-		},
-		{
-			{Key: "$addFields", Value: bson.D{
-				{Key: "score", Value: bson.D{{Key: "$meta", Value: "vectorSearchScore"}}},
-			}},
-		},
-	}
-
-	// Add a $match stage if sessionID is provided.
-	if sessionID != "" {
-		pipeline = append(pipeline, bson.D{{Key: "$match", Value: bson.D{{Key: "session_id", Value: sessionID}}}})
-	}
+	pipeline := mongoVectorSearchPipeline(sessionID, queryEmbedding, limit)
 
 	cursor, err := ms.collection.Aggregate(ctx, pipeline)
 	if err != nil {
@@ -115,7 +94,7 @@ func (ms *MongoStore) SearchMemory(ctx context.Context, sessionID string, queryE
 	}
 	defer cursor.Close(ctx)
 
-	var records []model.MemoryRecord
+	records := make([]model.MemoryRecord, 0, limit)
 	for cursor.Next(ctx) {
 		var doc struct {
 			mongoMemoryDocument `bson:",inline"`
@@ -125,13 +104,51 @@ func (ms *MongoStore) SearchMemory(ctx context.Context, sessionID string, queryE
 			return nil, err
 		}
 		rec := doc.toRecord()
-		rec.Score = doc.Score
+		rec.Score = mongoCosineSimilarity(doc.Score)
 		records = append(records, rec)
 	}
 	if err := cursor.Err(); err != nil {
 		return nil, err
 	}
-	return rescoreMemoryRecords(records, queryEmbedding, limit), nil
+	return mergeBackendCosineScores(records, queryEmbedding, limit), nil
+}
+
+// MongoDB normalizes cosine vectorSearchScore to [0, 1] using
+// (1 + cosine) / 2. Convert it back to the VectorStore cosine contract.
+func mongoCosineSimilarity(vectorSearchScore float64) float64 {
+	return vectorSearchScore*2 - 1
+}
+
+func mongoVectorSearchPipeline(sessionID string, queryEmbedding []float32, limit int) mongo.Pipeline {
+	vectorSearch := bson.D{
+		{Key: "index", Value: "vector_index"},
+		{Key: "path", Value: "embedding"},
+		{Key: "queryVector", Value: float64Embedding(queryEmbedding)},
+		{Key: "numCandidates", Value: int64(limit) * 10}, // Oversample for better accuracy
+		{Key: "limit", Value: int64(limit)},
+	}
+	if sessionID != "" {
+		// Filtering inside $vectorSearch avoids retrieving global candidates
+		// that a later $match would discard and potentially under-fill.
+		vectorSearch = append(vectorSearch, bson.E{
+			Key:   "filter",
+			Value: bson.D{{Key: "session_id", Value: sessionID}},
+		})
+	}
+
+	// Use $vectorSearch for efficient similarity search in MongoDB Atlas.
+	pipeline := mongo.Pipeline{
+		{
+			{Key: "$vectorSearch", Value: vectorSearch},
+		},
+		{
+			{Key: "$addFields", Value: bson.D{
+				{Key: "score", Value: bson.D{{Key: "$meta", Value: "vectorSearchScore"}}},
+			}},
+		},
+	}
+
+	return pipeline
 }
 
 func (ms *MongoStore) UpdateEmbedding(ctx context.Context, id int64, embedding []float32, lastEmbedded time.Time) error {

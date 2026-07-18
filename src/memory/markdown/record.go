@@ -52,6 +52,20 @@ func (r Record) normalized() Record {
 	return r
 }
 
+func (r Record) clone() Record {
+	r.Tags = append([]string(nil), r.Tags...)
+	r.Embedding = append([]float32(nil), r.Embedding...)
+	if len(r.Metadata) > 0 {
+		if data, err := json.Marshal(r.Metadata); err == nil {
+			var metadata map[string]any
+			if json.Unmarshal(data, &metadata) == nil {
+				r.Metadata = metadata
+			}
+		}
+	}
+	return r
+}
+
 // toMemoryRecord converts Record to model.MemoryRecord for VectorStore interface
 func (r Record) toMemoryRecord() model.MemoryRecord {
 	// Marshal metadata to JSON string
@@ -67,7 +81,7 @@ func (r Record) toMemoryRecord() model.MemoryRecord {
 		SessionID:    r.SessionID,
 		Content:      r.Content,
 		Metadata:     metaStr,
-		Embedding:    r.Embedding,
+		Embedding:    append([]float32(nil), r.Embedding...),
 		LastEmbedded: r.LastEmbedded,
 		CreatedAt:    r.CreatedAt,
 	}
