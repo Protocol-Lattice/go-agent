@@ -95,6 +95,48 @@ function initCopyInstall() {
   });
 }
 
+function initTiltSurfaces() {
+  if (typeof document.querySelectorAll !== 'function'
+    || typeof window.matchMedia !== 'function'
+    || !window.matchMedia('(pointer: fine) and (prefers-reduced-motion: no-preference)').matches) {
+    return;
+  }
+
+  const surfaces = document.querySelectorAll('[data-tilt]');
+  surfaces.forEach((surface) => {
+    if (!surface.style || typeof surface.getBoundingClientRect !== 'function') {
+      return;
+    }
+
+    const strength = Number(surface.dataset.tiltStrength) || 5;
+
+    surface.addEventListener('pointermove', (event) => {
+      const bounds = surface.getBoundingClientRect();
+      if (!bounds.width || !bounds.height) {
+        return;
+      }
+
+      const x = Math.min(Math.max((event.clientX - bounds.left) / bounds.width, 0), 1);
+      const y = Math.min(Math.max((event.clientY - bounds.top) / bounds.height, 0), 1);
+
+      surface.dataset.tilting = 'true';
+      surface.style.setProperty('--tilt-x', `${((0.5 - y) * strength).toFixed(2)}deg`);
+      surface.style.setProperty('--tilt-y', `${((x - 0.5) * strength).toFixed(2)}deg`);
+      surface.style.setProperty('--pointer-x', `${(x * 100).toFixed(1)}%`);
+      surface.style.setProperty('--pointer-y', `${(y * 100).toFixed(1)}%`);
+    });
+
+    surface.addEventListener('pointerleave', () => {
+      surface.dataset.tilting = 'false';
+      surface.style.setProperty('--tilt-x', '0deg');
+      surface.style.setProperty('--tilt-y', '0deg');
+      surface.style.setProperty('--pointer-x', '50%');
+      surface.style.setProperty('--pointer-y', '50%');
+    });
+  });
+}
+
 initMenu();
 initTheme();
 initCopyInstall();
+initTiltSurfaces();
