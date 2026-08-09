@@ -150,6 +150,9 @@ func (a *Agent) toolOrchestrator(
 		choicePrompt := fmt.Sprintf(`
 You are an agentic UTCP tool execution loop.
 
+SYSTEM INSTRUCTIONS:
+%s
+
 USER REQUEST:
 %q
 
@@ -192,6 +195,7 @@ JSON shape:
   "reason": "short reason"
 }
 `,
+			a.systemInstructions(),
 			userInput,
 			memoryDesc,
 			fileDesc,
@@ -325,6 +329,9 @@ func (a *Agent) toolOrchestratorNative(
 		prompt := fmt.Sprintf(`
 You are an agentic tool execution loop using native tool calls.
 
+SYSTEM INSTRUCTIONS:
+%s
+
 USER REQUEST:
 %q
 
@@ -337,7 +344,7 @@ PREVIOUS TOOL OBSERVATIONS:
 OBJECTIVE:
 Continue until the user request is complete. Call a tool when needed; when no
 more tools are needed, answer the user directly. Use only the provided tools.
-`, userInput, memoryDesc, strings.Join(observations, "\n\n"))
+`, a.systemInstructions(), userInput, memoryDesc, strings.Join(observations, "\n\n"))
 
 		response, err := native.GenerateWithTools(ctx, prompt, definitions)
 		if err != nil {

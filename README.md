@@ -17,6 +17,29 @@ Use it when you want agent runtime pieces that stay idiomatic in Go:
 - Input/output guardrails and checkpoint/restore support
 - Composable retry, timeout, rate-limit, and token-budget model middleware
 
+## Local Skills
+
+Agents automatically load local instructions from `.skills` in the process working directory. Use either the conventional `SKILL.md` layout or Markdown files directly in `.skills`:
+
+```text
+.skills/
+├── code-review/
+│   └── SKILL.md
+└── release.md
+```
+
+Each skill is added to the system instructions for normal, streaming, file-backed, and tool-planning requests. `SKILL.md` may include optional YAML-style front matter:
+
+```markdown
+---
+name: release
+description: Prepare safe releases
+---
+Run the full test suite before proposing a release.
+```
+
+Set `Options.SkillsDir` to use another directory, call `agent.ReloadSkills()` after editing a long-running agent's files, or set `DisableSkills: true` to opt out.
+
 ## Install
 
 ```bash

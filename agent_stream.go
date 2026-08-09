@@ -99,7 +99,7 @@ func (a *Agent) GenerateStream(ctx context.Context, sessionID, userInput string)
 	// Build prompt manually to use pre-fetched records
 	var sb strings.Builder
 	sb.Grow(4096)
-	sb.WriteString(a.systemPrompt)
+	sb.WriteString(a.systemInstructions())
 	sb.WriteString("\n\nConversation memory (TOON):\n")
 	sb.WriteString(a.renderMemory(records))
 	sb.WriteString("\n\nUser: ")
