@@ -31,6 +31,11 @@ type Agent struct {
 
 	mu sync.Mutex
 
+	skillMu       sync.RWMutex
+	skillsDir     string
+	skills        []Skill
+	disableSkills bool
+
 	toolMu           sync.RWMutex
 	toolSpecsCache   []tools.Tool
 	toolSpecsExpiry  time.Time
@@ -48,10 +53,15 @@ type Agent struct {
 
 // Options configure a new Agent.
 type Options struct {
-	Model             models.Agent
-	Memory            *memory.SessionMemory
-	SystemPrompt      string
-	ContextLimit      int
+	Model        models.Agent
+	Memory       *memory.SessionMemory
+	SystemPrompt string
+	ContextLimit int
+	// SkillsDir is scanned for local skill instructions. When empty, .skills
+	// in the process working directory is used.
+	SkillsDir string
+	// DisableSkills prevents automatic loading of local skill instructions.
+	DisableSkills     bool
 	Tools             []Tool
 	SubAgents         []SubAgent
 	ToolCatalog       ToolCatalog
@@ -81,6 +91,19 @@ func New(opts Options) (*Agent, error) {
 	systemPrompt := opts.SystemPrompt
 	if strings.TrimSpace(systemPrompt) == "" {
 		systemPrompt = defaultSystemPrompt
+	}
+
+	skillsDir := strings.TrimSpace(opts.SkillsDir)
+	if skillsDir == "" {
+		skillsDir = DefaultSkillsDir
+	}
+	var skills []Skill
+	if !opts.DisableSkills {
+		var err error
+		skills, err = LoadSkills(skillsDir)
+		if err != nil {
+			return nil, fmt.Errorf("load skills: %w", err)
+		}
 	}
 
 	toolCatalog := opts.ToolCatalog
@@ -124,6 +147,9 @@ func New(opts Options) (*Agent, error) {
 		memory:            opts.Memory,
 		systemPrompt:      systemPrompt,
 		contextLimit:      ctxLimit,
+		skillsDir:         skillsDir,
+		skills:            skills,
+		disableSkills:     opts.DisableSkills,
 		toolCatalog:       toolCatalog,
 		subAgentDirectory: subAgentDirectory,
 		UTCPClient:        opts.UTCPClient,
@@ -251,7 +277,7 @@ func (a *Agent) Generate(ctx context.Context, sessionID, userInput string) (any,
 	var sb strings.Builder
 	sb.Grow(4096)
 
-	sb.WriteString(a.systemPrompt)
+	sb.WriteString(a.systemInstructions())
 	sb.WriteString("\n\nConversation memory (TOON):\n")
 	sb.WriteString(a.renderMemory(records))
 
@@ -459,8 +485,8 @@ func (a *Agent) GenerateWithFiles(
 	var sb strings.Builder
 	sb.Grow(4096)
 
-	if strings.TrimSpace(a.systemPrompt) != "" {
-		sb.WriteString(strings.TrimSpace(a.systemPrompt))
+	if systemInstructions := a.systemInstructions(); systemInstructions != "" {
+		sb.WriteString(systemInstructions)
 		sb.WriteString("\n\n")
 	}
 

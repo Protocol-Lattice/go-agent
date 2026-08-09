@@ -68,8 +68,8 @@ func (a *Agent) buildPrompt(
 	var sb strings.Builder
 	sb.Grow(4096)
 
-	if strings.TrimSpace(a.systemPrompt) != "" {
-		sb.WriteString(strings.TrimSpace(a.systemPrompt))
+	if systemInstructions := a.systemInstructions(); systemInstructions != "" {
+		sb.WriteString(systemInstructions)
 		sb.WriteString("\n\n")
 	}
 
