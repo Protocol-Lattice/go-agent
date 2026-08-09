@@ -5,131 +5,147 @@ import (
     "fmt"
     "strings"
 
+    utcp "github.com/universal-tool-calling-protocol/go-utcp"
     "github.com/universal-tool-calling-protocol/go-utcp/src/tools"
 )
 
-// SkillRouting is the request-scoped result of Skill System 2.0 routing.
-// It is intentionally immutable after creation so concurrent agent runs do
-// not share active skill state.
 type SkillRouting struct {
     Matches []SkillMatch
     Skills  []SkillDefinition
     Tools   map[string]struct{}
 }
 
-// SkillRegistry returns a registry backed by the Agent's configured skills.
-// The registry is rebuilt from disk so edits to SKILL.md are visible on the
-// next request without mutating Agent-wide request state.
 func (a *Agent) SkillRegistry() (*SkillRegistry, error) {
-    if a == nil || a.disableSkills {
-        return NewSkillRegistry(), nil
-    }
+    if a == nil || a.disableSkills { return NewSkillRegistry(), nil }
     definitions, err := LoadSkillDefinitions(a.skillsDir)
-    if err != nil {
-        return nil, err
-    }
+    if err != nil { return nil, err }
     registry := NewSkillRegistry()
     for _, skill := range definitions {
-        if err := registry.Register(skill); err != nil {
-            return nil, err
-        }
+        if err := registry.Register(skill); err != nil { return nil, err }
     }
     return registry, nil
 }
 
-// RouteSkills deterministically selects the skills relevant to a request and
-// resolves their transitive dependencies.
 func (a *Agent) RouteSkills(input string, limit int) (SkillRouting, error) {
     registry, err := a.SkillRegistry()
-    if err != nil {
-        return SkillRouting{}, err
-    }
+    if err != nil { return SkillRouting{}, err }
     matches := registry.Match(input, limit)
     names := make([]string, 0, len(matches))
-    for _, match := range matches {
-        names = append(names, match.Skill.Name)
-    }
+    for _, match := range matches { names = append(names, match.Skill.Name) }
     skills, err := registry.ResolveDependencies(names)
-    if err != nil {
-        return SkillRouting{}, err
-    }
+    if err != nil { return SkillRouting{}, err }
     routing := SkillRouting{Matches: matches, Skills: skills, Tools: make(map[string]struct{})}
     for _, skill := range skills {
         for _, name := range skill.Tools {
-            routing.Tools[strings.ToLower(strings.TrimSpace(name))] = struct{}{}
+            name = strings.ToLower(strings.TrimSpace(name))
+            if name != "" { routing.Tools[name] = struct{}{} }
         }
     }
     return routing, nil
 }
 
-// ActiveToolSpecs restricts tool discovery to the tools declared by the
-// selected skills. If no selected skill declares tools, all tools remain
-// available, preserving backwards compatibility for general requests.
 func (a *Agent) ActiveToolSpecs(routing SkillRouting) []tools.Tool {
     all := a.ToolSpecs()
-    if len(routing.Tools) == 0 {
-        return all
-    }
+    if len(routing.Tools) == 0 { return all }
     filtered := make([]tools.Tool, 0, len(routing.Tools))
     for _, spec := range all {
-        if _, ok := routing.Tools[strings.ToLower(strings.TrimSpace(spec.Name))]; ok {
-            filtered = append(filtered, spec)
-        }
+        if _, ok := routing.Tools[strings.ToLower(strings.TrimSpace(spec.Name))]; ok { filtered = append(filtered, spec) }
     }
     return filtered
 }
 
-// SkillPrompt renders only the selected skills. Dependencies are included
-// before dependents, making the prompt deterministic and composable.
 func SkillPrompt(routing SkillRouting) string {
-    if len(routing.Skills) == 0 {
-        return ""
-    }
+    if len(routing.Skills) == 0 { return "" }
     var b strings.Builder
-    b.WriteString("Active project skills:\n")
-    b.WriteString("Only the following skills are active for this request. Follow their instructions.\n")
+    b.WriteString("Active project skills:\nOnly the following skills are active for this request. Follow their instructions.\n")
     for _, skill := range routing.Skills {
-        b.WriteString("\n### Skill: ")
-        b.WriteString(skill.Name)
-        if skill.Version != "" {
-            b.WriteString(" (v")
-            b.WriteString(skill.Version)
-            b.WriteString(")")
-        }
+        b.WriteString("\n### Skill: "); b.WriteString(skill.Name)
+        if skill.Version != "" { b.WriteString(" (v"); b.WriteString(skill.Version); b.WriteString(")") }
         b.WriteString("\n")
-        if skill.Description != "" {
-            b.WriteString("Description: ")
-            b.WriteString(skill.Description)
-            b.WriteString("\n")
-        }
-        b.WriteString(skill.Instructions)
-        b.WriteString("\n")
+        if skill.Description != "" { b.WriteString("Description: "); b.WriteString(skill.Description); b.WriteString("\n") }
+        b.WriteString(skill.Instructions); b.WriteString("\n")
     }
     return strings.TrimSpace(b.String())
 }
 
-// GenerateWithSkillRouting is the request-scoped Skill System 2.0 entrypoint.
-// It routes skills before execution and exposes only their declared tools to
-// the tool loop. The legacy Generate API remains unchanged for compatibility.
+// GenerateWithSkillRouting runs one request with an isolated skill/tool scope.
+// The regular Generate API remains backwards compatible and does not change
+// the behavior of applications that already use global skills.
 func (a *Agent) GenerateWithSkillRouting(ctx context.Context, sessionID, userInput string) (any, error) {
     routing, err := a.RouteSkills(userInput, 3)
-    if err != nil {
-        return nil, fmt.Errorf("route skills: %w", err)
-    }
+    if err != nil { return nil, fmt.Errorf("route skills: %w", err) }
     return a.generateWithRouting(ctx, sessionID, userInput, routing)
 }
 
-// ActiveSkillNames returns the selected skills without exposing mutable state.
+func (a *Agent) generateWithRouting(ctx context.Context, sessionID, userInput string, routing SkillRouting) (any, error) {
+    activeTools := make([]Tool, 0)
+    if len(routing.Tools) > 0 {
+        for _, tool := range a.Tools() {
+            name := strings.ToLower(strings.TrimSpace(tool.Spec().Name))
+            if _, ok := routing.Tools[name]; ok { activeTools = append(activeTools, tool) }
+        }
+    }
+    toolCatalog := NewStaticToolCatalog(activeTools)
+
+    requestUTCP := a.UTCPClient
+    if len(routing.Tools) > 0 && requestUTCP != nil {
+        requestUTCP = &skillFilteredUTCPClient{inner: requestUTCP, allowed: routing.Tools}
+    }
+    codeMode := a.CodeMode
+    if codeMode != nil && len(routing.Tools) > 0 {
+        if _, ok := routing.Tools["codemode.run_code"]; !ok { codeMode = nil }
+    }
+
+    prompt := strings.TrimSpace(a.systemPrompt)
+    if active := SkillPrompt(routing); active != "" {
+        if prompt != "" { prompt += "\n\n" }
+        prompt += active
+    }
+    requestAgent, err := New(Options{
+        Model: a.model, Memory: a.memory, SystemPrompt: prompt, ContextLimit: a.contextLimit,
+        SkillsDir: a.skillsDir, DisableSkills: true, Tools: activeTools,
+        ToolCatalog: toolCatalog, SubAgentDirectory: a.subAgentDirectory,
+        UTCPClient: requestUTCP, CodeMode: codeMode, Shared: a.Shared,
+        AllowUnsafeTools: a.AllowUnsafeTools, Guardrails: a.Guardrails,
+        InputGuardrails: a.InputGuardrails,
+    })
+    if err != nil { return nil, err }
+    return requestAgent.Generate(ctx, sessionID, userInput)
+}
+
+type skillFilteredUTCPClient struct {
+    inner utcp.UtcpClientInterface
+    allowed map[string]struct{}
+}
+
+func (c *skillFilteredUTCPClient) allowedTool(name string) bool {
+    name = strings.ToLower(strings.TrimSpace(name))
+    if _, ok := c.allowed[name]; ok { return true }
+    for candidate := range c.allowed {
+        if strings.HasSuffix(name, "."+candidate) || strings.HasSuffix(candidate, "."+name) { return true }
+    }
+    return false
+}
+
+func (c *skillFilteredUTCPClient) SearchTools(query string, limit int) ([]tools.Tool, error) {
+    specs, err := c.inner.SearchTools(query, limit)
+    if err != nil { return nil, err }
+    filtered := make([]tools.Tool, 0, len(specs))
+    for _, spec := range specs { if c.allowedTool(spec.Name) { filtered = append(filtered, spec) } }
+    return filtered, nil
+}
+
+func (c *skillFilteredUTCPClient) CallTool(ctx context.Context, name string, args map[string]any) (any, error) {
+    if !c.allowedTool(name) { return nil, fmt.Errorf("skill tool access denied: %s", name) }
+    return c.inner.CallTool(ctx, name, args)
+}
+
 func (r SkillRouting) ActiveSkillNames() []string {
     names := make([]string, 0, len(r.Skills))
-    for _, skill := range r.Skills {
-        names = append(names, skill.Name)
-    }
+    for _, skill := range r.Skills { names = append(names, skill.Name) }
     return names
 }
 
-// WithSkillRouting attaches immutable routing information to a context for
-// integrations that already own an execution pipeline.
 type skillRoutingContextKey struct{}
 
 func WithSkillRouting(ctx context.Context, routing SkillRouting) context.Context {
