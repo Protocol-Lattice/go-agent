@@ -1,6 +1,9 @@
 package arena
 
-import "context"
+import (
+	"context"
+	"errors"
+)
 
 // Competitor names a runner participating in the same task suite.
 type Competitor struct {
@@ -22,10 +25,12 @@ func RunSuite(ctx context.Context, tasks []Task, competitors []Competitor, concu
 	results := make([]SuiteResult, 0, len(competitors))
 	for _, competitor := range competitors {
 		if competitor.Runner == nil {
+			err := errors.New("competitor requires a runner")
+			failed := []Result{{TaskName: "<runner>", Error: err}}
 			results = append(results, SuiteResult{
 				Competitor: competitor.Name,
-				Results: []Result{{TaskName: "<runner>", Error: errMissingRunner()}},
-				Summary: Summarize([]Result{{TaskName: "<runner>", Error: errMissingRunner()}}),
+				Results:    failed,
+				Summary:    Summarize(failed),
 			})
 			continue
 		}
