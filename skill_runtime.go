@@ -69,8 +69,6 @@ func SkillPrompt(routing SkillRouting) string {
 }
 
 // GenerateWithSkillRouting runs one request with an isolated skill/tool scope.
-// The regular Generate API remains backwards compatible and does not change
-// the behavior of applications that already use global skills.
 func (a *Agent) GenerateWithSkillRouting(ctx context.Context, sessionID, userInput string) (any, error) {
     routing, err := a.RouteSkills(userInput, 3)
     if err != nil { return nil, fmt.Errorf("route skills: %w", err) }
@@ -89,7 +87,7 @@ func (a *Agent) generateWithRouting(ctx context.Context, sessionID, userInput st
 
     requestUTCP := a.UTCPClient
     if len(routing.Tools) > 0 && requestUTCP != nil {
-        requestUTCP = &skillFilteredUTCPClient{inner: requestUTCP, allowed: routing.Tools}
+        requestUTCP = &skillFilteredUTCPClient{UtcpClientInterface: a.UTCPClient, inner: a.UTCPClient, allowed: routing.Tools}
     }
     codeMode := a.CodeMode
     if codeMode != nil && len(routing.Tools) > 0 {
@@ -114,7 +112,8 @@ func (a *Agent) generateWithRouting(ctx context.Context, sessionID, userInput st
 }
 
 type skillFilteredUTCPClient struct {
-    inner utcp.UtcpClientInterface
+    utcp.UtcpClientInterface
+    inner   utcp.UtcpClientInterface
     allowed map[string]struct{}
 }
 
