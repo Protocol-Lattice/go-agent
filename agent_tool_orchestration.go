@@ -183,8 +183,10 @@ RULES:
 6. Use filesystem.write for file changes.
 7. Use shell.run only for safe validation commands like gofmt, go test, or go build.
 8. For CodeMode, use codemode.run_code only when CodeMode is clearly the best tool.
-9. Return ONLY JSON.
-10. For file-backed requests, do not create or edit paths that appear only as illustrative examples; prefer attached existing paths.
+9. Never invent, infer, abbreviate, rename, or pluralize a tool name. A tool name is valid ONLY when it appears verbatim in AVAILABLE UTCP TOOLS.
+10. If a previous observation says "unknown_tool", do not retry that name. Select an exact registered tool or finish the task.
+11. Return ONLY JSON.
+12. For file-backed requests, do not create or edit paths that appear only as illustrative examples; prefer attached existing paths.
 
 JSON shape:
 {
@@ -254,7 +256,13 @@ JSON shape:
 			return true, "", fmt.Errorf("tool loop selected empty tool name")
 		}
 		if !toolSpecExists(toolList, toolName) {
-			return true, "", fmt.Errorf("UTCP tool unknown: %s", toolName)
+			// Model hallucinated a tool. Do not execute or abort: feed the
+			// authoritative registry error back into the planner for recovery.
+			observations = append(observations, fmt.Sprintf(
+				"[step %d] planner_error=unknown_tool requested=%q; tool does not exist. Choose ONLY an exact name from AVAILABLE UTCP TOOLS.",
+				step, toolName,
+			))
+			continue
 		}
 		if tc.Arguments == nil {
 			tc.Arguments = map[string]any{}
@@ -343,7 +351,13 @@ PREVIOUS TOOL OBSERVATIONS:
 
 OBJECTIVE:
 Continue until the user request is complete. Call a tool when needed; when no
-more tools are needed, answer the user directly. Use only the provided tools.
+more tools are needed, answer the user directly.
+
+TOOL IDENTITY CONTRACT:
+Tool names are opaque identifiers. Use ONLY the exact names supplied by the
+native tool definitions. Never invent, rename, abbreviate, infer, or compose a
+tool name. If PREVIOUS TOOL OBSERVATIONS contains an unknown_tool error, choose
+a different exact registered tool or answer directly.
 `, a.systemInstructions(), userInput, memoryDesc, strings.Join(observations, "\n\n"))
 
 		response, err := native.GenerateWithTools(ctx, prompt, definitions)
@@ -368,7 +382,13 @@ more tools are needed, answer the user directly. Use only the provided tools.
 				return true, "", fmt.Errorf("native tool loop selected empty tool name")
 			}
 			if !toolSpecExists(toolList, toolName) {
-				return true, "", fmt.Errorf("native tool unknown: %s", toolName)
+				// Native APIs should normally reject this, but a provider may
+				// still emit a synthetic call. Never execute an unknown tool.
+				observations = append(observations, fmt.Sprintf(
+					"[step %d] planner_error=unknown_tool requested=%q; tool does not exist. Use ONLY the provided native tool definitions.",
+					step, toolName,
+				))
+				continue
 			}
 			if call.Arguments == nil {
 				call.Arguments = map[string]any{}
