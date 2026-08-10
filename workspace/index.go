@@ -70,10 +70,11 @@ type SearchResult struct {
 }
 
 type ContextRequest struct {
-	Query     string
-	MaxBytes  int
-	MaxFiles  int
+	Query      string
+	MaxBytes   int
+	MaxFiles   int
 	MaxResults int
+	Semantic   bool
 }
 
 type ContextFile struct {
@@ -86,10 +87,11 @@ type Context struct {
 	Query   string
 	Files   []ContextFile
 	Results []SearchResult
+	SemanticResults []SemanticResult
 }
 
-// Index is an in-memory representation of a source tree. It is deliberately
-// storage-agnostic so callers can persist or enrich it with embeddings later.
+// Index is an in-memory representation of a source tree. It combines a
+// deterministic structural index with an optional semantic/vector index.
 type Index struct {
 	root       string
 	config     Config
@@ -98,6 +100,8 @@ type Index struct {
 	byName     map[string][]Symbol
 	imports    map[string][]string
 	module     string
+	embedder   Embedder
+	vectors    map[string][]float32
 }
 
 func NewIndex(config Config) *Index {
@@ -116,6 +120,7 @@ func NewIndex(config Config) *Index {
 	return &Index{
 		root: config.Root, config: config,
 		files: make(map[string]File), byName: make(map[string][]Symbol), imports: make(map[string][]string),
+		vectors: make(map[string][]float32),
 	}
 }
 
@@ -127,6 +132,7 @@ func (i *Index) Build(ctx context.Context) error {
 	i.symbols = nil
 	i.byName = make(map[string][]Symbol)
 	i.imports = make(map[string][]string)
+	i.vectors = make(map[string][]float32)
 	i.module = readModule(i.root)
 
 	err := filepath.Walk(i.root, func(path string, info os.FileInfo, err error) error {
@@ -144,6 +150,9 @@ func (i *Index) Build(ctx context.Context) error {
 		if i.symbols[a].File == i.symbols[b].File { return i.symbols[a].StartLine < i.symbols[b].StartLine }
 		return i.symbols[a].File < i.symbols[b].File
 	})
+	if i.embedder != nil {
+		if err := i.BuildEmbeddings(ctx); err != nil { return err }
+	}
 	return nil
 }
 
@@ -172,9 +181,11 @@ func (i *Index) indexFile(path string, size int64) error {
 		case *ast.TypeSpec:
 			s = Symbol{Name: n.Name.Name, Kind: SymbolType, Package: f.Name.Name, File: rel, StartLine: line(fset, n.Pos()), EndLine: line(fset, n.End())}
 		case *ast.ValueSpec:
-			kind := SymbolVar
-			if gd, ok := parentGenDecl(n); ok && gd.Tok == token.CONST { kind = SymbolConst }
 			for _, name := range n.Names {
+				kind := SymbolVar
+				// ValueSpec nodes under a const GenDecl are handled by the
+				// declaration-level pass below; defaulting to var here keeps
+				// symbol extraction independent of parent traversal state.
 				ss := Symbol{Name: name.Name, Kind: kind, Package: f.Name.Name, File: rel, StartLine: line(fset, n.Pos()), EndLine: line(fset, n.End())}
 				file.Symbols = append(file.Symbols, ss)
 			}
@@ -182,6 +193,24 @@ func (i *Index) indexFile(path string, size int64) error {
 		if s.Name != "" { file.Symbols = append(file.Symbols, s) }
 		return true
 	})
+	// Correct var/const classification at the declaration level.
+	for _, decl := range f.Decls {
+		gd, ok := decl.(*ast.GenDecl)
+		if !ok || (gd.Tok != token.VAR && gd.Tok != token.CONST) { continue }
+		kind := SymbolVar
+		if gd.Tok == token.CONST { kind = SymbolConst }
+		for _, spec := range gd.Specs {
+			vs, ok := spec.(*ast.ValueSpec)
+			if !ok { continue }
+			for _, name := range vs.Names {
+				for n := range file.Symbols {
+					if file.Symbols[n].Name == name.Name && file.Symbols[n].File == rel && file.Symbols[n].StartLine == line(fset, vs.Pos()) {
+						file.Symbols[n].Kind = kind
+					}
+				}
+			}
+		}
+	}
 	i.files[rel] = file
 	for _, s := range file.Symbols { i.symbols = append(i.symbols, s); i.byName[strings.ToLower(s.Name)] = append(i.byName[strings.ToLower(s.Name)], s) }
 	i.imports[rel] = append([]string(nil), file.Imports...)
@@ -208,6 +237,7 @@ func (i *Index) SearchSymbols(_ context.Context, query string, limit int) []Sear
 	}
 	sort.SliceStable(results, func(a, b int) bool {
 		if results[a].Score != results[b].Score { return results[a].Score > results[b].Score }
+		if results[a].Symbol.File != results[b].Symbol.File { return results[a].Symbol.File < results[b].Symbol.File }
 		return results[a].Symbol.Name < results[b].Symbol.Name
 	})
 	if len(results) > limit { results = results[:limit] }
@@ -226,17 +256,30 @@ func (i *Index) Symbols() []Symbol { return append([]Symbol(nil), i.symbols...) 
 func (i *Index) Imports(path string) []string { return append([]string(nil), i.imports[filepath.ToSlash(path)]...) }
 func (i *Index) Module() string { return i.module }
 
-// BuildContext resolves a task to the most relevant source files without
-// requiring an embedding provider. It is designed as the deterministic first
-// stage before optional semantic/vector retrieval.
+// SetEmbedder configures the semantic retrieval provider. Embeddings are
+// optional; structural search remains available without an embedder.
+func (i *Index) SetEmbedder(e Embedder) { i.embedder = e; i.vectors = make(map[string][]float32) }
+
+// BuildContext resolves a task to relevant source files using hybrid
+// structural/semantic retrieval and a deterministic byte budget.
 func (i *Index) BuildContext(ctx context.Context, req ContextRequest) (Context, error) {
 	if req.MaxBytes <= 0 { req.MaxBytes = 64 << 10 }
 	if req.MaxFiles <= 0 { req.MaxFiles = 8 }
 	if req.MaxResults <= 0 { req.MaxResults = 20 }
 	results := i.SearchSymbols(ctx, req.Query, req.MaxResults)
+	semantic := []SemanticResult(nil)
+	if req.Semantic && i.embedder != nil {
+		var err error
+		semantic, err = i.SearchSemantic(ctx, req.Query, req.MaxResults)
+		if err != nil { return Context{}, err }
+	}
 	selected := make(map[string]bool)
 	for _, r := range results { if len(selected) >= req.MaxFiles { break }; selected[r.Symbol.File] = true }
-	// Fall back to a deterministic lexical file scan when no symbols match.
+	for _, r := range semantic { if len(selected) >= req.MaxFiles { break }; selected[r.Path] = true }
+	// Expand one graph hop so context includes directly imported internal code.
+	for _, p := range append([]string(nil), keys(selected)...) {
+		for _, dep := range i.Dependencies(p) { if len(selected) >= req.MaxFiles { break }; selected[dep] = true }
+	}
 	if len(selected) == 0 {
 		q := strings.ToLower(req.Query)
 		for _, f := range i.Files() {
@@ -245,8 +288,8 @@ func (i *Index) BuildContext(ctx context.Context, req ContextRequest) (Context, 
 			if strings.Contains(strings.ToLower(string(b)), q) { selected[f.Path] = true }
 		}
 	}
-	paths := make([]string, 0, len(selected)); for p := range selected { paths = append(paths, p) }; sort.Strings(paths)
-	out := Context{Query: req.Query, Results: results}
+	paths := keys(selected)
+	out := Context{Query: req.Query, Results: results, SemanticResults: semantic}
 	var used int
 	for _, p := range paths {
 		if err := ctx.Err(); err != nil { return Context{}, err }
@@ -260,11 +303,10 @@ func (i *Index) BuildContext(ctx context.Context, req ContextRequest) (Context, 
 	return out, nil
 }
 
+func keys(m map[string]bool) []string { out := make([]string, 0, len(m)); for k := range m { out = append(out, k) }; sort.Strings(out); return out }
 func (i *Index) supported(path string) bool { for _, ext := range i.config.Extensions { if strings.EqualFold(filepath.Ext(path), ext) { return true } }; return false }
 func (i *Index) ignored(path string) bool { for _, d := range i.config.IgnoreDirs { if path == filepath.Join(i.root, d) || strings.HasPrefix(path, filepath.Join(i.root, d)+string(os.PathSeparator)) { return true } }; return false }
 func line(fset *token.FileSet, pos token.Pos) int { return fset.Position(pos).Line }
 func receiverName(expr ast.Expr) string { switch t := expr.(type) { case *ast.Ident: return t.Name; case *ast.StarExpr: if id, ok := t.X.(*ast.Ident); ok { return id.Name }; case *ast.IndexExpr: if id, ok := t.X.(*ast.Ident); ok { return id.Name } }; return "" }
-func parentGenDecl(*ast.ValueSpec) (*ast.GenDecl, bool) { return nil, false }
 func readModule(root string) string { f, err := os.Open(filepath.Join(root, "go.mod")); if err != nil { return "" }; defer f.Close(); s := bufio.NewScanner(f); for s.Scan() { fields := strings.Fields(s.Text()); if len(fields) == 2 && fields[0] == "module" { return fields[1] } }; return "" }
-
 func max(a, b int) int { if a > b { return a }; return b }
