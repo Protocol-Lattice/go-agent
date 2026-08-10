@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 )
 
 // FileChange describes a filesystem change observed since the last index update.
@@ -71,9 +72,7 @@ func (i *Index) removeFile(path string) {
 func (i *Index) rebuildSymbolIndex() {
 	i.symbols = i.symbols[:0]
 	i.byName = make(map[string][]Symbol)
-	for _, f := range i.files {
-		i.symbols = append(i.symbols, f.Symbols...)
-	}
+	for _, f := range i.files { i.symbols = append(i.symbols, f.Symbols...) }
 	sort.Slice(i.symbols, func(a,b int) bool { if i.symbols[a].File != i.symbols[b].File { return i.symbols[a].File < i.symbols[b].File }; return i.symbols[a].StartLine < i.symbols[b].StartLine })
 	for _, s := range i.symbols { i.byName[sKey(s.Name)] = append(i.byName[sKey(s.Name)], s) }
 }
