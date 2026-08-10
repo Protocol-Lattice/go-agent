@@ -17,8 +17,11 @@ type Service struct{}
 
 func (s *Service) Authenticate(user string) bool { return user != "" }
 `), 0o644); err != nil { t.Fatal(err) }
-	if err := os.WriteFile(filepath.Join(root, "internal", "auth", "auth_test.go"), []byte(`package auth
-func TestAuthenticate() {}
+	if err := os.WriteFile(filepath.Join(root, "main.go"), []byte(`package main
+
+import "example.com/demo/internal/auth"
+
+func main() { _ = auth.Service{} }
 `), 0o644); err != nil { t.Fatal(err) }
 
 	idx := NewIndex(DefaultConfig(root))
@@ -34,6 +37,11 @@ func TestAuthenticate() {}
 	if err != nil { t.Fatal(err) }
 	if len(ctx.Files) == 0 { t.Fatal("expected context files") }
 	if ctx.Files[0].Content == "" { t.Fatal("expected file content") }
+
+	deps := idx.Dependencies("main.go")
+	if len(deps) != 1 || deps[0] != "internal/auth/auth.go" { t.Fatalf("dependencies = %#v", deps) }
+	dependents := idx.Dependents("internal/auth/auth.go")
+	if len(dependents) != 1 || dependents[0] != "main.go" { t.Fatalf("dependents = %#v", dependents) }
 }
 
 func TestIndexIgnoresDirectoriesAndUnsupportedFiles(t *testing.T) {
