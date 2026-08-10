@@ -3,21 +3,24 @@ package workspace
 import (
 	"context"
 	"math"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
 type testEmbedder struct{}
 
 func (testEmbedder) Embed(_ context.Context, text string) ([]float32, error) {
-	if text == "auth" { return []float32{1, 0}, nil }
-	if text == "database" { return []float32{0, 1}, nil }
+	if text == "database" || contains(text, "db") { return []float32{0, 1}, nil }
 	return []float32{1, 0}, nil
 }
 
+func contains(s, sub string) bool { for i := 0; i+len(sub) <= len(s); i++ { if s[i:i+len(sub)] == sub { return true } }; return false }
+
 func TestSemanticSearch(t *testing.T) {
 	root := t.TempDir()
-	writeTestFile(t, root, "auth.go", "package auth\nfunc Authenticate() {}\n")
-	writeTestFile(t, root, "db.go", "package db\nfunc Query() {}\n")
+	if err := os.WriteFile(filepath.Join(root, "auth.go"), []byte("package auth\nfunc Authenticate() {}\n"), 0o644); err != nil { t.Fatal(err) }
+	if err := os.WriteFile(filepath.Join(root, "db.go"), []byte("package db\nfunc Query() {}\n"), 0o644); err != nil { t.Fatal(err) }
 
 	idx := NewIndex(DefaultConfig(root))
 	idx.SetEmbedder(testEmbedder{})
