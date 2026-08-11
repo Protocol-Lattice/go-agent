@@ -668,38 +668,6 @@ Add a tool by implementing `agent.Tool`, then register it through `agent.Options
 Add a model policy by implementing `middleware.Middleware`; use
 `middleware.MiddlewareFunc` for small wrappers.
 
-## Troubleshooting
-
-### Missing API Key
-
-Provider constructors fail when required keys are missing. Set the matching environment variable or use `models.NewDummyLLM` for local tests.
-
-### No Long-Term Memory Results
-
-Check that the session uses a store-backed `MemoryBank`, an embedder is configured, and records have been flushed or stored through the memory engine.
-
-### PostgreSQL Vector Errors
-
-For pgvector-backed memory, enable the extension:
-
-```sql
-CREATE EXTENSION IF NOT EXISTS vector;
-```
-
-Then run the store schema initializer:
-
-```go
-_ = store.CreateSchema(ctx, "")
-```
-
-### Tool Not Found
-
-Confirm the tool name exactly matches the registered UTCP tool name. Fully qualified names such as `agent.researcher` are preferred when multiple providers expose similar tools.
-
-## License
-
-See [LICENSE](./LICENSE).
-
 ## Workspace intelligence
 
 `go-agent` includes a repository-aware Workspace Intelligence layer for coding agents. It builds a structural index of the codebase and can combine symbol search, imports, dependencies, embeddings, and source context into a bounded context for an agent.
@@ -998,3 +966,35 @@ Inside `chat`:
 - Use the autonomous CLI when you want a ready-made coordinator and specialist setup.
 - Read `docs/workspace-intelligence.md` before building a repository-aware coding agent.
 - Browse `cmd/example` for runnable patterns rather than copying partial snippets, then run `go test ./...` before upgrading dependencies or changing runtime behavior.
+
+## Troubleshooting
+
+### Missing API Key
+
+Provider constructors fail when required keys are missing. Set the matching environment variable or use `models.NewDummyLLM` for local tests.
+
+### No Long-Term Memory Results
+
+Check that the session uses a store-backed `MemoryBank`, an embedder is configured, and records have been flushed or stored through the memory engine.
+
+### PostgreSQL Vector Errors
+
+For pgvector-backed memory, enable the extension:
+
+```sql
+CREATE EXTENSION IF NOT EXISTS vector;
+```
+
+Then run the store schema initializer:
+
+```go
+_ = store.CreateSchema(ctx, "")
+```
+
+### Tool Not Found
+
+Confirm the tool name exactly matches the registered UTCP tool name. Fully qualified names such as `agent.researcher` are preferred when multiple providers expose similar tools.
+
+## License
+
+See [LICENSE](https://github.com/Protocol-Lattice/go-agent/blob/main/LICENSE).
