@@ -30,6 +30,7 @@ type config struct {
 	SessionID     string
 	ContextWindow int
 	MaxSteps      int
+	MaxRecoveries int
 	ToolPrefix    string
 }
 
@@ -113,9 +114,11 @@ Current scratchpad:
 Instructions:
 1) Decide what to do next.
 2) Call UTCP specialist tools when needed.
-3) Return concise progress.
-4) If complete, include AUTONOMOUS_DONE on a separate line.
-5) Otherwise include AUTONOMOUS_CONTINUE on a separate line.
+3) If the scratchpad includes recovery context, change the approach that failed;
+   do not repeat the failed action unchanged.
+4) Return concise progress.
+5) If complete, include AUTONOMOUS_DONE on a separate line.
+6) Otherwise include AUTONOMOUS_CONTINUE on a separate line.
 `
 
 func main() {
@@ -215,6 +218,7 @@ func runLoopCommand(args []string, out, errOut io.Writer) error {
 
 	fs.StringVar(&goal, "goal", goalDefault, "autonomous goal")
 	fs.IntVar(&cfg.MaxSteps, "max-steps", cfg.MaxSteps, "maximum autonomous iterations")
+	fs.IntVar(&cfg.MaxRecoveries, "max-recoveries", cfg.MaxRecoveries, "maximum self-healing recovery attempts across the loop")
 
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -228,6 +232,9 @@ func runLoopCommand(args []string, out, errOut io.Writer) error {
 	}
 	if cfg.MaxSteps < 1 {
 		cfg.MaxSteps = 1
+	}
+	if cfg.MaxRecoveries < 0 {
+		cfg.MaxRecoveries = 0
 	}
 
 	ctx := context.Background()
@@ -583,29 +590,77 @@ func (r *runtime) listLiveTools(ctx context.Context) ([]string, error) {
 	return names, nil
 }
 
+type loopExecutor func(context.Context, string) (response, resolvedAgent string, err error)
+
 func runAutonomousLoop(ctx context.Context, rt *runtime, goal string, out io.Writer) error {
-	scratchpad := "No prior progress yet."
+	return runSelfHealingLoop(ctx, rt.cfg.MaxSteps, rt.cfg.MaxRecoveries, goal, out,
+		func(ctx context.Context, prompt string) (string, string, error) {
+			return rt.generate(ctx, "coordinator", rt.cfg.SessionID, prompt)
+		},
+	)
+}
 
-	for step := 1; step <= rt.cfg.MaxSteps; step++ {
-		prompt := fmt.Sprintf(loopPromptTemplate, goal, step, rt.cfg.MaxSteps, scratchpad)
-
-		resp, resolved, err := rt.generate(ctx, "coordinator", rt.cfg.SessionID, prompt)
-		if err != nil {
-			return fmt.Errorf("step %d (%s): %w", step, resolved, err)
-		}
-
-		fmt.Fprintf(out, "\n=== step %d/%d (%s) ===\n", step, rt.cfg.MaxSteps, resolved)
-		fmt.Fprintln(out, resp)
-
-		if strings.Contains(resp, doneMarker) {
-			fmt.Fprintln(out, "\nGoal marked complete.")
-			return nil
-		}
-
-		scratchpad = clip(resp, 8000)
+func runSelfHealingLoop(
+	ctx context.Context,
+	maxSteps, maxRecoveries int,
+	goal string,
+	out io.Writer,
+	execute loopExecutor,
+) error {
+	if maxSteps < 1 {
+		maxSteps = 1
+	}
+	if maxRecoveries < 0 {
+		maxRecoveries = 0
 	}
 
-	return fmt.Errorf("max steps (%d) reached before %s", rt.cfg.MaxSteps, doneMarker)
+	scratchpad := "No prior progress yet."
+	recoveries := 0
+
+	for step := 1; step <= maxSteps; step++ {
+		for {
+			prompt := fmt.Sprintf(loopPromptTemplate, goal, step, maxSteps, scratchpad)
+			resp, resolved, err := execute(ctx, prompt)
+			if err == nil {
+				fmt.Fprintf(out, "\n=== step %d/%d (%s) ===\n", step, maxSteps, resolved)
+				fmt.Fprintln(out, resp)
+
+				if strings.Contains(resp, doneMarker) {
+					fmt.Fprintln(out, "\nGoal marked complete.")
+					return nil
+				}
+
+				scratchpad = clip(resp, 8000)
+				break
+			}
+
+			if ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return fmt.Errorf("step %d (%s): %w", step, recoveryAgentName(resolved), err)
+			}
+			if recoveries >= maxRecoveries {
+				return fmt.Errorf("step %d (%s) failed after %d recovery attempts: %w", step, recoveryAgentName(resolved), recoveries, err)
+			}
+
+			recoveries++
+			failure := fmt.Sprintf("Execution failed at step %d for %s: %v", step, recoveryAgentName(resolved), err)
+			scratchpad = recoveryScratchpad(scratchpad, failure)
+			fmt.Fprintf(out, "\n=== recovery %d/%d after step %d (%s) ===\n", recoveries, maxRecoveries, step, recoveryAgentName(resolved))
+			fmt.Fprintf(out, "execution error: %v\nretrying with recovery context.\n", err)
+		}
+	}
+
+	return fmt.Errorf("max steps (%d) reached before %s", maxSteps, doneMarker)
+}
+
+func recoveryScratchpad(scratchpad, failure string) string {
+	return clip(fmt.Sprintf("Previous progress:\n%s\n\nRecovery context:\n%s\n\nUse a different safe approach that addresses this failure.", scratchpad, failure), 8000)
+}
+
+func recoveryAgentName(resolved string) string {
+	if strings.TrimSpace(resolved) == "" {
+		return "coordinator"
+	}
+	return resolved
 }
 
 func buildSingleTurnPrompt(goal, thinking, message string) string {
@@ -625,6 +680,7 @@ func defaultConfig() config {
 		SessionID:     envOr("AGENT_SESSION", "autonomous-session"),
 		ContextWindow: 20,
 		MaxSteps:      8,
+		MaxRecoveries: 2,
 		ToolPrefix:    envOr("UTCP_TOOL_PREFIX", "local."),
 	}
 }

@@ -9,7 +9,7 @@ This project provides an OpenClaw-like CLI on top of `github.com/Protocol-Lattic
 ## Commands
 
 - `agent`: single-turn execution (default target is `coordinator`)
-- `loop`: autonomous multi-step execution until `AUTONOMOUS_DONE`
+- `loop`: autonomous multi-step execution until `AUTONOMOUS_DONE`, with bounded self-healing recovery after execution failures
 - `chat`: interactive REPL with runtime agent switching
 - `tools`: list configured tools or live registered UTCP tools
 - `doctor`: validate provider/model/env setup
@@ -28,6 +28,7 @@ Default tools are prefixed with `local_` and registered at runtime:
 - `--model` (default from `LLM_MODEL`, fallback `gemini-2.5-pro`)
 - `--session-id` (default from `AGENT_SESSION`, fallback `autonomous-session`)
 - `--context-window` (default `20`)
+- `--max-recoveries` (default `2`; total self-healing recovery budget for the loop, `0` disables recovery)
 - `--tool-prefix` (default from `UTCP_TOOL_PREFIX`, fallback `local.`)
 
 ## Usage
@@ -72,5 +73,5 @@ Inside `chat`:
 - You must provide provider credentials through environment variables expected by your selected provider.
 - Runtime now validates provider credentials before bootstrapping agents and reports missing keys explicitly.
 - If `ADK_EMBED_PROVIDER` is unset, it is inferred for known providers (`gemini`, `openai`, `ollama`); otherwise set it manually.
-- `loop` completes when the model emits `AUTONOMOUS_DONE`; otherwise it exits at `--max-steps`.
+- `loop` completes when the model emits `AUTONOMOUS_DONE`; otherwise it exits at `--max-steps`. Failed iterations consume the loop's `--max-recoveries` budget without consuming another step. Each recovery includes the failure in the scratchpad so the coordinator can choose a different approach. Context cancellation and deadline errors are never retried.
 - `agent --thinking`, `agent --local`, and `agent --deliver` are included for OpenClaw-like UX compatibility.
