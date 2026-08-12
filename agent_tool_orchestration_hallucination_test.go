@@ -60,3 +60,63 @@ func TestAppendCodeModeToolSpecPreservesRegisteredTools(t *testing.T) {
 		t.Fatal("CodeMode tool was not added")
 	}
 }
+
+func TestValidateCodeModeToolCallsAcceptsCanonicalNames(t *testing.T) {
+	a := &Agent{}
+	a.toolCatalog = NewStaticToolCatalog(nil)
+	_ = a.toolCatalog.Register(testTool("github.search_code_search_code_get"))
+
+	code := `__out = CallTool("github.search_code_search_code_get", map[string]any{"q": "agent"})`
+	if err := a.validateCodeModeToolCalls(code); err != nil {
+		t.Fatalf("canonical CodeMode tool call rejected: %v", err)
+	}
+}
+
+func TestValidateCodeModeToolCallsRejectsHallucinatedNames(t *testing.T) {
+	a := &Agent{}
+	a.toolCatalog = NewStaticToolCatalog(nil)
+	_ = a.toolCatalog.Register(testTool("github.search_code_search_code_get"))
+
+	code := `__out = CallTool("github.search_code", map[string]any{"q": "agent"})`
+	if err := a.validateCodeModeToolCalls(code); err == nil {
+		t.Fatal("hallucinated CodeMode tool call was accepted")
+	}
+}
+
+func TestValidateCodeModeToolCallsRejectsDynamicNames(t *testing.T) {
+	a := &Agent{}
+	a.toolCatalog = NewStaticToolCatalog(nil)
+	_ = a.toolCatalog.Register(testTool("github.search_code_search_code_get"))
+
+	code := `name := "github.search_code_search_code_get"; __out = CallTool(name, map[string]any{})`
+	if err := a.validateCodeModeToolCalls(code); err == nil {
+		t.Fatal("dynamic CodeMode tool name was accepted")
+	}
+}
+
+func TestValidateCodeModeToolCallsRejectsMixedValidAndHallucinatedCalls(t *testing.T) {
+	a := &Agent{}
+	a.toolCatalog = NewStaticToolCatalog(nil)
+	_ = a.toolCatalog.Register(testTool("github.search_code_search_code_get"))
+
+	code := `__out = CallTool("github.search_code_search_code_get", map[string]any{}); __out = CallTool("github.search_code", map[string]any{})`
+	if err := a.validateCodeModeToolCalls(code); err == nil {
+		t.Fatal("mixed canonical/hallucinated CodeMode calls were accepted")
+	}
+}
+
+func testTool(name string) Tool {
+	return &testToolImpl{name: name}
+}
+
+type testToolImpl struct {
+	name string
+}
+
+func (t *testToolImpl) Spec() ToolSpec {
+	return ToolSpec{Name: t.name, InputSchema: map[string]any{"type": "object"}}
+}
+
+func (t *testToolImpl) Invoke(_ context.Context, _ ToolRequest) (ToolResponse, error) {
+	return ToolResponse{Content: "ok"}, nil
+}
