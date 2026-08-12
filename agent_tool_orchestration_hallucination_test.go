@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"testing"
 
 	"github.com/universal-tool-calling-protocol/go-utcp/src/tools"
