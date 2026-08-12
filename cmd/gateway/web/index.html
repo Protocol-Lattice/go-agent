@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>go-agent chat</title>
+  <link rel="stylesheet" href="/web/style.css">
+</head>
+<body>
+  <main class="shell">
+    <header class="topbar">
+      <div class="brand">
+        <div class="logo">λ</div>
+        <div>
+          <strong>go-agent</strong>
+          <span>Agent runtime chat</span>
+        </div>
+      </div>
+      <div class="status"><span id="statusDot"></span><span id="statusText">Checking gateway…</span></div>
+    </header>
+
+    <section id="messages" class="messages" aria-live="polite">
+      <div class="welcome">
+        <div class="welcome-mark">λ</div>
+        <h1>Build with your agent.</h1>
+        <p>Chat with go-agent using the same session memory and streaming runtime exposed by the gateway.</p>
+        <div class="suggestions">
+          <button data-prompt="Explain how the go-agent runtime works">Explain the runtime</button>
+          <button data-prompt="What tools are available to this agent?">Explore tools</button>
+          <button data-prompt="Help me design an agent workflow">Design a workflow</button>
+        </div>
+      </div>
+    </section>
+
+    <form id="composer" class="composer">
+      <textarea id="input" rows="1" placeholder="Message go-agent…" autocomplete="off"></textarea>
+      <div class="composer-row">
+        <div class="session"><span>Session</span><input id="session" value="web" maxlength="80"></div>
+        <div class="actions"><span id="hint">Enter to send · Shift+Enter for newline</span><button id="send" type="submit">Send <kbd>↵</kbd></button></div>
+      </div>
+    </form>
+    <footer>go-agent · streaming via Server-Sent Events</footer>
+  </main>
+  <script src="/web/app.js"></script>
+</body>
+</html>
