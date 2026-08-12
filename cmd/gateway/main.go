@@ -1,29 +1,30 @@
-// cmd/gateway — HTTP gateway that exposes a go-agent as a REST API.
+// cmd/gateway — HTTP gateway and Web UI for go-agent.
 //
 // Endpoints:
 //
-//	POST /chat        synchronous chat: {session, message} → {response}
-//	POST /stream      SSE streaming:    {session, message} → text/event-stream
-//	GET  /health      liveness check:   → {ok: true}
+//	GET  /          browser chat UI
+//	POST /chat      synchronous chat: {session, message} → {response}
+//	POST /stream    SSE streaming:    {session, message} → text/event-stream
+//	GET  /health    liveness check:   → {ok: true}
 //
 // Examples (no API key required — uses dummy model by default):
 //
-//	go run .
-//	curl -s -X POST http://localhost:8080/chat \
-//	     -H "Content-Type: application/json" \
-//	     -d '{"session":"alice","message":"Hello!"}'
+//	go run ./cmd/gateway
+//	open http://localhost:8080
 //
-//	# Switch to a real provider:
+// Switch to a real provider:
 //	export GOOGLE_API_KEY=...
-//	go run . -provider gemini -model gemini-2.5-flash
+//	go run ./cmd/gateway -provider gemini -model gemini-2.5-flash
 package main
 
 import (
 	"context"
+	"embed"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
+	"io/fs"
 	"log"
 	"net/http"
 	"strings"
@@ -33,6 +34,9 @@ import (
 	"github.com/Protocol-Lattice/go-agent/src/memory"
 	"github.com/Protocol-Lattice/go-agent/src/models"
 )
+
+//go:embed web/*
+var webFS embed.FS
 
 var (
 	flagAddr     = flag.String("addr", ":8080", "Listen address")
@@ -45,7 +49,6 @@ var (
 
 func main() {
 	flag.Parse()
-
 	ctx := context.Background()
 
 	ag, err := buildAgent(ctx)
@@ -54,6 +57,8 @@ func main() {
 	}
 
 	mux := http.NewServeMux()
+	mux.Handle("/web/", http.FileServer(http.FS(webFS)))
+	mux.HandleFunc("GET /", handleWeb)
 	mux.Handle("POST /chat", withTimeout(*flagTimeout, handleChat(ag)))
 	mux.Handle("POST /stream", withTimeout(*flagTimeout, handleStream(ag)))
 	mux.HandleFunc("GET /health", handleHealth)
@@ -64,9 +69,20 @@ func main() {
 	}
 }
 
-// buildAgent constructs the agent with in-memory storage.
-// Swap modules.InMemoryMemoryModule for InPostgresMemory / InQdrantMemory
-// to add persistence without changing any other code.
+func handleWeb(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/" {
+		http.NotFound(w, r)
+		return
+	}
+	data, err := fs.ReadFile(webFS, "web/index.html")
+	if err != nil {
+		http.Error(w, "web UI unavailable", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_, _ = w.Write(data)
+}
+
 func buildAgent(ctx context.Context) (*agent.Agent, error) {
 	var model models.Agent
 	var err error
@@ -94,13 +110,11 @@ func buildAgent(ctx context.Context) (*agent.Agent, error) {
 	})
 }
 
-// chatRequest is the JSON body for POST /chat and POST /stream.
 type chatRequest struct {
 	Session string `json:"session"`
 	Message string `json:"message"`
 }
 
-// chatResponse is the JSON body returned by POST /chat.
 type chatResponse struct {
 	Response string `json:"response"`
 	Session  string `json:"session"`
@@ -117,26 +131,15 @@ func handleChat(ag *agent.Agent) http.HandlerFunc {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-
 		out, err := ag.Generate(r.Context(), req.Session, req.Message)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-
-		writeJSON(w, http.StatusOK, chatResponse{
-			Response: fmt.Sprint(out),
-			Session:  req.Session,
-		})
+		writeJSON(w, http.StatusOK, chatResponse{Response: fmt.Sprint(out), Session: req.Session})
 	}
 }
 
-// handleStream serves Server-Sent Events so the client receives tokens as they arrive.
-//
-// Event format:
-//
-//	data: <token>\n\n       — incremental text chunk
-//	data: [DONE]\n\n        — stream finished
 func handleStream(ag *agent.Agent) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req chatRequest
@@ -148,7 +151,6 @@ func handleStream(ag *agent.Agent) http.HandlerFunc {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-
 		flusher, ok := w.(http.Flusher)
 		if !ok {
 			writeError(w, http.StatusInternalServerError, "streaming not supported by transport")
@@ -166,7 +168,6 @@ func handleStream(ag *agent.Agent) http.HandlerFunc {
 			flusher.Flush()
 			return
 		}
-
 		for chunk := range ch {
 			if chunk.Err != nil {
 				fmt.Fprintf(w, "data: error: %s\n\n", chunk.Err.Error())
@@ -174,7 +175,7 @@ func handleStream(ag *agent.Agent) http.HandlerFunc {
 				return
 			}
 			if chunk.Done {
-				fmt.Fprintf(w, "data: [DONE]\n\n")
+				fmt.Fprint(w, "data: [DONE]\n\n")
 				flusher.Flush()
 				return
 			}
