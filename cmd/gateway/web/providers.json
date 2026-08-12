@@ -1,0 +1,20 @@
+[
+  {
+    "provider_type": "cli",
+    "name": "shell",
+    "command_name": "./cmd/gateway/web/discover_shell.sh",
+    "execute_command": "bash -lc {{.Inputs.command}}"
+  },
+  {
+    "provider_type": "cli",
+    "name": "git",
+    "command_name": "./cmd/gateway/web/discover_git.sh",
+    "execute_command": "git {{.Inputs.command}}"
+  },
+  {
+    "provider_type": "cli",
+    "name": "filesystem",
+    "command_name": "./cmd/gateway/web/discover_filesystem.sh",
+    "execute_command": "bash -lc {{.Inputs.command}}"
+  }
+]
