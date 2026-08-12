@@ -9,15 +9,16 @@ func (a *Agent) WebUISkills() []SkillDefinition {
 	defer a.skillMu.RUnlock()
 
 	out := make([]SkillDefinition, 0, len(a.skills))
-	for _, skill := range a.skills {
-		copySkill := skill
-		copySkill.Tags = append([]string(nil), skill.Tags...)
-		copySkill.Triggers = append([]string(nil), skill.Triggers...)
-		copySkill.Dependencies = append([]string(nil), skill.Dependencies...)
-		copySkill.Tools = append([]string(nil), skill.Tools...)
-		// Evaluators may contain implementation details; don't expose them to the UI.
-		copySkill.Evaluator = nil
-		out = append(out, copySkill)
+	for _, definition := range a.skills {
+		// SkillDefinition embeds Skill, so copy the definition itself first.
+		copyDefinition := definition
+		copyDefinition.Tags = append([]string(nil), definition.Tags...)
+		copyDefinition.Triggers = append([]string(nil), definition.Triggers...)
+		copyDefinition.Dependencies = append([]string(nil), definition.Dependencies...)
+		copyDefinition.Tools = append([]string(nil), definition.Tools...)
+		// Evaluators are runtime implementations and must not cross the API boundary.
+		copyDefinition.Evaluator = nil
+		out = append(out, copyDefinition)
 	}
 	return out
 }
