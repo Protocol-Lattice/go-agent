@@ -36,12 +36,12 @@ func main() {
 	if err != nil { log.Fatalf("build agent: %v", err) }
 
 	mux := http.NewServeMux()
-	// A single GET / handler serves the UI and its embedded assets. Registering
-	// a methodless /web/ pattern together with GET / conflicts in Go 1.26.
 	mux.HandleFunc("GET /", handleWeb)
 	mux.Handle("POST /chat", withTimeout(*flagTimeout, handleChat(ag)))
 	mux.Handle("POST /stream", withTimeout(*flagTimeout, handleStream(ag)))
 	mux.HandleFunc("GET /health", handleHealth)
+	mux.HandleFunc("GET /api/skills", handleSkills(ag))
+	mux.HandleFunc("GET /api/tools", handleTools(ag))
 
 	log.Printf("gateway listening on %s (provider=%s model=%s)", *flagAddr, *flagProvider, *flagModel)
 	if err := http.ListenAndServe(*flagAddr, mux); err != nil { log.Fatal(err) }
@@ -53,16 +53,19 @@ func handleWeb(w http.ResponseWriter, r *http.Request) {
 	if !strings.HasPrefix(path, "web/") { http.NotFound(w, r); return }
 	data, err := fs.ReadFile(webFS, path)
 	if err != nil { http.NotFound(w, r); return }
-
 	contentType := "text/plain; charset=utf-8"
-	switch {
-	case strings.HasSuffix(path, ".html"): contentType = "text/html; charset=utf-8"
-	case strings.HasSuffix(path, ".css"): contentType = "text/css; charset=utf-8"
-	case strings.HasSuffix(path, ".js"): contentType = "text/javascript; charset=utf-8"
-	}
+	switch { case strings.HasSuffix(path, ".html"): contentType = "text/html; charset=utf-8"; case strings.HasSuffix(path, ".css"): contentType = "text/css; charset=utf-8"; case strings.HasSuffix(path, ".js"): contentType = "text/javascript; charset=utf-8" }
 	w.Header().Set("Content-Type", contentType)
 	_, _ = w.Write(data)
 }
+
+func handleSkills(ag *agent.Agent) http.HandlerFunc { return func(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{"skills": ag.WebUISkills()})
+} }
+
+func handleTools(ag *agent.Agent) http.HandlerFunc { return func(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{"tools": ag.WebUITools()})
+} }
 
 func buildAgent(ctx context.Context) (*agent.Agent, error) {
 	var model models.Agent
