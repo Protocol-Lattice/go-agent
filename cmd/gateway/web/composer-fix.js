@@ -1,25 +1,33 @@
-// The composer stays editable while the agent is thinking or running CodeMode.
-// Only the Send action is locked by the active request.
+// Keep the composer usable throughout streaming requests.
+// Enter submits, Shift+Enter inserts a newline.
 (() => {
   const input = document.getElementById('input');
+  const form = document.getElementById('composer');
   const send = document.getElementById('send');
-  if (!input || !send) return;
+  if (!input || !form || !send) return;
 
   const unlockComposer = () => {
-    if (input.disabled) input.disabled = false;
+    input.disabled = false;
+    input.readOnly = false;
+    input.removeAttribute('disabled');
+    input.removeAttribute('readonly');
+    input.style.pointerEvents = 'auto';
   };
 
   unlockComposer();
 
-  // app.js intentionally locks Send during execution; do not let that
-  // transient state make the text editor itself unusable.
+  // app.js currently toggles input.disabled while a request is running.
+  // Keep the editor interactive without changing the request/send lock.
   const observer = new MutationObserver(unlockComposer);
-  observer.observe(input, { attributes: true, attributeFilter: ['disabled'] });
+  observer.observe(input, { attributes: true, attributeFilter: ['disabled', 'readonly'] });
 
+  // Capture Enter before app.js so the prompt is submitted even if another
+  // handler temporarily changed the textarea state. Shift+Enter stays newline.
   input.addEventListener('keydown', (event) => {
-    if (event.key === 'Enter' && !event.shiftKey && !send.disabled) {
-      // app.js owns submission; this only guarantees the input remains usable.
-      unlockComposer();
-    }
-  });
+    if (event.key !== 'Enter' || event.shiftKey || event.isComposing) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    unlockComposer();
+    if (!send.disabled && input.value.trim()) form.requestSubmit();
+  }, true);
 })();
