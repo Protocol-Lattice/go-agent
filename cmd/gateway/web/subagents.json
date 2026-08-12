@@ -1,0 +1,15 @@
+{
+  "subagents": [
+    {
+      "id": "code-reviewer",
+      "name": "Code Reviewer",
+      "description": "Reviews code changes for bugs and security issues",
+      "system_prompt": "Review the provided code carefully. Focus on correctness, security, concurrency, error handling, and performance.",
+      "tools": [
+        "read_file",
+        "git_diff"
+      ],
+      "model": "default"
+    }
+  ]
+}
