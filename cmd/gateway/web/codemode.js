@@ -1,5 +1,5 @@
 const CodeModeUI = (() => {
-  const state = { steps: [], active: null };
+  const state = { nodes: [], active: null, sequence: 0 };
 
   function ensurePanel() {
     let panel = document.getElementById('codemodeWorkflow');
@@ -15,10 +15,9 @@ const CodeModeUI = (() => {
         </div>
         <span id="codemodeStatus" class="codemode-status">idle</span>
       </div>
-      <div id="codemodeSteps" class="codemode-steps"></div>
+      <div id="codemodeGraph" class="codemode-graph"></div>
     `;
-    const messages = document.getElementById('messages');
-    messages?.prepend(panel);
+    document.getElementById('messages')?.prepend(panel);
     return panel;
   }
 
@@ -32,53 +31,88 @@ const CodeModeUI = (() => {
   function render() {
     const panel = ensurePanel();
     panel.classList.remove('hidden');
-    const list = document.getElementById('codemodeSteps');
-    if (!list) return;
-    list.replaceChildren(...state.steps.map((step, index) => {
-      const row = document.createElement('article');
-      row.className = `codemode-step ${step.status || ''}`.trim();
+    const graph = document.getElementById('codemodeGraph');
+    if (!graph) return;
+    graph.replaceChildren(...state.nodes.map((node, index) => {
+      const wrapper = document.createElement('div');
+      wrapper.className = 'codemode-node-wrap';
+      if (index > 0) {
+        const edge = document.createElement('div');
+        edge.className = 'codemode-edge';
+        edge.innerHTML = '<span>↓</span>';
+        wrapper.append(edge);
+      }
+
+      const card = document.createElement('article');
+      card.className = `codemode-node ${node.status || ''}`.trim();
+      card.dataset.nodeId = node.id;
+
+      const head = document.createElement('div');
+      head.className = 'codemode-node-head';
       const marker = document.createElement('span');
-      marker.className = 'codemode-step-marker';
-      marker.textContent = step.status === 'done' ? '✓' : step.status === 'error' ? '!' : String(index + 1);
-      const body = document.createElement('div');
-      body.className = 'codemode-step-body';
-      const title = document.createElement('strong');
-      title.textContent = step.title;
+      marker.className = 'codemode-node-marker';
+      marker.textContent = node.status === 'done' ? '✓' : node.status === 'error' ? '!' : node.status === 'running' ? '●' : String(index + 1);
+      const title = document.createElement('div');
+      title.className = 'codemode-node-title';
+      const strong = document.createElement('strong');
+      strong.textContent = node.title;
       const meta = document.createElement('span');
-      meta.textContent = step.meta || '';
-      body.append(title, meta);
-      if (step.code) {
+      meta.textContent = node.tool;
+      title.append(strong, meta);
+      const badge = document.createElement('span');
+      badge.className = 'codemode-node-badge';
+      badge.textContent = node.status;
+      head.append(marker, title, badge);
+
+      const details = document.createElement('div');
+      details.className = 'codemode-node-details';
+      if (node.code) {
         const code = document.createElement('pre');
         code.className = 'codemode-code';
-        code.textContent = step.code;
-        body.append(code);
+        code.textContent = node.code;
+        details.append(code);
       }
-      if (step.output) {
+      if (node.output) {
         const output = document.createElement('pre');
         output.className = 'codemode-output';
-        output.textContent = step.output;
-        body.append(output);
+        output.textContent = node.output;
+        details.append(output);
       }
-      row.append(marker, body);
-      return row;
+      if (node.duration) {
+        const duration = document.createElement('span');
+        duration.className = 'codemode-duration';
+        duration.textContent = node.duration;
+        details.append(duration);
+      }
+      card.append(head, details);
+      wrapper.append(card);
+      return wrapper;
     }));
   }
 
-  function addStep(title, meta, code = '') {
-    const step = { title, meta, code, status: 'running' };
-    state.steps.push(step);
-    state.active = step;
-    setStatus(`${state.steps.length} step${state.steps.length === 1 ? '' : 's'} · running`, 'running');
+  function addNode(title, tool, code = '') {
+    const node = {
+      id: `codemode-${++state.sequence}`,
+      title,
+      tool,
+      code,
+      status: 'running',
+      startedAt: performance.now()
+    };
+    state.nodes.push(node);
+    state.active = node;
+    setStatus(`${state.nodes.length} node${state.nodes.length === 1 ? '' : 's'} · running`, 'running');
     render();
-    return step;
+    return node;
   }
 
-  function finishStep(output = '') {
+  function finishNode(output = '') {
     if (!state.active) return;
     state.active.status = 'done';
-    if (output) state.active.output = output;
+    state.active.output = output;
+    state.active.duration = `${Math.max(1, Math.round(performance.now() - state.active.startedAt))} ms`;
     state.active = null;
-    setStatus(`${state.steps.length} step${state.steps.length === 1 ? '' : 's'} · complete`, 'done');
+    setStatus(`${state.nodes.length} node${state.nodes.length === 1 ? '' : 's'} · complete`, 'done');
     render();
   }
 
@@ -86,6 +120,7 @@ const CodeModeUI = (() => {
     if (state.active) {
       state.active.status = 'error';
       state.active.output = message;
+      state.active.duration = `${Math.max(1, Math.round(performance.now() - state.active.startedAt))} ms`;
       state.active = null;
     }
     setStatus('workflow failed', 'error');
@@ -93,7 +128,7 @@ const CodeModeUI = (() => {
   }
 
   function reset() {
-    state.steps.length = 0;
+    state.nodes.length = 0;
     state.active = null;
     const panel = document.getElementById('codemodeWorkflow');
     panel?.classList.add('hidden');
@@ -101,9 +136,10 @@ const CodeModeUI = (() => {
   }
 
   function extractCode(text) {
-    const fenced = String(text || '').match(/```(?:go)?\s*([\s\S]*?)```/i);
+    const value = String(text || '');
+    const fenced = value.match(/```(?:go)?\s*([\s\S]*?)```/i);
     if (fenced) return fenced[1].trim();
-    const code = String(text || '').match(/\b(?:package|func|fmt\.|client\.|tools\.).*[\s\S]*/i);
+    const code = value.match(/\b(?:package|func|fmt\.|client\.|tools\.).*[\s\S]*/i);
     return code ? code[0].trim() : '';
   }
 
@@ -112,9 +148,9 @@ const CodeModeUI = (() => {
     if (!/codemode\.run_code/i.test(title)) return;
     const output = panel.querySelector('.tool-activity-output')?.textContent || '';
     const code = extractCode(output);
-    if (!state.active) addStep('Execute CodeMode program', 'codemode.run_code', code);
+    if (!state.active) addNode('Execute CodeMode program', 'codemode.run_code', code);
     else if (code && !state.active.code) { state.active.code = code; render(); }
-    if (output && output !== 'Running…' && output !== 'No output returned') finishStep(output);
+    if (output && output !== 'Running…' && output !== 'No output returned') finishNode(output);
   }
 
   function observe() {
@@ -127,7 +163,6 @@ const CodeModeUI = (() => {
           node.querySelectorAll?.('.tool-activity').forEach(inspectToolPanel);
           if (node.matches?.('.tool-activity')) inspectToolPanel(node);
         }
-        if (mutation.type === 'characterData') return;
       }
       messages.querySelectorAll('.tool-activity').forEach(inspectToolPanel);
     });
@@ -135,8 +170,7 @@ const CodeModeUI = (() => {
   }
 
   function hookComposer() {
-    const form = document.getElementById('composer');
-    form?.addEventListener('submit', reset, { capture: true });
+    document.getElementById('composer')?.addEventListener('submit', reset, { capture: true });
   }
 
   function init() {
@@ -145,7 +179,7 @@ const CodeModeUI = (() => {
     hookComposer();
   }
 
-  return { init, reset, addStep, finishStep, fail };
+  return { init, reset, addNode, finishNode, fail };
 })();
 
 document.readyState === 'loading'
