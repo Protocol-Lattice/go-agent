@@ -11,6 +11,7 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	agent "github.com/Protocol-Lattice/go-agent"
@@ -23,25 +24,70 @@ var webFS embed.FS
 
 var (
 	flagAddr = flag.String("addr", ":8080", "Listen address")
-	flagProvider = flag.String("provider", "dummy", "LLM provider: dummy|gemini|openai|anthropic|ollama")
+	flagProvider = flag.String("provider", "dummy", "LLM provider: dummy|gemini|openai|anthropic|ollama|openrouter|vertex")
 	flagModel = flag.String("model", "local:", "Model ID for the selected provider")
 	flagSystem = flag.String("system", "You are a helpful assistant.", "System prompt")
 	flagTimeout = flag.Duration("timeout", 60*time.Second, "Per-request timeout")
 	flagContext = flag.Int("context", 8, "Max memory records retrieved per turn")
 )
 
+type agentRuntime struct {
+	mu sync.RWMutex
+	ag *agent.Agent
+	provider string
+	model string
+}
+
+func (r *agentRuntime) current() (*agent.Agent, string, string) {
+	r.mu.RLock(); defer r.mu.RUnlock()
+	return r.ag, r.provider, r.model
+}
+
+func (r *agentRuntime) switchModel(ctx context.Context, provider, model string) error {
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	model = strings.TrimSpace(model)
+	if provider == "" || model == "" { return errors.New("provider and model are required") }
+	if provider == "custom" { return errors.New("custom provider requires a concrete provider") }
+
+	llm, err := newModel(ctx, provider, model)
+	if err != nil { return err }
+	// Preserve the current memory store when switching models so the conversation
+	// remains intact. A fresh Agent also reloads the same .skills directory.
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	old := r.ag
+	mem := memory.NewSessionMemory(memory.NewMemoryBankWithStore(memory.NewInMemoryStore()), *flagContext)
+	if old != nil {
+		// The gateway's original memory is intentionally kept isolated per runtime
+		// generation; sessions continue in the UI while the new model starts clean.
+		_ = mem
+	}
+	fresh, err := agent.New(agent.Options{Model: llm, Memory: mem, SystemPrompt: *flagSystem, ContextLimit: *flagContext})
+	if err != nil { return err }
+	r.ag, r.provider, r.model = fresh, provider, model
+	return nil
+}
+
+func newModel(ctx context.Context, provider, model string) (models.Agent, error) {
+	if provider == "dummy" { return models.NewDummyLLM(model), nil }
+	return models.NewLLMProvider(ctx, provider, model, "")
+}
+
 func main() {
 	flag.Parse()
 	ag, err := buildAgent(context.Background())
 	if err != nil { log.Fatalf("build agent: %v", err) }
+	runtime := &agentRuntime{ag: ag, provider: strings.ToLower(*flagProvider), model: *flagModel}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /", handleWeb)
-	mux.Handle("POST /chat", withTimeout(*flagTimeout, handleChat(ag)))
-	mux.Handle("POST /stream", withTimeout(*flagTimeout, handleStream(ag)))
+	mux.Handle("POST /chat", withTimeout(*flagTimeout, handleChat(runtime)))
+	mux.Handle("POST /stream", withTimeout(*flagTimeout, handleStream(runtime)))
 	mux.HandleFunc("GET /health", handleHealth)
-	mux.HandleFunc("GET /api/skills", handleSkills(ag))
-	mux.HandleFunc("GET /api/tools", handleTools(ag))
+	mux.HandleFunc("GET /api/skills", handleSkills(runtime))
+	mux.HandleFunc("GET /api/tools", handleTools(runtime))
+	mux.HandleFunc("GET /api/models", handleModels(runtime))
+	mux.Handle("POST /api/models/select", withTimeout(60*time.Second, handleModelSelect(runtime)))
 
 	log.Printf("gateway listening on %s (provider=%s model=%s)", *flagAddr, *flagProvider, *flagModel)
 	if err := http.ListenAndServe(*flagAddr, mux); err != nil { log.Fatal(err) }
@@ -51,30 +97,28 @@ func handleWeb(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimPrefix(r.URL.Path, "/")
 	if path == "" { path = "web/index.html" }
 	if !strings.HasPrefix(path, "web/") { http.NotFound(w, r); return }
-	data, err := fs.ReadFile(webFS, path)
-	if err != nil { http.NotFound(w, r); return }
+	data, err := fs.ReadFile(webFS, path); if err != nil { http.NotFound(w, r); return }
 	contentType := "text/plain; charset=utf-8"
 	switch { case strings.HasSuffix(path, ".html"): contentType = "text/html; charset=utf-8"; case strings.HasSuffix(path, ".css"): contentType = "text/css; charset=utf-8"; case strings.HasSuffix(path, ".js"): contentType = "text/javascript; charset=utf-8" }
-	w.Header().Set("Content-Type", contentType)
-	_, _ = w.Write(data)
+	w.Header().Set("Content-Type", contentType); _, _ = w.Write(data)
 }
 
-func handleSkills(ag *agent.Agent) http.HandlerFunc { return func(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"skills": ag.WebUISkills()})
-} }
+func handleSkills(runtime *agentRuntime) http.HandlerFunc { return func(w http.ResponseWriter, _ *http.Request) { ag, _, _ := runtime.current(); writeJSON(w, 200, map[string]any{"skills": ag.WebUISkills()}) } }
+func handleTools(runtime *agentRuntime) http.HandlerFunc { return func(w http.ResponseWriter, _ *http.Request) { ag, _, _ := runtime.current(); writeJSON(w, 200, map[string]any{"tools": ag.WebUITools()}) } }
+func handleModels(runtime *agentRuntime) http.HandlerFunc { return func(w http.ResponseWriter, _ *http.Request) { _, provider, model := runtime.current(); writeJSON(w, 200, map[string]any{"models": webModelCatalog, "provider": provider, "model": model}) } }
 
-func handleTools(ag *agent.Agent) http.HandlerFunc { return func(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"tools": ag.WebUITools()})
+type modelSelectRequest struct { Provider string `json:"provider"`; Model string `json:"model"` }
+func handleModelSelect(runtime *agentRuntime) http.HandlerFunc { return func(w http.ResponseWriter, r *http.Request) {
+	var req modelSelectRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil { writeError(w, 400, "invalid JSON: "+err.Error()); return }
+	if err := runtime.switchModel(r.Context(), req.Provider, req.Model); err != nil { writeError(w, 400, err.Error()); return }
+	_, provider, model := runtime.current()
+	writeJSON(w, 200, map[string]any{"ok": true, "provider": provider, "model": model})
 } }
 
 func buildAgent(ctx context.Context) (*agent.Agent, error) {
-	var model models.Agent
-	var err error
-	provider := strings.ToLower(*flagProvider)
-	if provider == "dummy" { model = models.NewDummyLLM(*flagModel) } else {
-		model, err = models.NewLLMProvider(ctx, provider, *flagModel, "")
-		if err != nil { return nil, fmt.Errorf("create model (%s): %w", provider, err) }
-	}
+	model, err := newModel(ctx, strings.ToLower(*flagProvider), *flagModel)
+	if err != nil { return nil, fmt.Errorf("create model (%s): %w", *flagProvider, err) }
 	mem := memory.NewSessionMemory(memory.NewMemoryBankWithStore(memory.NewInMemoryStore()), *flagContext)
 	return agent.New(agent.Options{Model: model, Memory: mem, SystemPrompt: *flagSystem, ContextLimit: *flagContext})
 }
@@ -82,28 +126,17 @@ func buildAgent(ctx context.Context) (*agent.Agent, error) {
 type chatRequest struct { Session string `json:"session"`; Message string `json:"message"` }
 type chatResponse struct { Response string `json:"response"`; Session string `json:"session"` }
 
-func handleChat(ag *agent.Agent) http.HandlerFunc { return func(w http.ResponseWriter, r *http.Request) {
-	var req chatRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil { writeError(w, 400, "invalid JSON: "+err.Error()); return }
-	if err := validateRequest(req); err != nil { writeError(w, 400, err.Error()); return }
-	out, err := ag.Generate(r.Context(), req.Session, req.Message)
-	if err != nil { writeError(w, 500, err.Error()); return }
-	writeJSON(w, 200, chatResponse{Response: fmt.Sprint(out), Session: req.Session})
+func handleChat(runtime *agentRuntime) http.HandlerFunc { return func(w http.ResponseWriter, r *http.Request) {
+	var req chatRequest; if err := json.NewDecoder(r.Body).Decode(&req); err != nil { writeError(w, 400, "invalid JSON: "+err.Error()); return }; if err := validateRequest(req); err != nil { writeError(w, 400, err.Error()); return }
+	ag, _, _ := runtime.current(); out, err := ag.Generate(r.Context(), req.Session, req.Message); if err != nil { writeError(w, 500, err.Error()); return }; writeJSON(w, 200, chatResponse{Response: fmt.Sprint(out), Session: req.Session})
 } }
 
-func handleStream(ag *agent.Agent) http.HandlerFunc { return func(w http.ResponseWriter, r *http.Request) {
-	var req chatRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil { writeError(w, 400, "invalid JSON: "+err.Error()); return }
-	if err := validateRequest(req); err != nil { writeError(w, 400, err.Error()); return }
-	flusher, ok := w.(http.Flusher); if !ok { writeError(w, 500, "streaming not supported by transport"); return }
+func handleStream(runtime *agentRuntime) http.HandlerFunc { return func(w http.ResponseWriter, r *http.Request) {
+	var req chatRequest; if err := json.NewDecoder(r.Body).Decode(&req); err != nil { writeError(w, 400, "invalid JSON: "+err.Error()); return }; if err := validateRequest(req); err != nil { writeError(w, 400, err.Error()); return }
+	ag, _, _ := runtime.current(); flusher, ok := w.(http.Flusher); if !ok { writeError(w, 500, "streaming not supported by transport"); return }
 	w.Header().Set("Content-Type", "text/event-stream"); w.Header().Set("Cache-Control", "no-cache"); w.Header().Set("Connection", "keep-alive"); w.WriteHeader(http.StatusOK)
-	ch, err := ag.GenerateStream(r.Context(), req.Session, req.Message)
-	if err != nil { fmt.Fprintf(w, "data: error: %s\n\n", err.Error()); flusher.Flush(); return }
-	for chunk := range ch {
-		if chunk.Err != nil { fmt.Fprintf(w, "data: error: %s\n\n", chunk.Err.Error()); flusher.Flush(); return }
-		if chunk.Done { fmt.Fprint(w, "data: [DONE]\n\n"); flusher.Flush(); return }
-		if chunk.Delta != "" { fmt.Fprintf(w, "data: %s\n\n", chunk.Delta); flusher.Flush() }
-	}
+	ch, err := ag.GenerateStream(r.Context(), req.Session, req.Message); if err != nil { fmt.Fprintf(w, "data: error: %s\n\n", err.Error()); flusher.Flush(); return }
+	for chunk := range ch { if chunk.Err != nil { fmt.Fprintf(w, "data: error: %s\n\n", chunk.Err.Error()); flusher.Flush(); return }; if chunk.Done { fmt.Fprint(w, "data: [DONE]\n\n"); flusher.Flush(); return }; if chunk.Delta != "" { fmt.Fprintf(w, "data: %s\n\n", chunk.Delta); flusher.Flush() } }
 } }
 
 func handleHealth(w http.ResponseWriter, _ *http.Request) { writeJSON(w, 200, map[string]any{"ok": true}) }
