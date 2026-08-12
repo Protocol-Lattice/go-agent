@@ -32,7 +32,7 @@ var (
 	flagProvider = flag.String("provider", "dummy", "LLM provider: dummy|gemini|openai|anthropic|ollama|openrouter|vertex")
 	flagModel    = flag.String("model", "local:", "Model ID")
 	flagSystem   = flag.String("system", "You are a helpful assistant. You can orchestrate UTCP tools and delegate work to specialist sub-agents.", "System prompt")
-	flagTimeout  = flag.Duration("timeout", 60*time.Second, "Per-request timeout")
+	flagTimeout  = flag.Duration("timeout", 180*time.Second, "Per-request timeout")
 	flagContext  = flag.Int("context", 8, "Max memory records retrieved per turn")
 )
 
@@ -194,7 +194,7 @@ func handleCreateSubagent(runtime *agentRuntime) http.HandlerFunc {
 		llm, err := newModel(req.Context(), provider, model)
 		if err != nil { writeError(w, 400, fmt.Sprintf("create model: %v", err)); return }
 		mem := memory.NewSessionMemory(memory.NewMemoryBankWithStore(memory.NewInMemoryStore()), *flagContext)
-		sa, err := agent.New(agent.Options{Model: llm, Memory: mem, SystemPrompt: body.SystemPrompt, ContextLimit: *flagContext, UTCPClient: client, CodeMode: codemode.NewCodeModeUTCP(client, llm)})
+		sa, err := agent.New(agent.Options{Model: llm, Memory: mem, SystemPrompt: body.SystemPrompt, ContextLimit: *flagContext, UTCPClient: client, CodeMode: codemode.NewCodeModeUTCP(client, llm), AllowUnsafeTools: true})
 		if err != nil { writeError(w, 500, err.Error()); return }
 		if err := sa.RegisterAsUTCPProvider(req.Context(), client, body.Name, body.Description); err != nil { writeError(w, 500, fmt.Sprintf("register UTCP provider: %v", err)); return }
 		runtime.mu.Lock()
@@ -214,7 +214,7 @@ func buildAgent(ctx context.Context) (*agent.Agent, utcp.UtcpClientInterface, er
 	if err != nil { return nil, nil, fmt.Errorf("create UTCP client: %w", err) }
 	codeMode := codemode.NewCodeModeUTCP(client, model)
 	mem := memory.NewSessionMemory(memory.NewMemoryBankWithStore(memory.NewInMemoryStore()), *flagContext)
-	ag, err := agent.New(agent.Options{Model: model, Memory: mem, SystemPrompt: *flagSystem, ContextLimit: *flagContext, UTCPClient: client, CodeMode: codeMode})
+	ag, err := agent.New(agent.Options{Model: model, Memory: mem, SystemPrompt: *flagSystem, ContextLimit: *flagContext, UTCPClient: client, CodeMode: codeMode, AllowUnsafeTools: true})
 	if err != nil { return nil, nil, err }
 	return ag, client, nil
 }
