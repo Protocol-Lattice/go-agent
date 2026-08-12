@@ -8,6 +8,7 @@ import (
 
     utcp "github.com/universal-tool-calling-protocol/go-utcp"
     "github.com/universal-tool-calling-protocol/go-utcp/src/providers/base"
+    "github.com/universal-tool-calling-protocol/go-utcp/src/repository"
     "github.com/universal-tool-calling-protocol/go-utcp/src/tools"
     "github.com/universal-tool-calling-protocol/go-utcp/src/transports"
 )
@@ -32,7 +33,7 @@ func newTracingUTCPClient(inner utcp.UtcpClientInterface, hub *codeModeEventHub)
 func (c *tracingUTCPClient) RegisterToolProvider(ctx context.Context,p base.Provider)([]tools.Tool,error){return c.inner.RegisterToolProvider(ctx,p)}
 func (c *tracingUTCPClient) DeregisterToolProvider(ctx context.Context,name string)error{return c.inner.DeregisterToolProvider(ctx,name)}
 func (c *tracingUTCPClient) SearchTools(q string,limit int)([]tools.Tool,error){return c.inner.SearchTools(q,limit)}
-func (c *tracingUTCPClient) GetTransports() map[string]transports.ClientTransport { return c.inner.GetTransports() }
+func (c *tracingUTCPClient) GetTransports() map[string]repository.ClientTransport { return c.inner.GetTransports() }
 func (c *tracingUTCPClient) CallTool(ctx context.Context,name string,args map[string]any)(any,error){started:=time.Now();c.hub.publish(codeModeEvent{Type:"codemode_tool_start",Tool:name,Args:args});result,err:=c.inner.CallTool(ctx,name,args);e:=codeModeEvent{Type:"codemode_tool_result",Tool:name,Result:result,Duration:time.Since(started).Milliseconds()};if err!=nil{e.Type="codemode_tool_error";e.Error=err.Error()};c.hub.publish(e);return result,err}
 
 type tracingStreamResult struct { inner transports.StreamResult; tool string; hub *codeModeEventHub; started time.Time; finished bool }
