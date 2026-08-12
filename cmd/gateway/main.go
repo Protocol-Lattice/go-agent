@@ -10,6 +10,8 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -17,6 +19,7 @@ import (
 	agent "github.com/Protocol-Lattice/go-agent"
 	"github.com/Protocol-Lattice/go-agent/src/memory"
 	"github.com/Protocol-Lattice/go-agent/src/models"
+	utcp "github.com/universal-tool-calling-protocol/go-utcp"
 )
 
 //go:embed web/*
@@ -34,13 +37,14 @@ var (
 type agentRuntime struct {
 	mu sync.RWMutex
 	ag *agent.Agent
+	utcp utcp.UtcpClientInterface
 	provider string
 	model string
 }
 
-func (r *agentRuntime) current() (*agent.Agent, string, string) {
+func (r *agentRuntime) current() (*agent.Agent, utcp.UtcpClientInterface, string, string) {
 	r.mu.RLock(); defer r.mu.RUnlock()
-	return r.ag, r.provider, r.model
+	return r.ag, r.utcp, r.provider, r.model
 }
 
 func (r *agentRuntime) switchModel(ctx context.Context, provider, model string) error {
@@ -48,22 +52,10 @@ func (r *agentRuntime) switchModel(ctx context.Context, provider, model string) 
 	model = strings.TrimSpace(model)
 	if provider == "" || model == "" { return errors.New("provider and model are required") }
 	if provider == "custom" { return errors.New("custom provider requires a concrete provider") }
-
-	llm, err := newModel(ctx, provider, model)
-	if err != nil { return err }
-	// Preserve the current memory store when switching models so the conversation
-	// remains intact. A fresh Agent also reloads the same .skills directory.
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	old := r.ag
+	llm, err := newModel(ctx, provider, model); if err != nil { return err }
+	r.mu.Lock(); defer r.mu.Unlock()
 	mem := memory.NewSessionMemory(memory.NewMemoryBankWithStore(memory.NewInMemoryStore()), *flagContext)
-	if old != nil {
-		// The gateway's original memory is intentionally kept isolated per runtime
-		// generation; sessions continue in the UI while the new model starts clean.
-		_ = mem
-	}
-	fresh, err := agent.New(agent.Options{Model: llm, Memory: mem, SystemPrompt: *flagSystem, ContextLimit: *flagContext})
-	if err != nil { return err }
+	fresh, err := agent.New(agent.Options{Model: llm, Memory: mem, SystemPrompt: *flagSystem, ContextLimit: *flagContext}); if err != nil { return err }
 	r.ag, r.provider, r.model = fresh, provider, model
 	return nil
 }
@@ -75,10 +67,8 @@ func newModel(ctx context.Context, provider, model string) (models.Agent, error)
 
 func main() {
 	flag.Parse()
-	ag, err := buildAgent(context.Background())
-	if err != nil { log.Fatalf("build agent: %v", err) }
-	runtime := &agentRuntime{ag: ag, provider: strings.ToLower(*flagProvider), model: *flagModel}
-
+	ag, client, err := buildAgent(context.Background()); if err != nil { log.Fatalf("build agent: %v", err) }
+	runtime := &agentRuntime{ag: ag, utcp: client, provider: strings.ToLower(*flagProvider), model: *flagModel}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /", handleWeb)
 	mux.Handle("POST /chat", withTimeout(*flagTimeout, handleChat(runtime)))
@@ -88,57 +78,50 @@ func main() {
 	mux.HandleFunc("GET /api/tools", handleTools(runtime))
 	mux.HandleFunc("GET /api/models", handleModels(runtime))
 	mux.Handle("POST /api/models/select", withTimeout(60*time.Second, handleModelSelect(runtime)))
-
-	log.Printf("gateway listening on %s (provider=%s model=%s)", *flagAddr, *flagProvider, *flagModel)
+	log.Printf("gateway listening on %s (provider=%s model=%s, utcp=enabled)", *flagAddr, *flagProvider, *flagModel)
 	if err := http.ListenAndServe(*flagAddr, mux); err != nil { log.Fatal(err) }
 }
 
 func handleWeb(w http.ResponseWriter, r *http.Request) {
-	path := strings.TrimPrefix(r.URL.Path, "/")
-	if path == "" { path = "web/index.html" }
+	path := strings.TrimPrefix(r.URL.Path, "/"); if path == "" { path = "web/index.html" }
 	if !strings.HasPrefix(path, "web/") { http.NotFound(w, r); return }
 	data, err := fs.ReadFile(webFS, path); if err != nil { http.NotFound(w, r); return }
 	contentType := "text/plain; charset=utf-8"
-	switch { case strings.HasSuffix(path, ".html"): contentType = "text/html; charset=utf-8"; case strings.HasSuffix(path, ".css"): contentType = "text/css; charset=utf-8"; case strings.HasSuffix(path, ".js"): contentType = "text/javascript; charset=utf-8" }
+	switch { case strings.HasSuffix(path, ".html"): contentType = "text/html; charset=utf-8"; case strings.HasSuffix(path, ".css"): contentType = "text/css; charset=utf-8"; case strings.HasSuffix(path, ".js"): contentType = "text/javascript; charset=utf-8"; case strings.HasSuffix(path, ".json"): contentType = "application/json; charset=utf-8" }
 	w.Header().Set("Content-Type", contentType); _, _ = w.Write(data)
 }
 
-func handleSkills(runtime *agentRuntime) http.HandlerFunc { return func(w http.ResponseWriter, _ *http.Request) { ag, _, _ := runtime.current(); writeJSON(w, 200, map[string]any{"skills": ag.WebUISkills()}) } }
-func handleTools(runtime *agentRuntime) http.HandlerFunc { return func(w http.ResponseWriter, _ *http.Request) { ag, _, _ := runtime.current(); writeJSON(w, 200, map[string]any{"tools": ag.WebUITools()}) } }
-func handleModels(runtime *agentRuntime) http.HandlerFunc { return func(w http.ResponseWriter, _ *http.Request) { _, provider, model := runtime.current(); writeJSON(w, 200, map[string]any{"models": webModelCatalog, "provider": provider, "model": model}) } }
+func handleSkills(runtime *agentRuntime) http.HandlerFunc { return func(w http.ResponseWriter, _ *http.Request) { ag, _, _, _ := runtime.current(); writeJSON(w, 200, map[string]any{"skills": ag.WebUISkills()}) } }
+func handleTools(runtime *agentRuntime) http.HandlerFunc { return func(w http.ResponseWriter, r *http.Request) {
+	ag, client, _, _ := runtime.current()
+	tools := ag.WebUITools()
+	if client != nil { if utcpTools, err := client.SearchTools("", 100); err == nil { for _, tool := range utcpTools { tools = append(tools, agent.ToolSpec{Name: tool.Name, Description: tool.Description, InputSchema: tool.InputSchema}) } } }
+	writeJSON(w, 200, map[string]any{"tools": tools})
+} }
+func handleModels(runtime *agentRuntime) http.HandlerFunc { return func(w http.ResponseWriter, _ *http.Request) { _, _, provider, model := runtime.current(); writeJSON(w, 200, map[string]any{"models": webModelCatalog, "provider": provider, "model": model}) } }
 
 type modelSelectRequest struct { Provider string `json:"provider"`; Model string `json:"model"` }
-func handleModelSelect(runtime *agentRuntime) http.HandlerFunc { return func(w http.ResponseWriter, r *http.Request) {
-	var req modelSelectRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil { writeError(w, 400, "invalid JSON: "+err.Error()); return }
-	if err := runtime.switchModel(r.Context(), req.Provider, req.Model); err != nil { writeError(w, 400, err.Error()); return }
-	_, provider, model := runtime.current()
-	writeJSON(w, 200, map[string]any{"ok": true, "provider": provider, "model": model})
-} }
+func handleModelSelect(runtime *agentRuntime) http.HandlerFunc { return func(w http.ResponseWriter, r *http.Request) { var req modelSelectRequest; if err := json.NewDecoder(r.Body).Decode(&req); err != nil { writeError(w, 400, "invalid JSON: "+err.Error()); return }; if err := runtime.switchModel(r.Context(), req.Provider, req.Model); err != nil { writeError(w, 400, err.Error()); return }; _, _, provider, model := runtime.current(); writeJSON(w, 200, map[string]any{"ok": true, "provider": provider, "model": model}) } }
 
-func buildAgent(ctx context.Context) (*agent.Agent, error) {
-	model, err := newModel(ctx, strings.ToLower(*flagProvider), *flagModel)
-	if err != nil { return nil, fmt.Errorf("create model (%s): %w", *flagProvider, err) }
+func buildAgent(ctx context.Context) (*agent.Agent, utcp.UtcpClientInterface, error) {
+	model, err := newModel(ctx, strings.ToLower(*flagProvider), *flagModel); if err != nil { return nil, nil, fmt.Errorf("create model (%s): %w", *flagProvider, err) }
+
+	// UTCP is initialized once for the gateway and becomes the shared tool bus.
+	// The provider file is resolved from the repository when running from source.
+	providersPath := filepath.Join("cmd", "gateway", "web", "providers.json")
+	if _, statErr := os.Stat(providersPath); statErr != nil { providersPath = "" }
+	cfg := &utcp.UtcpClientConfig{ProvidersFilePath: providersPath}
+	client, err := utcp.NewUTCPClient(ctx, cfg, nil, nil); if err != nil { return nil, nil, fmt.Errorf("create UTCP client: %w", err) }
+
 	mem := memory.NewSessionMemory(memory.NewMemoryBankWithStore(memory.NewInMemoryStore()), *flagContext)
-	return agent.New(agent.Options{Model: model, Memory: mem, SystemPrompt: *flagSystem, ContextLimit: *flagContext})
+	ag, err := agent.New(agent.Options{Model: model, Memory: mem, SystemPrompt: *flagSystem, ContextLimit: *flagContext}); if err != nil { return nil, nil, err }
+	return ag, client, nil
 }
 
 type chatRequest struct { Session string `json:"session"`; Message string `json:"message"` }
 type chatResponse struct { Response string `json:"response"`; Session string `json:"session"` }
-
-func handleChat(runtime *agentRuntime) http.HandlerFunc { return func(w http.ResponseWriter, r *http.Request) {
-	var req chatRequest; if err := json.NewDecoder(r.Body).Decode(&req); err != nil { writeError(w, 400, "invalid JSON: "+err.Error()); return }; if err := validateRequest(req); err != nil { writeError(w, 400, err.Error()); return }
-	ag, _, _ := runtime.current(); out, err := ag.Generate(r.Context(), req.Session, req.Message); if err != nil { writeError(w, 500, err.Error()); return }; writeJSON(w, 200, chatResponse{Response: fmt.Sprint(out), Session: req.Session})
-} }
-
-func handleStream(runtime *agentRuntime) http.HandlerFunc { return func(w http.ResponseWriter, r *http.Request) {
-	var req chatRequest; if err := json.NewDecoder(r.Body).Decode(&req); err != nil { writeError(w, 400, "invalid JSON: "+err.Error()); return }; if err := validateRequest(req); err != nil { writeError(w, 400, err.Error()); return }
-	ag, _, _ := runtime.current(); flusher, ok := w.(http.Flusher); if !ok { writeError(w, 500, "streaming not supported by transport"); return }
-	w.Header().Set("Content-Type", "text/event-stream"); w.Header().Set("Cache-Control", "no-cache"); w.Header().Set("Connection", "keep-alive"); w.WriteHeader(http.StatusOK)
-	ch, err := ag.GenerateStream(r.Context(), req.Session, req.Message); if err != nil { fmt.Fprintf(w, "data: error: %s\n\n", err.Error()); flusher.Flush(); return }
-	for chunk := range ch { if chunk.Err != nil { fmt.Fprintf(w, "data: error: %s\n\n", chunk.Err.Error()); flusher.Flush(); return }; if chunk.Done { fmt.Fprint(w, "data: [DONE]\n\n"); flusher.Flush(); return }; if chunk.Delta != "" { fmt.Fprintf(w, "data: %s\n\n", chunk.Delta); flusher.Flush() } }
-} }
-
+func handleChat(runtime *agentRuntime) http.HandlerFunc { return func(w http.ResponseWriter, r *http.Request) { var req chatRequest; if err := json.NewDecoder(r.Body).Decode(&req); err != nil { writeError(w, 400, "invalid JSON: "+err.Error()); return }; if err := validateRequest(req); err != nil { writeError(w, 400, err.Error()); return }; ag, _, _, _ := runtime.current(); out, err := ag.Generate(r.Context(), req.Session, req.Message); if err != nil { writeError(w, 500, err.Error()); return }; writeJSON(w, 200, chatResponse{Response: fmt.Sprint(out), Session: req.Session}) } }
+func handleStream(runtime *agentRuntime) http.HandlerFunc { return func(w http.ResponseWriter, r *http.Request) { var req chatRequest; if err := json.NewDecoder(r.Body).Decode(&req); err != nil { writeError(w, 400, "invalid JSON: "+err.Error()); return }; if err := validateRequest(req); err != nil { writeError(w, 400, err.Error()); return }; ag, _, _, _ := runtime.current(); flusher, ok := w.(http.Flusher); if !ok { writeError(w, 500, "streaming not supported by transport"); return }; w.Header().Set("Content-Type", "text/event-stream"); w.Header().Set("Cache-Control", "no-cache"); w.Header().Set("Connection", "keep-alive"); w.WriteHeader(http.StatusOK); ch, err := ag.GenerateStream(r.Context(), req.Session, req.Message); if err != nil { fmt.Fprintf(w, "data: error: %s\n\n", err.Error()); flusher.Flush(); return }; for chunk := range ch { if chunk.Err != nil { fmt.Fprintf(w, "data: error: %s\n\n", chunk.Err.Error()); flusher.Flush(); return }; if chunk.Done { fmt.Fprint(w, "data: [DONE]\n\n"); flusher.Flush(); return }; if chunk.Delta != "" { fmt.Fprintf(w, "data: %s\n\n", chunk.Delta); flusher.Flush() } } } }
 func handleHealth(w http.ResponseWriter, _ *http.Request) { writeJSON(w, 200, map[string]any{"ok": true}) }
 func validateRequest(req chatRequest) error { if strings.TrimSpace(req.Session) == "" { return errors.New("session is required") }; if strings.TrimSpace(req.Message) == "" { return errors.New("message is required") }; return nil }
 func withTimeout(d time.Duration, h http.Handler) http.Handler { return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { ctx, cancel := context.WithTimeout(r.Context(), d); defer cancel(); h.ServeHTTP(w, r.WithContext(ctx)) }) }
