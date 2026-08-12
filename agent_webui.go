@@ -1,7 +1,6 @@
 package agent
 
-// WebUISkills returns the currently loaded skills in deterministic order.
-// The returned slice is a copy and can be safely serialized by an HTTP UI.
+// WebUISkills returns the currently loaded Skill System 2.0 definitions.
 func (a *Agent) WebUISkills() []SkillDefinition {
 	if a == nil {
 		return nil
@@ -16,14 +15,15 @@ func (a *Agent) WebUISkills() []SkillDefinition {
 		copySkill.Triggers = append([]string(nil), skill.Triggers...)
 		copySkill.Dependencies = append([]string(nil), skill.Dependencies...)
 		copySkill.Tools = append([]string(nil), skill.Tools...)
+		// Evaluators may contain implementation details; don't expose them to the UI.
 		copySkill.Evaluator = nil
 		out = append(out, copySkill)
 	}
 	return out
 }
 
-// WebUITools returns the tool specifications currently visible to the agent.
-// It intentionally exposes metadata only; invocation remains inside the agent runtime.
+// WebUITools returns tool metadata currently visible to the agent.
+// Invocation remains inside the agent runtime.
 func (a *Agent) WebUITools() []ToolSpec {
 	if a == nil || a.toolCatalog == nil {
 		return nil
