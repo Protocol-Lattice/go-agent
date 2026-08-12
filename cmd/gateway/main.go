@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io/fs"
 	"log"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -20,6 +19,7 @@ import (
 	"github.com/Protocol-Lattice/go-agent/src/memory"
 	"github.com/Protocol-Lattice/go-agent/src/models"
 	utcp "github.com/universal-tool-calling-protocol/go-utcp"
+	"github.com/universal-tool-calling-protocol/go-utcp/src/plugins/codemode"
 )
 
 //go:embed web/*
@@ -29,7 +29,7 @@ var (
 	flagAddr = flag.String("addr", ":8080", "Listen address")
 	flagProvider = flag.String("provider", "dummy", "LLM provider: dummy|gemini|openai|anthropic|ollama|openrouter|vertex")
 	flagModel = flag.String("model", "local:", "Model ID for the selected provider")
-	flagSystem = flag.String("system", "You are a helpful assistant.", "System prompt")
+	flagSystem = flag.String("system", "You are a helpful assistant. You can orchestrate UTCP tools and delegate work to specialist sub-agents.", "System prompt")
 	flagTimeout = flag.Duration("timeout", 60*time.Second, "Per-request timeout")
 	flagContext = flag.Int("context", 8, "Max memory records retrieved per turn")
 )
@@ -40,6 +40,7 @@ type agentRuntime struct {
 	utcp utcp.UtcpClientInterface
 	provider string
 	model string
+	subagents map[string]*agent.Agent
 }
 
 func (r *agentRuntime) current() (*agent.Agent, utcp.UtcpClientInterface, string, string) {
@@ -55,7 +56,7 @@ func (r *agentRuntime) switchModel(ctx context.Context, provider, model string) 
 	llm, err := newModel(ctx, provider, model); if err != nil { return err }
 	r.mu.Lock(); defer r.mu.Unlock()
 	mem := memory.NewSessionMemory(memory.NewMemoryBankWithStore(memory.NewInMemoryStore()), *flagContext)
-	fresh, err := agent.New(agent.Options{Model: llm, Memory: mem, SystemPrompt: *flagSystem, ContextLimit: *flagContext}); if err != nil { return err }
+	fresh, err := agent.New(agent.Options{Model: llm, Memory: mem, SystemPrompt: *flagSystem, ContextLimit: *flagContext, UTCPClient: r.utcp, CodeMode: codemode.NewCodeModeUTCP(r.utcp, llm)}); if err != nil { return err }
 	r.ag, r.provider, r.model = fresh, provider, model
 	return nil
 }
@@ -68,7 +69,7 @@ func newModel(ctx context.Context, provider, model string) (models.Agent, error)
 func main() {
 	flag.Parse()
 	ag, client, err := buildAgent(context.Background()); if err != nil { log.Fatalf("build agent: %v", err) }
-	runtime := &agentRuntime{ag: ag, utcp: client, provider: strings.ToLower(*flagProvider), model: *flagModel}
+	runtime := &agentRuntime{ag: ag, utcp: client, provider: strings.ToLower(*flagProvider), model: *flagModel, subagents: make(map[string]*agent.Agent)}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /", handleWeb)
 	mux.Handle("POST /chat", withTimeout(*flagTimeout, handleChat(runtime)))
@@ -78,7 +79,8 @@ func main() {
 	mux.HandleFunc("GET /api/tools", handleTools(runtime))
 	mux.HandleFunc("GET /api/models", handleModels(runtime))
 	mux.Handle("POST /api/models/select", withTimeout(60*time.Second, handleModelSelect(runtime)))
-	log.Printf("gateway listening on %s (provider=%s model=%s, utcp=enabled)", *flagAddr, *flagProvider, *flagModel)
+	mux.Handle("POST /api/subagents", withTimeout(60*time.Second, handleCreateSubagent(runtime)))
+	log.Printf("gateway listening on %s (provider=%s model=%s, utcp=enabled, codemode=enabled)", *flagAddr, *flagProvider, *flagModel)
 	if err := http.ListenAndServe(*flagAddr, mux); err != nil { log.Fatal(err) }
 }
 
@@ -92,7 +94,7 @@ func handleWeb(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleSkills(runtime *agentRuntime) http.HandlerFunc { return func(w http.ResponseWriter, _ *http.Request) { ag, _, _, _ := runtime.current(); writeJSON(w, 200, map[string]any{"skills": ag.WebUISkills()}) } }
-func handleTools(runtime *agentRuntime) http.HandlerFunc { return func(w http.ResponseWriter, r *http.Request) {
+func handleTools(runtime *agentRuntime) http.HandlerFunc { return func(w http.ResponseWriter, _ *http.Request) {
 	ag, client, _, _ := runtime.current()
 	tools := ag.WebUITools()
 	if client != nil { if utcpTools, err := client.SearchTools("", 100); err == nil { for _, tool := range utcpTools { tools = append(tools, agent.ToolSpec{Name: tool.Name, Description: tool.Description, InputSchema: tool.InputSchema}) } } }
@@ -103,18 +105,43 @@ func handleModels(runtime *agentRuntime) http.HandlerFunc { return func(w http.R
 type modelSelectRequest struct { Provider string `json:"provider"`; Model string `json:"model"` }
 func handleModelSelect(runtime *agentRuntime) http.HandlerFunc { return func(w http.ResponseWriter, r *http.Request) { var req modelSelectRequest; if err := json.NewDecoder(r.Body).Decode(&req); err != nil { writeError(w, 400, "invalid JSON: "+err.Error()); return }; if err := runtime.switchModel(r.Context(), req.Provider, req.Model); err != nil { writeError(w, 400, err.Error()); return }; _, _, provider, model := runtime.current(); writeJSON(w, 200, map[string]any{"ok": true, "provider": provider, "model": model}) } }
 
+type createSubagentRequest struct { Name string `json:"name"`; Description string `json:"description"`; SystemPrompt string `json:"system_prompt"`; Provider string `json:"provider"`; Model string `json:"model"` }
+func handleCreateSubagent(runtime *agentRuntime) http.HandlerFunc { return func(w http.ResponseWriter, r *http.Request) {
+	var req createSubagentRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil { writeError(w, 400, "invalid JSON: "+err.Error()); return }
+	req.Name = strings.TrimSpace(req.Name); req.Description = strings.TrimSpace(req.Description); req.SystemPrompt = strings.TrimSpace(req.SystemPrompt)
+	if req.Name == "" { return writeError(w, 400, "name is required") }
+	if strings.ContainsAny(req.Name, " .:/\\") { return writeError(w, 400, "name may only contain letters, numbers, '-' and '_'") }
+	if req.Description == "" { req.Description = "Sub-agent created from the go-agent WebUI" }
+	if req.SystemPrompt == "" { req.SystemPrompt = req.Description }
+	r.mu.Lock()
+	if _, exists := r.subagents[req.Name]; exists { r.mu.Unlock(); return writeError(w, 409, "sub-agent already exists") }
+	provider, model := r.provider, r.model
+	client := r.utcp
+	r.mu.Unlock()
+	if req.Provider != "" { provider = strings.ToLower(strings.TrimSpace(req.Provider)) }
+	if req.Model != "" { model = strings.TrimSpace(req.Model) }
+	llm, err := newModel(r.Context(), provider, model); if err != nil { return writeError(w, 400, fmt.Sprintf("create model: %v", err)) }
+	mem := memory.NewSessionMemory(memory.NewMemoryBankWithStore(memory.NewInMemoryStore()), *flagContext)
+	sa, err := agent.New(agent.Options{Model: llm, Memory: mem, SystemPrompt: req.SystemPrompt, ContextLimit: *flagContext, UTCPClient: client, CodeMode: codemode.NewCodeModeUTCP(client, llm)}); if err != nil { return writeError(w, 500, err.Error()) }
+	if err := sa.RegisterAsUTCPProvider(r.Context(), client, req.Name, req.Description); err != nil { return writeError(w, 500, fmt.Sprintf("register UTCP provider: %v", err)) }
+	r.mu.Lock(); r.subagents[req.Name] = sa; r.mu.Unlock()
+	writeJSON(w, 201, map[string]any{"ok": true, "name": req.Name, "description": req.Description, "provider": provider, "model": model, "tool": req.Name})
+} }
+
 func buildAgent(ctx context.Context) (*agent.Agent, utcp.UtcpClientInterface, error) {
 	model, err := newModel(ctx, strings.ToLower(*flagProvider), *flagModel); if err != nil { return nil, nil, fmt.Errorf("create model (%s): %w", *flagProvider, err) }
-
-	// UTCP is initialized once for the gateway and becomes the shared tool bus.
-	// The provider file is resolved from the repository when running from source.
 	providersPath := filepath.Join("cmd", "gateway", "web", "providers.json")
 	if _, statErr := os.Stat(providersPath); statErr != nil { providersPath = "" }
 	cfg := &utcp.UtcpClientConfig{ProvidersFilePath: providersPath}
 	client, err := utcp.NewUTCPClient(ctx, cfg, nil, nil); if err != nil { return nil, nil, fmt.Errorf("create UTCP client: %w", err) }
 
+	// CodeMode uses the same UTCP client as the agent. This lets natural-language
+	// requests compile into tool calls and invoke both remote UTCP tools and
+	// in-process sub-agents registered below.
+	codeMode := codemode.NewCodeModeUTCP(client, model)
 	mem := memory.NewSessionMemory(memory.NewMemoryBankWithStore(memory.NewInMemoryStore()), *flagContext)
-	ag, err := agent.New(agent.Options{Model: model, Memory: mem, SystemPrompt: *flagSystem, ContextLimit: *flagContext}); if err != nil { return nil, nil, err }
+	ag, err := agent.New(agent.Options{Model: model, Memory: mem, SystemPrompt: *flagSystem, ContextLimit: *flagContext, UTCPClient: client, CodeMode: codeMode}); if err != nil { return nil, nil, err }
 	return ag, client, nil
 }
 
