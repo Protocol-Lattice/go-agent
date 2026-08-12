@@ -1,33 +1,32 @@
 package agent
 
-// WebUISkills returns the currently loaded Skill System 2.0 definitions.
+// WebUISkills returns the skills currently loaded by the Agent as
+// SkillDefinition values suitable for the Web UI. The runtime Agent stores
+// legacy Skill documents, while SkillDefinition is the richer declarative
+// Skill System 2.0 type, so the legacy fields are wrapped without inventing
+// v2 metadata that is not present at runtime.
 func (a *Agent) WebUISkills() []SkillDefinition {
 	if a == nil {
 		return nil
 	}
-	a.skillMu.RLock()
-	defer a.skillMu.RUnlock()
 
-	out := make([]SkillDefinition, 0, len(a.skills))
-	for _, definition := range a.skills {
-		// SkillDefinition embeds Skill, so copy the definition itself first.
-		copyDefinition := definition
-		copyDefinition.Tags = append([]string(nil), definition.Tags...)
-		copyDefinition.Triggers = append([]string(nil), definition.Triggers...)
-		copyDefinition.Dependencies = append([]string(nil), definition.Dependencies...)
-		copyDefinition.Tools = append([]string(nil), definition.Tools...)
-		// Evaluators are runtime implementations and must not cross the API boundary.
-		copyDefinition.Evaluator = nil
-		out = append(out, copyDefinition)
+	skills := a.Skills()
+	out := make([]SkillDefinition, 0, len(skills))
+	for _, skill := range skills {
+		out = append(out, SkillDefinition{
+			Skill:   skill,
+			Version: "1",
+			Enabled: true,
+		})
 	}
 	return out
 }
 
-// WebUITools returns tool metadata currently visible to the agent.
+// WebUITools returns tool metadata currently visible to the Agent.
 // Invocation remains inside the agent runtime.
 func (a *Agent) WebUITools() []ToolSpec {
 	if a == nil || a.toolCatalog == nil {
 		return nil
 	}
-	return append([]ToolSpec(nil), a.toolCatalog.Specs()...)
+	return a.toolCatalog.Specs()
 }
