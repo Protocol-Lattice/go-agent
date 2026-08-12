@@ -1,20 +1,23 @@
 [
   {
     "provider_type": "cli",
-    "name": "shell",
-    "command_name": "./cmd/gateway/web/discover_shell.sh",
-    "execute_command": "bash -lc {{.Inputs.command}}"
+    "name": "filesystem",
+    "command_name": "go-harness-filesystem",
+    "discover_command": "go-harness-filesystem --root . list-tools",
+    "execute_command": "go-harness-filesystem --root . {{.ToolName}} {{json .Inputs}}"
   },
   {
     "provider_type": "cli",
     "name": "git",
-    "command_name": "./cmd/gateway/web/discover_git.sh",
-    "execute_command": "git {{.Inputs.command}}"
+    "command_name": "go-harness-git",
+    "discover_command": "go-harness-git --root . list-tools",
+    "execute_command": "go-harness-git --root . {{.ToolName}} {{json .Inputs}}"
   },
   {
     "provider_type": "cli",
-    "name": "filesystem",
-    "command_name": "./cmd/gateway/web/discover_filesystem.sh",
-    "execute_command": "bash -lc {{.Inputs.command}}"
+    "name": "shell",
+    "command_name": "go-harness-shell",
+    "discover_command": "go-harness-shell --root . list-tools",
+    "execute_command": "go-harness-shell --root . {{.ToolName}} {{json .Inputs}}"
   }
 ]
