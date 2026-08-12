@@ -1,0 +1,97 @@
+{
+  "version": "1.0",
+  "providers": [
+    {
+      "name": "http",
+      "description": "Example HTTP provider exposed through UTCP.",
+      "utcp": {
+        "transport": "http",
+        "server_url": "https://example.com/utcp"
+      },
+      "tools": [
+        {
+          "name": "echo",
+          "description": "Echo a message.",
+          "example": {
+            "message": "hello from go-agent"
+          }
+        },
+        {
+          "name": "timestamp",
+          "description": "Return the current server timestamp.",
+          "example": {}
+        }
+      ]
+    },
+    {
+      "name": "specialist",
+      "description": "Example agent registered as a UTCP provider.",
+      "utcp": {
+        "transport": "in-process",
+        "registration": "RegisterAsUTCPProvider"
+      },
+      "tools": [
+        {
+          "name": "specialist",
+          "description": "Answer a specialist question.",
+          "example": {
+            "instruction": "Tell me a fun fact about the Eiffel Tower"
+          }
+        }
+      ]
+    },
+    {
+      "name": "summarizer",
+      "description": "Example summarization agent exposed as a UTCP tool.",
+      "utcp": {
+        "transport": "in-process",
+        "registration": "RegisterAsUTCPProvider"
+      },
+      "tools": [
+        {
+          "name": "summarizer",
+          "description": "Summarize text supplied in instruction.",
+          "example": {
+            "instruction": "Summarize the results from the previous tool calls."
+          }
+        }
+      ]
+    },
+    {
+      "name": "workflow",
+      "description": "Example multi-tool UTCP workflow.",
+      "utcp": {
+        "transport": "in-process",
+        "client": "UTCPClient"
+      },
+      "tools": [
+        {
+          "name": "specialist_then_summarizer",
+          "description": "Call specialist tools and pass their results to a summarizer.",
+          "example": {
+            "steps": [
+              {
+                "tool": "specialist.specialist",
+                "arguments": {
+                  "instruction": "Tell me a fun fact about the Eiffel Tower"
+                }
+              },
+              {
+                "tool": "specialist.specialist",
+                "arguments": {
+                  "instruction": "Tell me a fun fact about the Great Wall of China"
+                }
+              },
+              {
+                "tool": "summarizer.summarizer",
+                "arguments": {
+                  "instruction": "Summarize the results from the previous two steps."
+                }
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}
