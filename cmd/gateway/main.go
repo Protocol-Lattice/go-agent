@@ -64,7 +64,16 @@ func main() {
 	if err != nil {
 		log.Fatalf("build agent: %v", err)
 	}
+
 	runtime := &agentRuntime{ag: ag, utcp: client, provider: strings.ToLower(*flagProvider), model: *flagModel, subagents: make(map[string]*agent.Agent)}
+	persisted, err := loadPersistedSubagents(context.Background(), client, runtime.provider, runtime.model)
+	if err != nil {
+		log.Printf("warning: failed to load persisted subagents: %v", err)
+	} else {
+		runtime.subagents = persisted
+		log.Printf("loaded %d persisted subagent(s)", len(persisted))
+	}
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /", handleWeb)
 	mux.Handle("POST /chat", withTimeout(*flagTimeout, handleChat(runtime)))
