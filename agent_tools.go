@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -16,11 +17,13 @@ import (
 
 const defaultToolCacheTTL = 30 * time.Second
 
+var codeModeToolCallPattern = regexp.MustCompile(`\bCallTool(?:Stream)?\s*\(\s*"((?:\\.|[^"\\])*)"`)
+var codeModeToolCallAnyPattern = regexp.MustCompile(`\bCallTool(?:Stream)?\s*\(`)
+
 // userLooksLikeToolCall returns true if the user *likely* meant to call a tool.
 func (a *Agent) userLooksLikeToolCall(s string) bool {
 	s = strings.TrimSpace(strings.ToLower(s))
 
-	// Looks like: echo {...}
 	if strings.Contains(s, "{") && strings.Contains(s, "}") {
 		parts := strings.Fields(s)
 		if len(parts) > 0 {
@@ -33,12 +36,10 @@ func (a *Agent) userLooksLikeToolCall(s string) bool {
 		}
 	}
 
-	// Looks like: tool: echo {...}
 	if strings.HasPrefix(s, "tool:") {
 		return true
 	}
 
-	// Looks like: {"tool": "echo", ...}
 	if strings.HasPrefix(s, "{") && strings.Contains(s, "\"tool\"") {
 		return true
 	}
@@ -130,6 +131,49 @@ Rules:
 	return resp.Tools, nil
 }
 
+// validateCodeModeToolCalls treats generated CodeMode source as untrusted input.
+// Only exact, canonical tool names from the agent registry may cross the
+// CodeMode -> UTCP boundary. Dynamic tool names are rejected because they cannot
+// be proven to belong to the active registry before execution.
+func (a *Agent) validateCodeModeToolCalls(code string) error {
+	if !codeModeToolCallAnyPattern.MatchString(code) {
+		return nil
+	}
+
+	matches := codeModeToolCallPattern.FindAllStringSubmatch(code, -1)
+	if len(matches) == 0 {
+		return fmt.Errorf("codemode rejected: tool name must be an exact string literal in CallTool/CallToolStream")
+	}
+
+	allowed := make(map[string]struct{})
+	for _, spec := range a.ToolSpecs() {
+		name := strings.TrimSpace(spec.Name)
+		if name == "" || name == codemode.CodeModeToolName || name == "codemode.run_code" {
+			continue
+		}
+		allowed[name] = struct{}{}
+	}
+
+	for _, match := range matches {
+		if len(match) < 2 {
+			return fmt.Errorf("codemode rejected: unable to determine tool name")
+		}
+		name, err := strconv.Unquote(`"` + match[1] + `"`)
+		if err != nil {
+			return fmt.Errorf("codemode rejected: invalid tool name literal: %w", err)
+		}
+		if _, ok := allowed[name]; !ok {
+			return fmt.Errorf("codemode unknown_tool: %s; use only an exact canonical name from the active UTCP registry", name)
+		}
+	}
+
+	if len(matches) != len(codeModeToolCallAnyPattern.FindAllString(code, -1)) {
+		return fmt.Errorf("codemode rejected: every CallTool/CallToolStream invocation must use an exact string-literal canonical tool name")
+	}
+
+	return nil
+}
+
 func (a *Agent) executeTool(
 	ctx context.Context,
 	sessionID, toolName string,
@@ -140,8 +184,6 @@ func (a *Agent) executeTool(
 	}
 
 	// 0. Built-in CodeMode tool.
-	// ToolSpecs exposes codemode.run_code from a.CodeMode, so execution must
-	// also route it here instead of forwarding it to the UTCP client.
 	if toolName == codemode.CodeModeToolName || toolName == "codemode.run_code" {
 		if a.CodeMode == nil {
 			return nil, fmt.Errorf("codemode is not configured")
@@ -153,6 +195,9 @@ func (a *Agent) executeTool(
 		code, ok := args["code"].(string)
 		if !ok || strings.TrimSpace(code) == "" {
 			return nil, fmt.Errorf("codemode.run_code requires non-empty string field: code")
+		}
+		if err := a.validateCodeModeToolCalls(code); err != nil {
+			return nil, err
 		}
 
 		timeout := 30000
@@ -190,7 +235,6 @@ func (a *Agent) executeTool(
 		return result.Value, nil
 	}
 
-	// 1. Locally registered tool.
 	if tool, _, ok := a.lookupTool(toolName); ok {
 		response, err := tool.Invoke(ctx, ToolRequest{
 			SessionID: sessionID,
@@ -202,7 +246,6 @@ func (a *Agent) executeTool(
 		return response.Content, nil
 	}
 
-	// 2. Remote UTCP tool.
 	if a.UTCPClient != nil {
 		if streamFlag, ok := args["stream"].(bool); ok && streamFlag {
 			stream, err := a.UTCPClient.CallToolStream(ctx, toolName, args)
@@ -239,9 +282,6 @@ func (a *Agent) detectDirectToolCall(s string) (string, map[string]any, bool) {
 	}
 	lower := strings.ToLower(s)
 
-	// ---------------------------------------------------------
-	// Case 1: Raw JSON {"tool":"...", "arguments":{...}}
-	// ---------------------------------------------------------
 	if strings.HasPrefix(s, "{") && strings.Contains(s, "\"tool\"") {
 		var payload struct {
 			Tool      string         `json:"tool"`
@@ -255,9 +295,6 @@ func (a *Agent) detectDirectToolCall(s string) (string, map[string]any, bool) {
 		}
 	}
 
-	// ---------------------------------------------------------
-	// Case 2: DSL: tool: echo { ... }
-	// ---------------------------------------------------------
 	if strings.HasPrefix(lower, "tool:") {
 		rest := strings.TrimSpace(s[len("tool:"):])
 		parts := strings.Fields(rest)
@@ -275,9 +312,6 @@ func (a *Agent) detectDirectToolCall(s string) (string, map[string]any, bool) {
 		}
 	}
 
-	// ---------------------------------------------------------
-	// Case 3: Shorthand: echo { ... }
-	// ---------------------------------------------------------
 	parts := strings.Fields(s)
 	if len(parts) >= 2 {
 		tool := strings.TrimSpace(parts[0])
@@ -295,9 +329,6 @@ func (a *Agent) detectDirectToolCall(s string) (string, map[string]any, bool) {
 	return "", nil, false
 }
 
-// resolveDirectToolName resolves a syntactically valid direct invocation. Tool
-// discovery is deliberately deferred until this point so ordinary prompts do
-// not trigger a potentially remote ToolSpecs refresh.
 func (a *Agent) resolveDirectToolName(name string) (string, bool) {
 	nameLower := strings.ToLower(strings.TrimSpace(name))
 	if nameLower == "" {
@@ -441,21 +472,14 @@ func renderUtcpToolsForPrompt(specs []tools.Tool) string {
 	sb.WriteString("------------------------------------------------------------\n\n")
 
 	for _, t := range specs {
-
 		sb.WriteString(fmt.Sprintf("TOOL: %s\n", t.Name))
 		sb.WriteString(fmt.Sprintf("DESCRIPTION: %s\n\n", t.Description))
-
-		// -------------------------------
-		// INPUT FIELD LIST
-		// -------------------------------
 		sb.WriteString("INPUT FIELDS (USE EXACTLY THESE KEYS):\n")
 
 		if len(t.Inputs.Properties) == 0 {
 			sb.WriteString("- (no fields)\n")
 		} else {
 			for key, raw := range t.Inputs.Properties {
-
-				// Try to extract "type" from nested schema if present
 				propType := "any"
 				if m, ok := raw.(map[string]any); ok {
 					if v, ok := m["type"]; ok {
@@ -464,12 +488,10 @@ func renderUtcpToolsForPrompt(specs []tools.Tool) string {
 						}
 					}
 				}
-
 				sb.WriteString(fmt.Sprintf("- %s: %s\n", key, propType))
 			}
 		}
 
-		// Required field list
 		if len(t.Inputs.Required) > 0 {
 			sb.WriteString("\nREQUIRED FIELDS:\n")
 			for _, r := range t.Inputs.Required {
@@ -478,23 +500,16 @@ func renderUtcpToolsForPrompt(specs []tools.Tool) string {
 		}
 
 		sb.WriteString("\n")
-
-		// Full JSON schema for LLM clarity
 		inBytes, _ := json.MarshalIndent(t.Inputs, "", "  ")
 		sb.WriteString("FULL INPUT SCHEMA (JSON):\n")
 		sb.WriteString(string(inBytes))
 		sb.WriteString("\n\n")
-
-		// -------------------------------
-		// OUTPUT SCHEMA
-		// -------------------------------
 		sb.WriteString("OUTPUT SCHEMA (EXACT SHAPE RETURNED BY TOOL):\n")
 
 		if t.Outputs.Type != "" || len(t.Outputs.Properties) > 0 {
 			outBytes, _ := json.MarshalIndent(t.Outputs, "", "  ")
 			sb.WriteString(string(outBytes))
 		} else {
-			// Generic fallback
 			sb.WriteString("{ \"result\": <any> }\n")
 		}
 
@@ -519,7 +534,6 @@ func (a *Agent) lookupSubAgent(name string) (SubAgent, bool) {
 	return a.subAgentDirectory.Lookup(name)
 }
 
-// ToolSpecs returns the registered tool specifications in deterministic order.
 func (a *Agent) ToolSpecs() []tools.Tool {
 	now := time.Now()
 
@@ -534,7 +548,6 @@ func (a *Agent) ToolSpecs() []tools.Tool {
 	var allSpecs []tools.Tool
 	seen := make(map[string]bool)
 
-	// 1. Local tools registered via ToolCatalog
 	if a.toolCatalog != nil {
 		for _, spec := range a.toolCatalog.Specs() {
 			name := strings.TrimSpace(spec.Name)
@@ -563,7 +576,6 @@ func (a *Agent) ToolSpecs() []tools.Tool {
 		}
 	}
 
-	// 2. Built-in CodeMode tool (if available)
 	if a.CodeMode != nil {
 		if cmTools, err := a.CodeMode.Tools(); err == nil {
 			for _, t := range cmTools {
@@ -585,7 +597,6 @@ func (a *Agent) ToolSpecs() []tools.Tool {
 		limit = 50
 	}
 
-	// 3. Get UTCP tool specs and merge
 	if a.UTCPClient != nil {
 		utcpTools, _ := a.UTCPClient.SearchTools("", limit)
 		for _, tool := range utcpTools {
@@ -608,7 +619,6 @@ func (a *Agent) ToolSpecs() []tools.Tool {
 	return append([]tools.Tool(nil), allSpecs...)
 }
 
-// Tools returns the registered tools in deterministic order.
 func (a *Agent) Tools() []Tool {
 	if a.toolCatalog == nil {
 		return nil
@@ -616,7 +626,6 @@ func (a *Agent) Tools() []Tool {
 	return a.toolCatalog.Tools()
 }
 
-// SubAgents returns all registered sub-agents in deterministic order.
 func (a *Agent) SubAgents() []SubAgent {
 	if a.subAgentDirectory == nil {
 		return nil
@@ -636,11 +645,7 @@ func splitCommand(payload string) (name string, args string) {
 	return name, args
 }
 
-// likelyNeedsToolCall uses fast heuristics to determine if input likely needs a tool.
-// This AVOIDS expensive LLM calls for obvious non-tool queries.
-// EXTREMELY CONSERVATIVE: only filters pure informational questions.
 func (a *Agent) likelyNeedsToolCall(lowerInput string) bool {
-	// 0. Skip for very short inputs or greetings
 	if len(lowerInput) < 2 {
 		return false
 	}
@@ -651,7 +656,6 @@ func (a *Agent) likelyNeedsToolCall(lowerInput string) bool {
 		}
 	}
 
-	// 1. Check for pure informational question patterns WITHOUT any action words
 	pureQuestionStarters := []string{
 		"what is ", "what are ", "what does ", "what's ",
 		"why is ", "why are ", "why does ", "why do ",
@@ -665,7 +669,6 @@ func (a *Agent) likelyNeedsToolCall(lowerInput string) bool {
 
 	for _, starter := range pureQuestionStarters {
 		if strings.HasPrefix(lowerInput, starter) {
-			// Even pure questions might need tools if they mention specific actions
 			hasActionWord := strings.Contains(lowerInput, " search") ||
 				strings.Contains(lowerInput, " find") ||
 				strings.Contains(lowerInput, " get") ||
@@ -676,28 +679,20 @@ func (a *Agent) likelyNeedsToolCall(lowerInput string) bool {
 				strings.Contains(lowerInput, " exec")
 
 			if !hasActionWord {
-				// Pure informational question - skip tool orchestration
 				return false
 			}
 		}
 	}
 
-	// For EVERYTHING else, allow tool orchestration
-	// This includes: commands, greetings, tool requests, ambiguous queries, etc.
-	// Better to make an unnecessary LLM call than miss a tool request
 	return true
 }
 
 func isValidSnippet(code string) bool {
-	// invalid if LLM emits standalone maps like: map[value:hello world]
 	if strings.Contains(code, "map[value:") {
 		return false
 	}
-
-	// invalid if no __out assignment exists
 	if !strings.Contains(code, "__out") {
 		return false
 	}
-
 	return true
 }
