@@ -11,6 +11,25 @@ import (
 	"github.com/Protocol-Lattice/go-agent/src/models"
 )
 
+// shouldUseDirectCodeMode keeps CodeMode as an explicit execution strategy.
+// Broad repository work must go through the normal tool orchestrator so the
+// planner can inspect, edit, validate, and repeat tool calls across many steps.
+func shouldUseDirectCodeMode(input string) bool {
+	lower := strings.ToLower(strings.TrimSpace(input))
+	for _, marker := range []string{
+		"codemode",
+		"code mode",
+		"run code",
+		"execute go code",
+		"execute code",
+	} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
+}
+
 // GenerateStream provides a streaming interface for the agent's generation process.
 // It follows the same logic as Generate but returns a channel of chunks.
 func (a *Agent) GenerateStream(ctx context.Context, sessionID, userInput string) (<-chan models.StreamChunk, error) {
@@ -27,7 +46,7 @@ func (a *Agent) GenerateStream(ctx context.Context, sessionID, userInput string)
 		return nil, errors.New("user input is empty")
 	}
 
-	// Helper to wrap immediate result in a stream
+	// Helper to wrap immediate result in a stream.
 	immediateStream := func(val any, err error) (<-chan models.StreamChunk, error) {
 		ch := make(chan models.StreamChunk, 1)
 		if err != nil {
@@ -55,9 +74,7 @@ func (a *Agent) GenerateStream(ctx context.Context, sessionID, userInput string)
 		return immediateStream(out, nil)
 	}
 
-	// CodeMode can make an LLM-backed selection pass before deciding that it
-	// does not handle the request, so overlap it with context retrieval. Direct
-	// tool and sub-agent commands above remain free of speculative retrieval.
+	// Prefetch context while the agent decides whether tool orchestration is needed.
 	prefetchCtx, cancelPrefetch := context.WithCancel(ctx)
 	defer cancelPrefetch()
 	var (
@@ -71,7 +88,9 @@ func (a *Agent) GenerateStream(ctx context.Context, sessionID, userInput string)
 	}()
 
 	// 2. CODEMODE
-	if a.CodeMode != nil {
+	// Do not automatically short-circuit every request into one CodeMode call.
+	// In particular, repository-wide refactors need the multi-step tool loop.
+	if a.CodeMode != nil && shouldUseDirectCodeMode(trimmed) {
 		handled, output, err := a.CodeMode.CallTool(ctx, userInput)
 		if err != nil {
 			return immediateStream(output, err)
@@ -82,6 +101,9 @@ func (a *Agent) GenerateStream(ctx context.Context, sessionID, userInput string)
 	}
 
 	// 3. TOOL ORCHESTRATOR
+	// This is intentionally reached for broad tasks such as repository refactors.
+	// The orchestrator can perform up to configuredToolLoopMaxSteps sequential
+	// tool steps instead of returning after the first tool invocation.
 	prefetchWG.Wait()
 	if handled, output, err := a.toolOrchestrator(ctx, sessionID, userInput, records); handled {
 		return immediateStream(output, err)
@@ -90,13 +112,11 @@ func (a *Agent) GenerateStream(ctx context.Context, sessionID, userInput string)
 	// 5. STORE USER MEMORY
 	a.storeMemory(sessionID, "user", userInput, nil)
 
-	// If it looked like a tool call but wasn't handled, return empty
 	if a.userLooksLikeToolCall(trimmed) {
 		return immediateStream("", nil)
 	}
 
 	// 6. LLM COMPLETION (Streaming)
-	// Build prompt manually to use pre-fetched records
 	var sb strings.Builder
 	sb.Grow(4096)
 	sb.WriteString(a.systemInstructions())
@@ -107,13 +127,11 @@ func (a *Agent) GenerateStream(ctx context.Context, sessionID, userInput string)
 	sb.WriteString("\n\n")
 
 	prompt := sb.String()
-
 	stream, err := a.model.GenerateStream(ctx, prompt)
 	if err != nil {
 		return nil, err
 	}
 
-	// Wrap the stream to intercept and store memory
 	outCh := make(chan models.StreamChunk)
 
 	if a.Guardrails != nil {
@@ -136,8 +154,6 @@ func (a *Agent) GenerateStream(ctx context.Context, sessionID, userInput string)
 				outCh <- models.StreamChunk{Err: gErr, Done: true}
 				return
 			}
-
-			// Stream out the validated text as one chunk
 			outCh <- models.StreamChunk{Delta: validatedText, FullText: validatedText, Done: true}
 			a.storeMemory(sessionID, "assistant", validatedText, nil)
 		}()
@@ -155,9 +171,7 @@ func (a *Agent) GenerateStream(ctx context.Context, sessionID, userInput string)
 				}
 				outCh <- chunk
 			}
-			// Store memory after completion
-			finalText := full.String()
-			a.storeMemory(sessionID, "assistant", finalText, nil)
+			a.storeMemory(sessionID, "assistant", full.String(), nil)
 		}()
 	}
 
