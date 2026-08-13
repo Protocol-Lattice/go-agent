@@ -7,13 +7,98 @@ function loadHistoryJSON(){try{const raw=localStorage.getItem(HISTORY_KEY),data=
 function saveHistoryJSON(data){localStorage.setItem(HISTORY_KEY,JSON.stringify(data,null,2))}function sessionHistory(id=activeSession){const all=loadHistoryJSON();return Array.isArray(all[id])?all[id]:[]}
 function persistMessage(role,text,id=activeSession){const all=loadHistoryJSON();if(!Array.isArray(all[id]))all[id]=[];all[id].push({role,text:String(text),timestamp:new Date().toISOString()});all[id]=all[id].slice(-200);saveHistoryJSON(all);renderHistory()}
 function addMessage(role,text='',persist=true){document.querySelector('.welcome')?.remove();const row=document.createElement('div');row.className=`msg ${role}`;const avatar=document.createElement('div');avatar.className='avatar';avatar.textContent=role==='user'?'YOU':'λ';const bubble=document.createElement('div');bubble.className='bubble';bubble.textContent=text;row.append(avatar,bubble);messages.appendChild(row);messages.scrollTop=messages.scrollHeight;if(persist&&text)persistMessage(role,text);return bubble}
-function addThinking(){document.querySelector('.welcome')?.remove();const row=document.createElement('div');row.className='msg assistant thinking-row';const avatar=document.createElement('div');avatar.className='avatar';avatar.textContent='λ';const bubble=document.createElement('div');bubble.className='bubble thinking-bubble';const wrap=document.createElement('div');wrap.className='thinking';const label=document.createElement('span');label.textContent='Thinking';const dots=document.createElement('span');dots.className='thinking-dots';dots.innerHTML='<i></i><i></i><i></i>';wrap.append(label,dots);bubble.append(wrap);row.append(avatar,bubble);messages.appendChild(row);messages.scrollTop=messages.scrollHeight;return {row,bubble,label,dots,tool:null}}
-function ensureToolPanel(thinking,name){name=String(name||'').trim();if(!name)return null;if(thinking.tool&&thinking.tool.name===name)return thinking.tool;const tool=document.createElement('div');tool.className='tool-activity';const button=document.createElement('button');button.type='button';button.className='tool-activity-toggle';button.setAttribute('aria-expanded','false');const icon=document.createElement('span');icon.className='tool-activity-icon';icon.textContent='⚙';const title=document.createElement('span');title.className='tool-activity-title';title.textContent=`apply tool ${name}`;const chevron=document.createElement('span');chevron.className='tool-activity-chevron';chevron.textContent='›';button.append(icon,title,chevron);const output=document.createElement('pre');output.className='tool-activity-output';output.hidden=true;output.textContent='Running…';button.addEventListener('click',()=>{const open=output.hidden;output.hidden=!open;button.setAttribute('aria-expanded',String(open));chevron.textContent=open?'⌄':'›'});tool.append(button,output);thinking.bubble.replaceChildren(tool);thinking.bubble.classList.add('thinking-bubble');thinking.label.textContent='Thinking';thinking.dots.style.display='none';thinking.row.classList.add('tool-thinking');thinking.tool={name,tool,button,output,chevron};messages.scrollTop=messages.scrollHeight;return thinking.tool}
+function addThinking(){document.querySelector('.welcome')?.remove();const row=document.createElement('div');row.className='msg assistant thinking-row';const avatar=document.createElement('div');avatar.className='avatar';avatar.textContent='λ';const bubble=document.createElement('div');bubble.className='bubble thinking-bubble';const wrap=document.createElement('div');wrap.className='thinking';const label=document.createElement('span');label.textContent='Thinking';const dots=document.createElement('span');dots.className='thinking-dots';dots.innerHTML='<i></i><i></i><i></i>';wrap.append(label,dots);bubble.append(wrap);row.append(avatar,bubble);messages.appendChild(row);messages.scrollTop=messages.scrollHeight;return {row,bubble,label,dots,tool:null,workflow:null}}
+
+function ensureWorkflowPanel(thinking){
+  if(thinking.workflow)return thinking.workflow;
+  const workflow=document.createElement('div');
+  workflow.className='tool-workflow';
+  const header=document.createElement('div');
+  header.className='tool-workflow-header';
+  const title=document.createElement('strong');
+  title.textContent='CodeMode workflow';
+  const count=document.createElement('span');
+  count.className='tool-workflow-count';
+  count.textContent='0 steps';
+  const stepsList=document.createElement('div');
+  stepsList.className='tool-workflow-steps';
+  header.append(title,count);
+  workflow.append(header,stepsList);
+  thinking.bubble.replaceChildren(workflow);
+  thinking.bubble.classList.add('thinking-bubble');
+  thinking.label.textContent='Thinking';
+  thinking.dots.style.display='none';
+  thinking.row.classList.add('tool-thinking');
+  thinking.workflow={container:workflow,countEl:count,stepsList:stepsList,stepsMap:new Map()};
+  return thinking.workflow;
+}
+
+function updateWorkflowCount(thinking,complete=false){
+  if(!thinking.workflow)return;
+  const total=thinking.workflow.stepsMap.size;
+  const statusText=complete?'complete':'running';
+  thinking.workflow.countEl.textContent=`${total} ${total===1?'step':'steps'} · ${statusText}`;
+}
+
+function ensureToolPanel(thinking,name){
+  name=String(name||'').trim();
+  if(!name)return null;
+  const wf=ensureWorkflowPanel(thinking);
+  if(wf.stepsMap.has(name)){
+    return wf.stepsMap.get(name);
+  }
+  const tool=document.createElement('div');
+  tool.className='tool-activity';
+  const button=document.createElement('button');
+  button.type='button';
+  button.className='tool-activity-toggle';
+  button.setAttribute('aria-expanded','false');
+  const icon=document.createElement('span');
+  icon.className='tool-activity-icon';
+  icon.textContent='⚙';
+  const title=document.createElement('span');
+  title.className='tool-activity-title';
+  title.textContent=`apply tool ${name}`;
+  const chevron=document.createElement('span');
+  chevron.className='tool-activity-chevron';
+  chevron.textContent='›';
+  button.append(icon,title,chevron);
+  const output=document.createElement('pre');
+  output.className='tool-activity-output';
+  output.hidden=true;
+  output.textContent='Running…';
+  button.addEventListener('click',()=>{
+    const open=output.hidden;
+    output.hidden=!open;
+    button.setAttribute('aria-expanded',String(open));
+    chevron.textContent=open?'⌄':'›';
+  });
+  tool.append(button,output);
+  wf.stepsList.appendChild(tool);
+  const panelData={name,tool,button,output,chevron};
+  wf.stepsMap.set(name,panelData);
+  thinking.tool=panelData;
+  updateWorkflowCount(thinking,false);
+  messages.scrollTop=messages.scrollHeight;
+  return panelData;
+}
+
 function setThinkingTool(thinking,name){return ensureToolPanel(thinking,name)}
 function setToolOutput(thinking,name,result){const panel=ensureToolPanel(thinking,name);if(!panel)return;let text=result;if(typeof result==='object'&&result!==null){try{text=JSON.stringify(result,null,2)}catch{text=String(result)}}panel.output.textContent=String(text??'No output returned');panel.output.dataset.ready='true';messages.scrollTop=messages.scrollHeight}
-function finishToolPanel(thinking){if(!thinking.tool)return;const panel=thinking.tool;if(panel.output.dataset.ready!=='true'){panel.output.textContent='No output returned';panel.output.dataset.ready='true'}panel.tool.classList.add('tool-complete');panel.chevron.textContent=panel.output.hidden?'›':'⌄'}
+function finishToolPanel(thinking){
+  if(!thinking.workflow)return;
+  for(const panel of thinking.workflow.stepsMap.values()){
+    if(panel.output.dataset.ready!=='true'){
+      panel.output.textContent='No output returned';
+      panel.output.dataset.ready='true';
+    }
+    panel.tool.classList.add('tool-complete');
+    panel.chevron.textContent=panel.output.hidden?'›':'⌄';
+  }
+  updateWorkflowCount(thinking,true);
+}
 function toolNameFromText(text){const s=String(text||'');const direct=s.match(/\bapply\s+tool\s+[`"']?([A-Za-z0-9_.:/-]+)[`"']?/i);if(direct)return direct[1];const result=s.match(/\btool\s*:\s*[`"']?([A-Za-z0-9_.:/-]+)[`"']?/i);return result?result[1]:''}
-function looksLikeToolResult(text){const s=String(text||'').trim();return /^\{?\s*map\[/.test(s)||(/\bok:true\b/.test(s)&&/\btool:/.test(s))||(/\btool\s*:\s*[A-Za-z0-9_.:/-]+/.test(s)&&/\bdata\s*:/.test(s))}
+function looksLikeToolResult(text){const s=String(text||'').trim();return /^\{?\s*map\[/.test(s)||(s.includes('ok:true')&&s.includes('tool:'))||(/\btool\s*:\s*[A-Za-z0-9_.:/-]+/.test(s)&&s.includes('data:'))}
 function stripToolActivity(text){return String(text||'').replace(/^\s*apply\s+tool\s+[`"']?[A-Za-z0-9_.:/-]+[`"']?\s*$/gim,'').trim()}
 function deleteSession(id,event){event?.stopPropagation();const all=loadHistoryJSON();if(!Object.prototype.hasOwnProperty.call(all,id))return;delete all[id];saveHistoryJSON(all);if(id===activeSession){activeSession='web';sessionInput.value='web';renderSession('web')}renderHistory();input.focus()}
 function renderHistory(){const all=loadHistoryJSON(),sessions=Object.entries(all).filter(([,items])=>Array.isArray(items)&&items.length).sort((a,b)=>String(b[1].at(-1)?.timestamp||'').localeCompare(String(a[1].at(-1)?.timestamp||'')));historyEl.replaceChildren();for(const [id,items] of sessions){const el=document.createElement('div');el.className='history-item capability'+(id===activeSession?' active':'');const content=document.createElement('button');content.type='button';content.className='history-content';const title=document.createElement('strong');title.textContent=id;const preview=document.createElement('span');preview.textContent=items.at(-1)?.text||'Empty chat';content.append(title,preview);content.addEventListener('click',()=>loadSession(id));const remove=document.createElement('button');remove.type='button';remove.className='history-delete';remove.title=`Delete ${id}`;remove.setAttribute('aria-label',`Delete ${id}`);remove.textContent='×';remove.addEventListener('click',e=>deleteSession(id,e));el.append(content,remove);historyEl.append(el)}if(!sessions.length)historyEl.innerHTML='<div class="empty">No chats yet</div>'}
