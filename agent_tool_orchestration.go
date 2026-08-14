@@ -82,16 +82,9 @@ func lastToolObservation(observations []string) string {
 	return observations[len(observations)-1]
 }
 
-// requestRequiresMutation prevents the planner from declaring a refactor/edit
-// complete after only discovery/read operations. This is deliberately based
-// on user intent, not on a particular filesystem provider name.
 func requestRequiresMutation(input string) bool {
 	lower := strings.ToLower(strings.TrimSpace(input))
-	for _, word := range []string{
-		"refactor", "rewrite", "modify", "edit", "update", "change", "fix",
-		"write", "create", "add", "remove", "delete", "rename", "move",
-		"implement", "patch", "replace",
-	} {
+	for _, word := range []string{"refactor", "rewrite", "modify", "edit", "update", "change", "fix", "write", "create", "add", "remove", "delete", "rename", "move", "implement", "patch", "replace"} {
 		if strings.Contains(lower, word) { return true }
 	}
 	return false
@@ -162,7 +155,7 @@ func (a *Agent) toolOrchestrator(ctx context.Context, sessionID, userInput strin
 	workspaceRules := fileBackedWorkspaceRules(files)
 	maxSteps := configuredToolLoopMaxSteps()
 	canonicalToolNames := codeModeToolNames(toolList)
-	requiresMutation := requestRequiresMutation(userInput)
+	_ = canonicalToolNames
 	mutationDone := false
 	var observations []string
 	var lastToolCallKey, lastToolCallValue string
