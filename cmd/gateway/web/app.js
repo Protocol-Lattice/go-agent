@@ -111,6 +111,85 @@ function subagentCard(item){const el=document.createElement('button');el.classNa
 async function loadSubagents(){try{const r=await fetch('/api/subagents');if(!r.ok)throw 0;const items=(await r.json()).subagents||[];subagentsEl.replaceChildren(...items.map(subagentCard));if(!items.length)subagentsEl.innerHTML='<div class="empty">No sub-agents yet</div>'}catch{subagentsEl.innerHTML='<div class="empty">Unavailable</div>'}}
 function openSubagentModal(){subagentError.textContent='';subagentForm.reset();subagentModal.classList.remove('hidden');setTimeout(()=>subagentName.focus(),0)}function closeSubagentModal(){subagentModal.classList.add('hidden')}
 async function submitSubagent(e){e.preventDefault();subagentError.textContent='';const payload={name:subagentName.value.trim(),description:subagentDescription.value.trim(),system_prompt:subagentPrompt.value.trim()};if(!payload.name)return;const button=subagentForm.querySelector('button[type="submit"]');button.disabled=true;try{const r=await fetch('/api/subagents',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}),data=await r.json();if(!r.ok)throw Error(data.error||`Request failed (${r.status})`);closeSubagentModal();await loadSubagents();input.value=`Use the ${data.name} sub-agent for the next task.`;input.focus();input.dispatchEvent(new Event('input'))}catch(e){subagentError.textContent=e.message}finally{button.disabled=false}}
-async function streamChat(session,message,bubble,thinking){const r=await fetch('/stream',{method:'POST',headers:{'Content-Type':'application/json','Accept':'text/event-stream'},body:JSON.stringify({session,message})});if(!r.ok){let d=`Request failed (${r.status})`;try{d=(await r.json()).error||d}catch{}throw Error(d)}if(!r.body)throw Error('Streaming is not supported by this browser');const reader=r.body.getReader(),decoder=new TextDecoder();let buffer='',answer='';while(true){const {value,done}=await reader.read();if(done)break;buffer+=decoder.decode(value,{stream:true});const events=buffer.split(/\n\n/);buffer=events.pop()||'';for(const event of events)for(const line of event.split('\n')){if(!line.startsWith('data: '))continue;const data=line.slice(6);if(!data)continue;try{const payload=JSON.parse(data);if(payload.error)throw Error(payload.error);if(payload.type==='tool_start'){setThinkingTool(thinking,payload.tool);continue}if(payload.type==='tool_result'){setToolOutput(thinking,payload.tool,payload.result);continue}if(payload.type==='delta'){const delta=String(payload.delta??'');const toolName=toolNameFromText(delta);if(looksLikeToolResult(delta)){if(toolName)setThinkingTool(thinking,toolName);if(thinking.tool)setToolOutput(thinking,thinking.tool.name,delta);continue}if(toolName){setThinkingTool(thinking,toolName);continue}answer+=delta;const clean=stripToolActivity(answer);if(clean){answer=clean;bubble.classList.remove('thinking-bubble');bubble.textContent=clean}}else if(payload.delta){const delta=String(payload.delta);const toolName=toolNameFromText(delta);if(looksLikeToolResult(delta)){if(toolName)setThinkingTool(thinking,toolName);if(thinking.tool)setToolOutput(thinking,thinking.tool.name,delta);continue}if(toolName){setThinkingTool(thinking,toolName);continue}answer+=delta;const clean=stripToolActivity(answer);if(clean){answer=clean;bubble.classList.remove('thinking-bubble');bubble.textContent=clean}}if(payload.done){finishToolPanel(thinking);const final=stripToolActivity(answer);if(final)persistMessage('assistant',final,session);return}}catch(e){if(e instanceof Error)throw e;answer+=data;bubble.classList.remove('thinking-bubble');bubble.textContent=answer}messages.scrollTop=messages.scrollHeight}}finishToolPanel(thinking);const final=stripToolActivity(answer);if(final)persistMessage('assistant',final,session)}
+const STREAM_IDLE_TIMEOUT_MS=60000;
+async function streamChat(session,message,bubble,thinking){
+  const controller=new AbortController();
+  let idle=setTimeout(()=>controller.abort(),STREAM_IDLE_TIMEOUT_MS);
+  const bump=()=>{clearTimeout(idle);idle=setTimeout(()=>controller.abort(),STREAM_IDLE_TIMEOUT_MS)};
+  const asTimeout=e=>e&&e.name==='AbortError'?Error('The agent stopped responding (timed out). Please try again.'):e;
+  let r;
+  try{
+    r=await fetch('/stream',{method:'POST',headers:{'Content-Type':'application/json','Accept':'text/event-stream'},body:JSON.stringify({session,message}),signal:controller.signal});
+  }catch(e){clearTimeout(idle);throw asTimeout(e)}
+  if(!r.ok){clearTimeout(idle);let d=`Request failed (${r.status})`;try{d=(await r.json()).error||d}catch{}throw Error(d)}
+  if(!r.body){clearTimeout(idle);throw Error('Streaming is not supported by this browser')}
+  const reader=r.body.getReader(),decoder=new TextDecoder();
+  let buffer='',answer='';
+  // No matter how the stream ends (explicit done signal, clean close, or
+  // error), always resolve the "Thinking…" bubble to a real final state so
+  // it can never sit spinning forever once the request has actually finished.
+  const finalize=()=>{
+    finishToolPanel(thinking);
+    const final=stripToolActivity(answer);
+    bubble.classList.remove('thinking-bubble');
+    if(final){
+      persistMessage('assistant',final,session);
+    }else if(!thinking.workflow){
+      bubble.textContent='(The agent finished without returning any text.)';
+    }
+    return final;
+  };
+  try{
+    while(true){
+      let value,done;
+      try{
+        ({value,done}=await reader.read());
+      }catch(e){throw asTimeout(e)}
+      bump();
+      if(done)break;
+      buffer+=decoder.decode(value,{stream:true});
+      const events=buffer.split(/\n\n/);
+      buffer=events.pop()||'';
+      for(const event of events)for(const line of event.split('\n')){
+        if(!line.startsWith('data: '))continue;
+        const data=line.slice(6);
+        if(!data)continue;
+        try{
+          const payload=JSON.parse(data);
+          if(payload.error)throw Error(payload.error);
+          if(payload.type==='tool_start'){setThinkingTool(thinking,payload.tool);continue}
+          if(payload.type==='tool_result'){setToolOutput(thinking,payload.tool,payload.result);continue}
+          if(payload.type==='delta'){
+            const delta=String(payload.delta??'');
+            const toolName=toolNameFromText(delta);
+            if(looksLikeToolResult(delta)){if(toolName)setThinkingTool(thinking,toolName);if(thinking.tool)setToolOutput(thinking,thinking.tool.name,delta);continue}
+            if(toolName){setThinkingTool(thinking,toolName);continue}
+            answer+=delta;
+            const clean=stripToolActivity(answer);
+            if(clean){answer=clean;bubble.classList.remove('thinking-bubble');bubble.textContent=clean}
+          }else if(payload.delta){
+            const delta=String(payload.delta);
+            const toolName=toolNameFromText(delta);
+            if(looksLikeToolResult(delta)){if(toolName)setThinkingTool(thinking,toolName);if(thinking.tool)setToolOutput(thinking,thinking.tool.name,delta);continue}
+            if(toolName){setThinkingTool(thinking,toolName);continue}
+            answer+=delta;
+            const clean=stripToolActivity(answer);
+            if(clean){answer=clean;bubble.classList.remove('thinking-bubble');bubble.textContent=clean}
+          }
+          if(payload.done){clearTimeout(idle);finalize();return}
+        }catch(e){
+          if(e instanceof Error)throw e;
+          answer+=data;
+          bubble.classList.remove('thinking-bubble');
+          bubble.textContent=answer;
+        }
+        messages.scrollTop=messages.scrollHeight;
+      }
+    }
+  }finally{
+    clearTimeout(idle);
+  }
+  finalize();
+}
 async function submit(message){message=message.trim();if(!message||send.disabled)return;const session=sessionInput.value.trim()||activeSession||'web';activeSession=session;sessionInput.value=session;input.value='';input.style.height='auto';addMessage('user',message);const thinking=addThinking();send.disabled=true;input.disabled=true;try{await streamChat(session,message,thinking.bubble,thinking)}catch(e){finishToolPanel(thinking);thinking.bubble.classList.remove('thinking-bubble');thinking.bubble.textContent=`Error: ${e.message}`;persistMessage('assistant',thinking.bubble.textContent,session)}finally{send.disabled=false;input.disabled=false;input.focus();renderHistory()}}
 form.addEventListener('submit',e=>{e.preventDefault();submit(input.value)});input.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();form.requestSubmit()}});input.addEventListener('input',()=>{input.style.height='auto';input.style.height=`${Math.min(input.scrollHeight,180)}px`});newChat?.addEventListener('click',createSession);sessionInput.addEventListener('change',()=>loadSession(sessionInput.value.trim()||'web'));createSubagent?.addEventListener('click',openSubagentModal);closeSubagent?.addEventListener('click',closeSubagentModal);cancelSubagent?.addEventListener('click',closeSubagentModal);subagentModal?.addEventListener('click',e=>{if(e.target===subagentModal)closeSubagentModal()});subagentForm?.addEventListener('submit',submitSubagent);health();loadCapabilities();loadSubagents();renderHistory();renderSession(activeSession);setInterval(health,15000);setInterval(loadCapabilities,30000);setInterval(loadSubagents,10000);
