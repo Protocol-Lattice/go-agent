@@ -2,6 +2,8 @@ package agent
 
 import (
 	"context"
+	"errors"
+	"io"
 
 	utcp "github.com/universal-tool-calling-protocol/go-utcp"
 	"github.com/universal-tool-calling-protocol/go-utcp/src/transports"
@@ -106,7 +108,7 @@ func (s *observedStreamResult) Next() (any, error) {
 	if err != nil && !s.done {
 		s.done = true
 		event := ToolExecutionEvent{Type: "tool_result", Tool: s.tool, Arguments: s.args}
-		if err.Error() != "EOF" {
+		if !errors.Is(err, io.EOF) {
 			event.Error = err.Error()
 		}
 		emitToolExecutionEvent(s.ctx, event)
