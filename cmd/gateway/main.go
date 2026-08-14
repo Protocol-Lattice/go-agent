@@ -264,13 +264,14 @@ func buildAgent(ctx context.Context) (*agent.Agent, utcp.UtcpClientInterface, er
 	if err != nil {
 		return nil, nil, fmt.Errorf("create UTCP client: %w", err)
 	}
-	codeMode := codemode.NewCodeModeUTCP(client, model)
+	observedClient := agent.NewObservedUTCPClient(client)
+	codeMode := codemode.NewCodeModeUTCP(observedClient, model)
 	mem := memory.NewSessionMemory(memory.NewMemoryBankWithStore(memory.NewInMemoryStore()), *flagContext)
-	ag, err := agent.New(agent.Options{Model: model, Memory: mem, SystemPrompt: *flagSystem, ContextLimit: *flagContext, UTCPClient: client, CodeMode: codeMode})
+	ag, err := agent.New(agent.Options{Model: model, Memory: mem, SystemPrompt: *flagSystem, ContextLimit: *flagContext, UTCPClient: observedClient, CodeMode: codeMode})
 	if err != nil {
 		return nil, nil, err
 	}
-	return ag, client, nil
+	return ag, observedClient, nil
 }
 
 type chatRequest struct {
@@ -324,28 +325,91 @@ func handleStream(runtime *agentRuntime) http.HandlerFunc {
 		w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 		w.Header().Set("X-Accel-Buffering", "no")
 		w.WriteHeader(http.StatusOK)
-		ch, err := ag.GenerateStream(r.Context(), req.Session, req.Message)
-		if err != nil {
-			writeSSE(w, map[string]any{"error": err.Error()})
-			flusher.Flush()
-			return
+
+		events := make(chan agent.ToolExecutionEvent, 1024)
+		ctx := agent.WithToolExecutionObserver(r.Context(), func(event agent.ToolExecutionEvent) {
+			events <- event
+		})
+
+		ready := make(chan struct {
+			stream <-chan models.StreamChunk
+			err    error
+		}, 1)
+		go func() {
+			stream, err := ag.GenerateStream(ctx, req.Session, req.Message)
+			ready <- struct {
+				stream <-chan models.StreamChunk
+				err    error
+			}{stream: stream, err: err}
+		}()
+
+		var ch <-chan models.StreamChunk
+		started := false
+		for {
+			if !started {
+				select {
+				case event := <-events:
+					writeSSE(w, event)
+					flusher.Flush()
+				case result := <-ready:
+					started = true
+					if result.err != nil {
+						writeSSE(w, map[string]any{"error": result.err.Error()})
+						flusher.Flush()
+						return
+					}
+					ch = result.stream
+				}
+				continue
+			}
+
+			if ch == nil {
+				break
+			}
+
+			select {
+			case event := <-events:
+				writeSSE(w, event)
+				flusher.Flush()
+			case chunk, ok := <-ch:
+				if !ok {
+					for {
+						select {
+						case event := <-events:
+							writeSSE(w, event)
+							flusher.Flush()
+						default:
+							writeSSE(w, map[string]any{"done": true})
+							flusher.Flush()
+							return
+						}
+					}
+				}
+				if chunk.Err != nil {
+					writeSSE(w, map[string]any{"error": chunk.Err.Error()})
+					flusher.Flush()
+					return
+				}
+				if chunk.Delta != "" {
+					writeSSE(w, map[string]any{"delta": chunk.Delta})
+					flusher.Flush()
+				}
+				if chunk.Done {
+					for {
+						select {
+						case event := <-events:
+							writeSSE(w, event)
+							flusher.Flush()
+						default:
+							writeSSE(w, map[string]any{"done": true})
+							flusher.Flush()
+							return
+						}
+					}
+				}
+			}
 		}
-		for chunk := range ch {
-			if chunk.Err != nil {
-				writeSSE(w, map[string]any{"error": chunk.Err.Error()})
-				flusher.Flush()
-				return
-			}
-			if chunk.Delta != "" {
-				writeSSE(w, map[string]any{"delta": chunk.Delta})
-				flusher.Flush()
-			}
-			if chunk.Done {
-				writeSSE(w, map[string]any{"done": true})
-				flusher.Flush()
-				return
-			}
-		}
+
 		writeSSE(w, map[string]any{"done": true})
 		flusher.Flush()
 	}
