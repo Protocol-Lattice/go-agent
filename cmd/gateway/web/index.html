@@ -8,4 +8,49 @@
 <section><div class="section-title"><span>Skills</span><span id="skillCount" class="count">0</span></div><div id="skills" class="capabilities"><div class="loading">Loading…</div></div></section>
 <section><div class="section-title"><span>Tools</span><span id="toolCount" class="count">0</span></div><div id="tools" class="capabilities"><div class="loading">Loading…</div></div></section>
 <section><div class="section-title"><span>Sub-agents</span><button id="createSubagent" class="add-button" type="button">+ Create</button></div><div id="subagents" class="capabilities"><div class="loading">Loading…</div></div></section>
-</aside><section class="chat"><section id="messages" class="messages" aria-live="polite"><div class="welcome"><div class="welcome-mark">λ</div><h1>Build with your agent.</h1><p>Skills, tools, sub-agents, and persistent JSON chat history are loaded from the live go-agent runtime.</p><div class="suggestions"><button data-prompt="What skills are available?">List skills</button><button data-prompt="What tools are available?">List tools</button></div></div></section><form id="composer" class="composer"><textarea id="input" rows="1" placeholder="Message go-agent…" autocomplete="off"></textarea><div class="composer-row"><div class="session"><span>Session</span><input id="session" value="web" maxlength="80"></div><div class="actions"><span id="hint">Enter to send · Shift+Enter for newline</span><button id="send" type="submit">Send <kbd>↵</kbd></button></div></div></form></section></div><footer>go-agent · JSON chat history · streaming via Server-Sent Events · live skills, tools &amp; sub-agents · UTCP tool orchestration</footer></main><div id="subagentModal" class="modal hidden"><div class="modal-card"><div class="modal-header"><div><strong>Create sub-agent</strong><span>Register a specialist agent as a UTCP tool.</span></div><button id="closeSubagent" class="modal-close" type="button">×</button></div><form id="subagentForm"><label>Name<input id="subagentName" required maxlength="64" pattern="[A-Za-z0-9_-]+" placeholder="code-reviewer"></label><label>Description<textarea id="subagentDescription" rows="2" placeholder="Reviews Go code and suggests fixes"></textarea></label><label>System prompt<textarea id="subagentPrompt" rows="4" placeholder="You are a specialist code review agent..."></textarea></label><div id="subagentError" class="form-error"></div><div class="modal-actions"><button id="cancelSubagent" type="button">Cancel</button><button type="submit" class="primary">Create sub-agent</button></div></form></div></div><script src="/web/app.js"></script></body></html>
+</aside><section class="chat"><section id="messages" class="messages" aria-live="polite"><div class="welcome"><div class="welcome-mark">λ</div><h1>Build with your agent.</h1><p>Skills, tools, sub-agents, and persistent JSON chat history are loaded from the live go-agent runtime.</p><div class="suggestions"><button data-prompt="What skills are available?">List skills</button><button data-prompt="What tools are available?">List tools</button></div></div></section><form id="composer" class="composer"><textarea id="input" rows="1" placeholder="Message go-agent…" autocomplete="off"></textarea><div class="composer-row"><div class="session"><span>Session</span><input id="session" value="web" maxlength="80"></div><div class="actions"><span id="hint">Enter to send · Shift+Enter for newline</span><button id="send" type="submit">Send <kbd>↵</kbd></button></div></div></form></section></div><footer>go-agent · JSON chat history · streaming via Server-Sent Events · live skills, tools &amp; sub-agents · UTCP tool orchestration</footer></main><div id="subagentModal" class="modal hidden"><div class="modal-card"><div class="modal-header"><div><strong>Create sub-agent</strong><span>Register a specialist agent as a UTCP tool.</span></div><button id="closeSubagent" class="modal-close" type="button">×</button></div><form id="subagentForm"><label>Name<input id="subagentName" required maxlength="64" pattern="[A-Za-z0-9_-]+" placeholder="code-reviewer"></label><label>Description<textarea id="subagentDescription" rows="2" placeholder="Reviews Go code and suggests fixes"></textarea></label><label>System prompt<textarea id="subagentPrompt" rows="4" placeholder="You are a specialist code review agent..."></textarea></label><div id="subagentError" class="form-error"></div><div class="modal-actions"><button id="cancelSubagent" type="button">Cancel</button><button type="submit" class="primary">Create sub-agent</button></div></form></div></div><script src="/web/app.js"></script><script>
+// CodeMode workflow cards represent executions, not unique tool names.
+// A tool may legitimately run multiple times during one request.
+(() => {
+  if (typeof ensureToolPanel !== 'function') return;
+  const originalEnsureToolPanel = ensureToolPanel;
+  const lastByName = new WeakMap();
+  const counters = new WeakMap();
+
+  window.ensureToolPanel = function(thinking, name) {
+    const actualName = String(name || '').trim();
+    if (!actualName) return null;
+    let counter = counters.get(thinking) || 0;
+    counter += 1;
+    counters.set(thinking, counter);
+    const panel = originalEnsureToolPanel(thinking, `${actualName}#${counter}`);
+    if (panel) {
+      panel.name = actualName;
+      const title = panel.button.querySelector('.tool-activity-title');
+      if (title) title.textContent = `apply tool ${actualName}`;
+      lastByName.set(thinking, {name: actualName, panel});
+    }
+    return panel;
+  };
+
+  window.setThinkingTool = function(thinking, name) {
+    return window.ensureToolPanel(thinking, name);
+  };
+
+  window.setToolOutput = function(thinking, name, result) {
+    const actualName = String(name || '').trim();
+    const current = lastByName.get(thinking);
+    const panel = current && current.name === actualName
+      ? current.panel
+      : window.ensureToolPanel(thinking, actualName);
+    if (!panel) return;
+    let text = result;
+    if (typeof result === 'object' && result !== null) {
+      try { text = JSON.stringify(result, null, 2); } catch { text = String(result); }
+    }
+    panel.output.textContent = String(text ?? 'No output returned');
+    panel.output.dataset.ready = 'true';
+    messages.scrollTop = messages.scrollHeight;
+  };
+})();
+</script></body></html>
