@@ -146,12 +146,18 @@ func (a *Agent) validateCodeModeToolCalls(code string) error {
 	}
 
 	allowed := make(map[string]struct{})
+
 	for _, spec := range a.ToolSpecs() {
 		name := strings.TrimSpace(spec.Name)
 		if name == "" || name == codemode.CodeModeToolName || name == "codemode.run_code" {
 			continue
 		}
 		allowed[name] = struct{}{}
+	}
+	if len(allowed) == 0 {
+		// No canonical tool list was discoverable. In this mode the
+		// configured UTCP client / CodeMode runner is the authoritative execution boundary.
+		return nil
 	}
 
 	for _, match := range matches {

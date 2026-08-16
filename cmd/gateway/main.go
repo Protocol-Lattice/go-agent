@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"embed"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -42,7 +43,7 @@ type agentRuntime struct {
 	utcp      utcp.UtcpClientInterface
 	provider  string
 	model     string
-	subagents map[string]*agent.Agent
+	subagents map[string]subagentInstance
 }
 
 func (rt *agentRuntime) current() (*agent.Agent, utcp.UtcpClientInterface, string, string) {
@@ -65,7 +66,13 @@ func main() {
 		log.Fatalf("build agent: %v", err)
 	}
 
-	runtime := &agentRuntime{ag: ag, utcp: client, provider: strings.ToLower(*flagProvider), model: *flagModel, subagents: make(map[string]*agent.Agent)}
+	runtime := &agentRuntime{
+		ag:        ag,
+		utcp:      client,
+		provider:  strings.ToLower(*flagProvider),
+		model:     *flagModel,
+		subagents: make(map[string]subagentInstance),
+	}
 	persisted, err := loadPersistedSubagents(context.Background(), client, runtime.provider, runtime.model)
 	if err != nil {
 		log.Printf("warning: failed to load persisted subagents: %v", err)
@@ -74,19 +81,25 @@ func main() {
 		log.Printf("loaded %d persisted subagent(s)", len(persisted))
 	}
 
+	mux := setupMux(runtime)
+	log.Printf("gateway listening on %s (provider=%s model=%s, utcp=enabled, codemode=enabled)", *flagAddr, *flagProvider, *flagModel)
+	if err := http.ListenAndServe(*flagAddr, mux); err != nil {
+		log.Fatal(err)
+	}
+}
+
+func setupMux(runtime *agentRuntime) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /", handleWeb)
 	mux.Handle("POST /chat", withTimeout(*flagTimeout, handleChat(runtime)))
 	mux.Handle("POST /stream", withTimeout(*flagTimeout, handleStream(runtime)))
 	mux.HandleFunc("GET /health", handleHealth)
+	mux.HandleFunc("GET /api/models", handleModels(runtime))
 	mux.HandleFunc("GET /api/skills", handleSkills(runtime))
 	mux.HandleFunc("GET /api/tools", handleTools(runtime))
 	mux.HandleFunc("GET /api/subagents", handleSubagents(runtime))
 	mux.Handle("POST /api/subagents", withTimeout(600*time.Second, handleCreateSubagent(runtime)))
-	log.Printf("gateway listening on %s (provider=%s model=%s, utcp=enabled, codemode=enabled)", *flagAddr, *flagProvider, *flagModel)
-	if err := http.ListenAndServe(*flagAddr, mux); err != nil {
-		log.Fatal(err)
-	}
+	return mux
 }
 
 func handleWeb(w http.ResponseWriter, r *http.Request) {
@@ -118,6 +131,17 @@ func handleWeb(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(data)
 }
 
+func handleModels(runtime *agentRuntime) http.HandlerFunc {
+	return func(w http.ResponseWriter, _ *http.Request) {
+		_, _, currentProvider, currentModel := runtime.current()
+		writeJSON(w, 200, map[string]any{
+			"current_provider": currentProvider,
+			"current_model":    currentModel,
+			"models":           webModelCatalog,
+		})
+	}
+}
+
 func handleSkills(runtime *agentRuntime) http.HandlerFunc {
 	return func(w http.ResponseWriter, _ *http.Request) {
 		ag, _, _, _ := runtime.current()
@@ -144,8 +168,13 @@ func handleSubagents(runtime *agentRuntime) http.HandlerFunc {
 	return func(w http.ResponseWriter, _ *http.Request) {
 		runtime.mu.RLock()
 		items := make([]map[string]any, 0, len(runtime.subagents))
-		for name := range runtime.subagents {
-			items = append(items, map[string]any{"name": name})
+		for _, sa := range runtime.subagents {
+			items = append(items, map[string]any{
+				"name":        sa.Name,
+				"description": sa.Description,
+				"provider":    sa.Provider,
+				"model":       sa.Model,
+			})
 		}
 		runtime.mu.RUnlock()
 		writeJSON(w, 200, map[string]any{"subagents": items})
@@ -234,19 +263,42 @@ func handleCreateSubagent(runtime *agentRuntime) http.HandlerFunc {
 			return
 		}
 		mem := memory.NewSessionMemory(memory.NewMemoryBankWithStore(memory.NewInMemoryStore()), *flagContext)
-		sa, err := agent.New(agent.Options{Model: llm, Memory: mem, SystemPrompt: body.SystemPrompt, ContextLimit: *flagContext, UTCPClient: client, CodeMode: codemode.NewCodeModeUTCP(client, llm)})
+		sa, err := agent.New(agent.Options{
+			Model:        llm,
+			Memory:       mem,
+			SystemPrompt: body.SystemPrompt,
+			ContextLimit: *flagContext,
+			UTCPClient:   client,
+			CodeMode:     codemode.NewCodeModeUTCP(client, llm),
+		})
 		if err != nil {
 			writeError(w, 500, err.Error())
 			return
 		}
-		if err := sa.RegisterAsUTCPProvider(req.Context(), client, body.Name, body.Description); err != nil {
-			writeError(w, 500, fmt.Sprintf("register UTCP provider: %v", err))
-			return
+		if client != nil {
+			if err := sa.RegisterAsUTCPProvider(req.Context(), client, body.Name, body.Description); err != nil {
+				writeError(w, 500, fmt.Sprintf("register UTCP provider: %v", err))
+				return
+			}
 		}
 		runtime.mu.Lock()
-		runtime.subagents[body.Name] = sa
+		runtime.subagents[body.Name] = subagentInstance{
+			Agent:        sa,
+			Name:         body.Name,
+			Description:  body.Description,
+			SystemPrompt: body.SystemPrompt,
+			Provider:     provider,
+			Model:        model,
+		}
 		runtime.mu.Unlock()
-		writeJSON(w, 201, map[string]any{"ok": true, "name": body.Name, "description": body.Description, "provider": provider, "model": model, "tool": body.Name})
+		writeJSON(w, 201, map[string]any{
+			"ok":          true,
+			"name":        body.Name,
+			"description": body.Description,
+			"provider":    provider,
+			"model":       model,
+			"tool":        body.Name,
+		})
 	}
 }
 
@@ -267,17 +319,61 @@ func buildAgent(ctx context.Context) (*agent.Agent, utcp.UtcpClientInterface, er
 	observedClient := agent.NewObservedUTCPClient(client)
 	codeMode := codemode.NewCodeModeUTCP(observedClient, model)
 	mem := memory.NewSessionMemory(memory.NewMemoryBankWithStore(memory.NewInMemoryStore()), *flagContext)
-	ag, err := agent.New(agent.Options{Model: model, Memory: mem, SystemPrompt: *flagSystem, ContextLimit: *flagContext, UTCPClient: observedClient, CodeMode: codeMode})
+	ag, err := agent.New(agent.Options{
+		Model:        model,
+		Memory:       mem,
+		SystemPrompt: *flagSystem,
+		ContextLimit: *flagContext,
+		UTCPClient:   observedClient,
+		CodeMode:     codeMode,
+	})
 	if err != nil {
 		return nil, nil, err
 	}
 	return ag, observedClient, nil
 }
 
-type chatRequest struct {
-	Session string `json:"session"`
-	Message string `json:"message"`
+type chatFilePayload struct {
+	Name string `json:"name"`
+	MIME string `json:"mime"`
+	Data string `json:"data"`
 }
+
+func (p chatFilePayload) toModelFile() models.File {
+	name := strings.TrimSpace(p.Name)
+	if name == "" {
+		name = "attachment"
+	}
+	mime := strings.TrimSpace(p.MIME)
+	if mime == "" {
+		mime = "text/plain"
+	}
+	var data []byte
+	if strings.HasPrefix(p.Data, "data:") && strings.Contains(p.Data, ";base64,") {
+		idx := strings.Index(p.Data, ";base64,")
+		if raw, err := base64.StdEncoding.DecodeString(p.Data[idx+8:]); err == nil {
+			data = raw
+		}
+	} else if raw, err := base64.StdEncoding.DecodeString(p.Data); err == nil && len(raw) > 0 {
+		data = raw
+	} else {
+		data = []byte(p.Data)
+	}
+	return models.File{
+		Name: name,
+		MIME: mime,
+		Data: data,
+	}
+}
+
+type chatRequest struct {
+	Session  string            `json:"session"`
+	Message  string            `json:"message"`
+	Files    []chatFilePayload `json:"files,omitempty"`
+	Provider string            `json:"provider,omitempty"`
+	Model    string            `json:"model,omitempty"`
+}
+
 type chatResponse struct {
 	Response string `json:"response"`
 	Session  string `json:"session"`
@@ -295,7 +391,19 @@ func handleChat(runtime *agentRuntime) http.HandlerFunc {
 			return
 		}
 		ag, _, _, _ := runtime.current()
-		out, err := ag.Generate(r.Context(), req.Session, req.Message)
+		var (
+			out any
+			err error
+		)
+		if len(req.Files) > 0 {
+			files := make([]models.File, 0, len(req.Files))
+			for _, f := range req.Files {
+				files = append(files, f.toModelFile())
+			}
+			out, err = ag.GenerateWithFiles(r.Context(), req.Session, req.Message, files)
+		} else {
+			out, err = ag.Generate(r.Context(), req.Session, req.Message)
+		}
 		if err != nil {
 			writeError(w, 500, err.Error())
 			return
@@ -331,11 +439,39 @@ func handleStream(runtime *agentRuntime) http.HandlerFunc {
 			events <- event
 		})
 
+		var files []models.File
+		if len(req.Files) > 0 {
+			files = make([]models.File, 0, len(req.Files))
+			for _, f := range req.Files {
+				files = append(files, f.toModelFile())
+			}
+		}
+
 		ready := make(chan struct {
 			stream <-chan models.StreamChunk
 			err    error
 		}, 1)
+
 		go func() {
+			if len(files) > 0 {
+				out, err := ag.GenerateWithFiles(ctx, req.Session, req.Message, files)
+				if err != nil {
+					ready <- struct {
+						stream <-chan models.StreamChunk
+						err    error
+					}{stream: nil, err: err}
+					return
+				}
+				ch := make(chan models.StreamChunk, 1)
+				ch <- models.StreamChunk{Delta: out, FullText: out, Done: true}
+				close(ch)
+				ready <- struct {
+					stream <-chan models.StreamChunk
+					err    error
+				}{stream: ch, err: nil}
+				return
+			}
+
 			stream, err := ag.GenerateStream(ctx, req.Session, req.Message)
 			ready <- struct {
 				stream <-chan models.StreamChunk
@@ -348,6 +484,8 @@ func handleStream(runtime *agentRuntime) http.HandlerFunc {
 		for {
 			if !started {
 				select {
+				case <-r.Context().Done():
+					return
 				case event := <-events:
 					writeSSE(w, event)
 					flusher.Flush()
@@ -368,6 +506,8 @@ func handleStream(runtime *agentRuntime) http.HandlerFunc {
 			}
 
 			select {
+			case <-r.Context().Done():
+				return
 			case event := <-events:
 				writeSSE(w, event)
 				flusher.Flush()
@@ -422,18 +562,21 @@ func writeSSE(w http.ResponseWriter, v any) {
 	}
 	fmt.Fprintf(w, "data: %s\n\n", data)
 }
+
 func handleHealth(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, 200, map[string]any{"ok": true})
 }
+
 func validateRequest(req chatRequest) error {
 	if strings.TrimSpace(req.Session) == "" {
 		return errors.New("session is required")
 	}
-	if strings.TrimSpace(req.Message) == "" {
-		return errors.New("message is required")
+	if strings.TrimSpace(req.Message) == "" && len(req.Files) == 0 {
+		return errors.New("message or file attachment is required")
 	}
 	return nil
 }
+
 func withTimeout(d time.Duration, h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), d)
@@ -441,11 +584,14 @@ func withTimeout(d time.Duration, h http.Handler) http.Handler {
 		h.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
+
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
 }
+
 func writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]string{"error": msg})
 }
+

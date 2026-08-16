@@ -104,12 +104,32 @@ func lastToolObservation(observations []string) string {
 
 func requestRequiresMutation(input string) bool {
 	lower := strings.ToLower(strings.TrimSpace(input))
-	for _, word := range []string{"refactor", "rewrite", "modify", "edit", "update", "change", "fix", "write", "create", "add", "remove", "delete", "rename", "move", "implement", "patch", "replace"} {
-		if strings.Contains(lower, word) {
-			return true
+
+	if idx := strings.Index(lower, "user instruction:\n"); idx >= 0 {
+		lower = strings.TrimSpace(lower[idx+len("user instruction:\n"):])
+	}
+
+	// Text after an illustrative marker is not an instruction.
+	// Example:
+	// "Inspect the codebase. For example, read foo.go and refactor it."
+	// The second sentence describes an example workflow, not necessarily
+	// the requested mutation.
+	for _, marker := range []string{
+		"for example",
+		"e.g.",
+		"e.g.,",
+	} {
+		if idx := strings.Index(lower, marker); idx >= 0 {
+			lower = strings.TrimSpace(lower[:idx])
+			break
 		}
 	}
-	return false
+
+	mutationRE := regexp.MustCompile(
+		`(?i)\b(refactor|rewrite|modify|edit|update|change|fix|write|create|add|remove|delete|rename|move|implement|patch|replace)\b`,
+	)
+
+	return mutationRE.MatchString(lower)
 }
 
 func toolMutates(toolName string) bool {
@@ -142,21 +162,51 @@ func validateCodeModeCode(code string, toolList []tools.Tool) error {
 	if code == "" {
 		return errors.New("codemode.run_code received empty code")
 	}
-	if strings.Contains(code, "CallTool(") || strings.Contains(code, "CallTool (") || strings.Contains(code, "CallToolStream(") || strings.Contains(code, "CallToolStream (") {
-		matches := codeModeToolCallRE.FindAllStringSubmatch(code, -1)
-		for _, match := range matches {
-			if len(match) != 2 {
-				continue
-			}
-			toolName := strings.TrimSpace(match[1])
-			if !toolSpecExists(toolList, toolName) {
-				return fmt.Errorf("codemode unknown_tool: %q is not registered in the canonical UTCP tool registry; use an exact registered tool name", toolName)
-			}
-		}
-		if len(matches) == 0 {
-			return errors.New("codemode invalid_tool_reference: CallTool/CallToolStream requires an exact string-literal tool name from the canonical UTCP registry")
+
+	if !strings.Contains(code, "CallTool(") &&
+		!strings.Contains(code, "CallTool (") &&
+		!strings.Contains(code, "CallToolStream(") &&
+		!strings.Contains(code, "CallToolStream (") {
+		return nil
+	}
+
+	// When the agent has no discoverable canonical tools, let the
+	// configured UTCP client be the execution authority. This is important
+	// for CodeMode-only clients where tools are intentionally not exposed
+	// through SearchTools().
+	hasCanonicalTools := false
+	for _, spec := range toolList {
+		if name := strings.TrimSpace(spec.Name); name != "" &&
+			name != "codemode.run_code" {
+			hasCanonicalTools = true
+			break
 		}
 	}
+	if !hasCanonicalTools {
+		return nil
+	}
+
+	matches := codeModeToolCallRE.FindAllStringSubmatch(code, -1)
+	for _, match := range matches {
+		if len(match) != 2 {
+			continue
+		}
+
+		toolName := strings.TrimSpace(match[1])
+		if !toolSpecExists(toolList, toolName) {
+			return fmt.Errorf(
+				"codemode unknown_tool: %q is not registered in the canonical UTCP tool registry; use an exact registered tool name",
+				toolName,
+			)
+		}
+	}
+
+	if len(matches) == 0 {
+		return errors.New(
+			"codemode invalid_tool_reference: CallTool/CallToolStream requires an exact string-literal tool name",
+		)
+	}
+
 	return nil
 }
 
@@ -328,9 +378,25 @@ JSON shape:
 		toolCallKey := toolName + "\x00" + compactJSON(tc.Arguments)
 		if toolCallKey == lastToolCallKey {
 			if !toolLoopCompletionAllowed(userInput, mutationDone) {
-				observations = append(observations, fmt.Sprintf("[step %d] planner_error=duplicate_call tool=%s args=%s; repeating the same read-only call will not satisfy this request. Call the exact registered mutation tool (write/edit/patch) instead of re-reading.", step, toolName, compactJSON(tc.Arguments)))
+				observations = append(observations, fmt.Sprintf(
+					"[step %d] planner_error=duplicate_call tool=%s args=%s; repeating the same read-only call will not satisfy this request. Call the exact registered mutation tool (write/edit/patch) instead of re-reading.",
+					step,
+					toolName,
+					compactJSON(tc.Arguments),
+				))
 				continue
 			}
+
+			if mutationDone {
+				observations = append(observations, fmt.Sprintf(
+					"[step %d] planner_error=duplicate_call_after_mutation tool=%s args=%s; the mutation already succeeded. Continue with verification or report completion instead of repeating the mutation.",
+					step,
+					toolName,
+					compactJSON(tc.Arguments),
+				))
+				continue
+			}
+
 			return true, lastToolCallValue, nil
 		}
 		result, err := a.executeTool(ctx, sessionID, toolName, tc.Arguments)

@@ -33,6 +33,10 @@ func (m *stubModel) Generate(ctx context.Context, prompt string) (any, error) {
 	if m.err != nil {
 		return nil, m.err
 	}
+	trimmed := strings.TrimSpace(m.response)
+	if strings.HasPrefix(trimmed, "{") && strings.HasSuffix(trimmed, "}") {
+		return m.response, nil
+	}
 	return m.response + " | " + prompt, nil
 }
 
@@ -180,7 +184,11 @@ type captureFilePlannerModel struct {
 	files   [][]models.File
 }
 
-func (m *captureFilePlannerModel) GenerateWithFiles(ctx context.Context, prompt string, files []models.File) (any, error) {
+func (m *captureFilePlannerModel) GenerateWithFiles(
+	ctx context.Context,
+	prompt string,
+	files []models.File,
+) (any, error) {
 	m.prompts = append(m.prompts, prompt)
 	m.files = append(m.files, append([]models.File(nil), files...))
 	return `{"use_tool": false, "final_answer": "done"}`, nil
@@ -206,6 +214,7 @@ type stubUTCPClient struct {
 	lastSearchQuery string
 	lastSearchLimit int
 	fakeStream      *FakeStream
+	callResult      any
 }
 
 type stubTool struct {
@@ -224,9 +233,18 @@ func (t *stubTool) Invoke(ctx context.Context, req ToolRequest) (ToolResponse, e
 	return ToolResponse{Content: str}, nil
 }
 
-func (c *stubUTCPClient) CallTool(ctx context.Context, toolName string, args map[string]any) (any, error) {
+func (c *stubUTCPClient) CallTool(
+	ctx context.Context,
+	toolName string,
+	args map[string]any,
+) (any, error) {
 	c.callCount++
 	c.lastToolName = toolName
+
+	if c.callResult != nil {
+		return c.callResult, nil
+	}
+
 	return "utcp says " + toolName, nil
 }
 
@@ -888,8 +906,17 @@ func TestCodeMode_ExecutesCallToolInsideDSL(t *testing.T) {
 
 	mem := memory.NewSessionMemory(&memory.MemoryBank{}, 4)
 
-	utcpClient := &stubUTCPClient{}
-
+	utcpClient := &stubUTCPClient{
+		searchTools: []utcpTools.Tool{
+			{
+				Name:        "echo",
+				Description: "Echo the provided input",
+			},
+		},
+		callResult: map[string]any{
+			"input": "hi",
+		},
+	}
 	agent, err := New(Options{
 		Model:            model,
 		Memory:           mem,

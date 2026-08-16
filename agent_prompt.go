@@ -358,6 +358,7 @@ func fileBackedWorkspaceRules(files []models.File) string {
 	sb.WriteString("For fixes, refactors, and edits to existing code, choose targets from the attached path list first.\n")
 	sb.WriteString("If the attached paths include the relevant existing source file, use that file as the refactor target instead of creating a new source path.\n")
 	sb.WriteString("Treat paths mentioned as examples, e.g. after \"for example\", \"e.g.\", \"such as\", or \"like\", as illustrative unless they are attached paths or the user explicitly asks to create that exact path.\n")
+	sb.WriteString("For file-backed requests, do not create or edit paths that appear only as illustrative examples; prefer attached existing paths.\n")
 	sb.WriteString("New companion files are allowed only when the task requires them, such as tests or docs, and should correspond to the chosen existing file when possible.\n")
 	return sb.String()
 }

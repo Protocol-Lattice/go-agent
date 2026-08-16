@@ -1,56 +1,249 @@
 <!doctype html>
 <html lang="en">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>go-agent chat</title><link rel="stylesheet" href="/web/style.css"></head>
-<body><main class="app">
-<header class="topbar"><div class="brand"><div class="logo">λ</div><div><strong>go-agent</strong><span>Agent runtime console</span></div></div><div class="status"><span id="statusDot"></span><span id="statusText">Checking gateway…</span></div></header>
-<div class="layout"><aside class="sidebar">
-<section><div class="section-title"><span>Chat history</span><button id="newChat" class="add-button" type="button">+ New</button></div><div id="history" class="capabilities"></div></section>
-<section><div class="section-title"><span>Skills</span><span id="skillCount" class="count">0</span></div><div id="skills" class="capabilities"><div class="loading">Loading…</div></div></section>
-<section><div class="section-title"><span>Tools</span><span id="toolCount" class="count">0</span></div><div id="tools" class="capabilities"><div class="loading">Loading…</div></div></section>
-<section><div class="section-title"><span>Sub-agents</span><button id="createSubagent" class="add-button" type="button">+ Create</button></div><div id="subagents" class="capabilities"><div class="loading">Loading…</div></div></section>
-</aside><section class="chat"><section id="messages" class="messages" aria-live="polite"><div class="welcome"><div class="welcome-mark">λ</div><h1>Build with your agent.</h1><p>Skills, tools, sub-agents, and persistent JSON chat history are loaded from the live go-agent runtime.</p><div class="suggestions"><button data-prompt="What skills are available?">List skills</button><button data-prompt="What tools are available?">List tools</button></div></div></section><form id="composer" class="composer"><textarea id="input" rows="1" placeholder="Message go-agent…" autocomplete="off"></textarea><div class="composer-row"><div class="session"><span>Session</span><input id="session" value="web" maxlength="80"></div><div class="actions"><span id="hint">Enter to send · Shift+Enter for newline</span><button id="send" type="submit">Send <kbd>↵</kbd></button></div></div></form></section></div><footer>go-agent · JSON chat history · streaming via Server-Sent Events · live skills, tools &amp; sub-agents · UTCP tool orchestration</footer></main><div id="subagentModal" class="modal hidden"><div class="modal-card"><div class="modal-header"><div><strong>Create sub-agent</strong><span>Register a specialist agent as a UTCP tool.</span></div><button id="closeSubagent" class="modal-close" type="button">×</button></div><form id="subagentForm"><label>Name<input id="subagentName" required maxlength="64" pattern="[A-Za-z0-9_-]+" placeholder="code-reviewer"></label><label>Description<textarea id="subagentDescription" rows="2" placeholder="Reviews Go code and suggests fixes"></textarea></label><label>System prompt<textarea id="subagentPrompt" rows="4" placeholder="You are a specialist code review agent..."></textarea></label><div id="subagentError" class="form-error"></div><div class="modal-actions"><button id="cancelSubagent" type="button">Cancel</button><button type="submit" class="primary">Create sub-agent</button></div></form></div></div><script src="/web/app.js"></script><script>
-// CodeMode workflow cards represent executions, not unique tool names.
-// A tool may legitimately run multiple times during one request.
-(() => {
-  if (typeof ensureToolPanel !== 'function') return;
-  const originalEnsureToolPanel = ensureToolPanel;
-  const lastByName = new WeakMap();
-  const counters = new WeakMap();
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>go-agent · Agent Console</title>
+  <link rel="stylesheet" href="/web/style.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+</head>
+<body>
+  <div class="app-container">
+    <!-- Top Navigation Bar -->
+    <header class="topbar">
+      <div class="topbar-left">
+        <button id="toggleSidebarBtn" class="icon-btn mobile-only" type="button" aria-label="Toggle navigation menu" title="Toggle menu">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
+        </button>
+        <div class="brand">
+          <div class="logo">λ</div>
+          <div class="brand-text">
+            <strong>go-agent</strong>
+            <span>Autonomous UTCP Runtime</span>
+          </div>
+        </div>
+      </div>
 
-  window.ensureToolPanel = function(thinking, name) {
-    const actualName = String(name || '').trim();
-    if (!actualName) return null;
-    let counter = counters.get(thinking) || 0;
-    counter += 1;
-    counters.set(thinking, counter);
-    const panel = originalEnsureToolPanel(thinking, `${actualName}#${counter}`);
-    if (panel) {
-      panel.name = actualName;
-      const title = panel.button.querySelector('.tool-activity-title');
-      if (title) title.textContent = `apply tool ${actualName}`;
-      lastByName.set(thinking, {name: actualName, panel});
-    }
-    return panel;
-  };
+      <div class="topbar-center">
+        <div class="model-selector-wrapper">
+          <label for="modelSelect" class="model-label">Model</label>
+          <div class="custom-select">
+            <select id="modelSelect" aria-label="Select LLM model">
+              <option value="default">Loading models…</option>
+            </select>
+          </div>
+        </div>
+      </div>
 
-  window.setThinkingTool = function(thinking, name) {
-    return window.ensureToolPanel(thinking, name);
-  };
+      <div class="topbar-right">
+        <div class="status-badge" id="statusBadge">
+          <span id="statusDot" class="status-dot"></span>
+          <span id="statusText">Connecting…</span>
+        </div>
+      </div>
+    </header>
 
-  window.setToolOutput = function(thinking, name, result) {
-    const actualName = String(name || '').trim();
-    const current = lastByName.get(thinking);
-    const panel = current && current.name === actualName
-      ? current.panel
-      : window.ensureToolPanel(thinking, actualName);
-    if (!panel) return;
-    let text = result;
-    if (typeof result === 'object' && result !== null) {
-      try { text = JSON.stringify(result, null, 2); } catch { text = String(result); }
-    }
-    panel.output.textContent = String(text ?? 'No output returned');
-    panel.output.dataset.ready = 'true';
-    messages.scrollTop = messages.scrollHeight;
-  };
-})();
-</script></body></html>
+    <!-- Main Workspace Layout -->
+    <div class="layout">
+      <!-- Sidebar Drawer -->
+      <aside id="sidebar" class="sidebar">
+        <!-- Chat History Section -->
+        <section class="sidebar-section">
+          <div class="section-header">
+            <span class="section-title">Conversations</span>
+            <button id="newChat" class="action-btn-sm" type="button" title="Start new conversation">+ New</button>
+          </div>
+          <div class="search-box">
+            <input id="historySearch" type="text" placeholder="Search chats…" autocomplete="off" spellcheck="false">
+          </div>
+          <div id="history" class="capabilities-list history-list" role="list"></div>
+        </section>
+
+        <!-- Skills Section -->
+        <section class="sidebar-section">
+          <div class="section-header">
+            <span class="section-title">Skills</span>
+            <span id="skillCount" class="badge-count">0</span>
+          </div>
+          <div id="skills" class="capabilities-list" role="list">
+            <div class="loading-state">Loading skills…</div>
+          </div>
+        </section>
+
+        <!-- Tools Section -->
+        <section class="sidebar-section">
+          <div class="section-header">
+            <span class="section-title">UTCP Tools</span>
+            <span id="toolCount" class="badge-count">0</span>
+          </div>
+          <div id="tools" class="capabilities-list" role="list">
+            <div class="loading-state">Loading tools…</div>
+          </div>
+        </section>
+
+        <!-- Sub-agents Section -->
+        <section class="sidebar-section">
+          <div class="section-header">
+            <span class="section-title">Sub-agents</span>
+            <button id="createSubagent" class="action-btn-sm" type="button" title="Create specialist sub-agent">+ Create</button>
+          </div>
+          <div id="subagents" class="capabilities-list" role="list">
+            <div class="loading-state">Loading sub-agents…</div>
+          </div>
+        </section>
+      </aside>
+
+      <!-- Sidebar Backdrop for Mobile -->
+      <div id="sidebarBackdrop" class="sidebar-backdrop hidden"></div>
+
+      <!-- Main Chat Area -->
+      <main class="chat-workspace">
+        <!-- Messages Stream -->
+        <section id="messages" class="messages-container" aria-live="polite">
+          <div class="welcome-screen">
+            <div class="welcome-glyph">λ</div>
+            <h1>What would you like to build?</h1>
+            <p class="welcome-subtitle">
+              Execute agentic workflows, orchestrate UTCP tools, run Go CodeMode pipelines, and delegate to specialist sub-agents.
+            </p>
+            <div class="quick-prompts">
+              <button class="prompt-chip" data-prompt="What skills and tools are currently available in the active runtime?">
+                <span class="chip-icon">⚡</span>
+                <span class="chip-text">Explore active capabilities</span>
+              </button>
+              <button class="prompt-chip" data-prompt="Inspect the workspace files and suggest a refactoring plan.">
+                <span class="chip-icon">🔍</span>
+                <span class="chip-text">Analyze workspace files</span>
+              </button>
+              <button class="prompt-chip" data-prompt="Run a multi-step CodeMode workflow to test UTCP tool integration.">
+                <span class="chip-icon">💻</span>
+                <span class="chip-text">Execute CodeMode workflow</span>
+              </button>
+            </div>
+          </div>
+        </section>
+
+        <!-- Stop Generation Floating Button -->
+        <div id="stopContainer" class="stop-container hidden">
+          <button id="stopGenerationBtn" class="stop-btn" type="button">
+            <span class="stop-icon">■</span> Stop generating
+          </button>
+        </div>
+
+        <!-- Composer / Input Zone -->
+        <div class="composer-container">
+          <!-- Staged Files Preview Bar -->
+          <div id="stagedAttachments" class="staged-attachments hidden"></div>
+
+          <!-- Input Form -->
+          <form id="composer" class="composer-form">
+            <!-- Hidden File Input -->
+            <input type="file" id="fileInput" multiple class="hidden" accept="*/*">
+
+            <div class="textarea-wrapper">
+              <textarea id="input" rows="1" placeholder="Message go-agent, attach files, or describe a workflow…" autocomplete="off" spellcheck="false"></textarea>
+            </div>
+
+            <div class="composer-toolbar">
+              <div class="toolbar-left">
+                <button type="button" id="attachBtn" class="toolbar-btn" title="Attach files" aria-label="Attach files">
+                  <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"></path></svg>
+                  <span class="toolbar-btn-text">Attach</span>
+                </button>
+                <div class="session-pill">
+                  <span class="session-label">Session:</span>
+                  <input id="session" value="web" maxlength="64" title="Active session identifier">
+                </div>
+              </div>
+
+              <div class="toolbar-right">
+                <span id="hint" class="keyboard-hint">Enter to send · Shift+Enter for newline</span>
+                <button id="send" type="submit" class="send-btn" aria-label="Send message">
+                  <span>Send</span>
+                  <kbd>↵</kbd>
+                </button>
+              </div>
+            </div>
+          </form>
+        </div>
+      </main>
+    </div>
+
+    <!-- Footer -->
+    <footer class="app-footer">
+      <span>go-agent runtime</span>
+      <span class="footer-dot">·</span>
+      <span>UTCP tool orchestration</span>
+      <span class="footer-dot">·</span>
+      <span>CodeMode Go DSL</span>
+      <span class="footer-dot">·</span>
+      <span>SSE real-time streaming</span>
+    </footer>
+  </div>
+
+  <!-- Create Sub-agent Modal -->
+  <div id="subagentModal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="subagentModalTitle">
+    <div class="modal-card">
+      <div class="modal-header">
+        <div>
+          <h2 id="subagentModalTitle" class="modal-title">Create Sub-agent</h2>
+          <p class="modal-desc">Register a specialized AI agent as a UTCP tool provider.</p>
+        </div>
+        <button id="closeSubagent" class="modal-close-btn" type="button" aria-label="Close modal">×</button>
+      </div>
+
+      <form id="subagentForm" class="modal-form">
+        <div class="form-group">
+          <label for="subagentName">Agent Identifier</label>
+          <input id="subagentName" required maxlength="64" pattern="[A-Za-z0-9_-]+" placeholder="e.g. code-reviewer" spellcheck="false">
+          <small class="form-hint">Alphanumeric, hyphens, and underscores only.</small>
+        </div>
+
+        <div class="form-row">
+          <div class="form-group">
+            <label for="subagentProvider">Provider</label>
+            <select id="subagentProvider">
+              <option value="">Default (Gateway)</option>
+              <option value="gemini">Gemini</option>
+              <option value="openai">OpenAI</option>
+              <option value="anthropic">Anthropic</option>
+              <option value="ollama">Ollama (Local)</option>
+              <option value="openrouter">OpenRouter</option>
+              <option value="vertex">Vertex AI</option>
+              <option value="dummy">Dummy (Testing)</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="subagentModel">Model ID</label>
+            <input id="subagentModel" placeholder="e.g. gemini-3.6-flash" spellcheck="false">
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label for="subagentDescription">Description</label>
+          <textarea id="subagentDescription" rows="2" placeholder="e.g. Reviews Go code and checks for concurrency issues"></textarea>
+        </div>
+
+        <div class="form-group">
+          <label for="subagentPrompt">System Instructions</label>
+          <textarea id="subagentPrompt" rows="4" placeholder="You are a specialist code review agent. Analyze Go source code for race conditions, error handling, and efficiency..."></textarea>
+        </div>
+
+        <div id="subagentError" class="form-error-msg" role="alert"></div>
+
+        <div class="modal-actions">
+          <button id="cancelSubagent" type="button" class="btn-secondary">Cancel</button>
+          <button type="submit" class="btn-primary">Create Sub-agent</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Toast Notification Container -->
+  <div id="toastContainer" class="toast-container" aria-live="assertive"></div>
+
+  <script src="/web/app.js"></script>
+</body>
+</html>

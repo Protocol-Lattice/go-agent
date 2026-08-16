@@ -28,11 +28,20 @@ type persistedSubagentStore struct {
 	Subagents []persistedSubagent `json:"subagents"`
 }
 
-func loadPersistedSubagents(ctx context.Context, client utcp.UtcpClientInterface, defaultProvider, defaultModel string) (map[string]*agent.Agent, error) {
+type subagentInstance struct {
+	Agent        *agent.Agent `json:"-"`
+	Name         string       `json:"name"`
+	Description  string       `json:"description"`
+	SystemPrompt string       `json:"system_prompt,omitempty"`
+	Provider     string       `json:"provider,omitempty"`
+	Model        string       `json:"model,omitempty"`
+}
+
+func loadPersistedSubagents(ctx context.Context, client utcp.UtcpClientInterface, defaultProvider, defaultModel string) (map[string]subagentInstance, error) {
 	path := "cmd/gateway/web/subagents.json"
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
-		return map[string]*agent.Agent{}, nil
+		return map[string]subagentInstance{}, nil
 	}
 	if err != nil {
 		return nil, err
@@ -43,7 +52,7 @@ func loadPersistedSubagents(ctx context.Context, client utcp.UtcpClientInterface
 		return nil, fmt.Errorf("parse %s: %w", path, err)
 	}
 
-	result := make(map[string]*agent.Agent, len(store.Subagents))
+	result := make(map[string]subagentInstance, len(store.Subagents))
 	for _, cfg := range store.Subagents {
 		name := strings.TrimSpace(cfg.Name)
 		if name == "" {
@@ -93,16 +102,23 @@ func loadPersistedSubagents(ctx context.Context, client utcp.UtcpClientInterface
 			return nil, fmt.Errorf("load subagent %q: %w", name, err)
 		}
 
+		description := strings.TrimSpace(cfg.Description)
+		if description == "" {
+			description = "Persisted go-agent sub-agent"
+		}
 		if client != nil {
-			description := strings.TrimSpace(cfg.Description)
-			if description == "" {
-				description = "Persisted go-agent sub-agent"
-			}
 			if err := sa.RegisterAsUTCPProvider(ctx, client, name, description); err != nil {
 				return nil, fmt.Errorf("load subagent %q: register UTCP provider: %w", name, err)
 			}
 		}
-		result[name] = sa
+		result[name] = subagentInstance{
+			Agent:        sa,
+			Name:         name,
+			Description:  description,
+			SystemPrompt: prompt,
+			Provider:     provider,
+			Model:        modelName,
+		}
 	}
 	return result, nil
 }
