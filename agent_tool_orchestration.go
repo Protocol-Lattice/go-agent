@@ -327,6 +327,10 @@ JSON shape:
 
 		toolCallKey := toolName + "\x00" + compactJSON(tc.Arguments)
 		if toolCallKey == lastToolCallKey {
+			if !toolLoopCompletionAllowed(userInput, mutationDone) {
+				observations = append(observations, fmt.Sprintf("[step %d] planner_error=duplicate_call tool=%s args=%s; repeating the same read-only call will not satisfy this request. Call the exact registered mutation tool (write/edit/patch) instead of re-reading.", step, toolName, compactJSON(tc.Arguments)))
+				continue
+			}
 			return true, lastToolCallValue, nil
 		}
 		result, err := a.executeTool(ctx, sessionID, toolName, tc.Arguments)
@@ -427,6 +431,10 @@ For refactor/edit/write/create/change/fix requests, discovery is not completion.
 
 			toolCallKey := toolName + "\x00" + compactJSON(call.Arguments)
 			if toolCallKey == lastToolCallKey {
+				if requiresMutation && !mutationDone {
+					observations = append(observations, fmt.Sprintf("[step %d] planner_error=duplicate_call tool=%s args=%s; repeating the same read-only call will not satisfy this request. Call the exact registered mutation tool (write/edit/patch) instead of re-reading.", step, toolName, compactJSON(call.Arguments)))
+					continue
+				}
 				return true, lastToolCallValue, nil
 			}
 			result, err := a.executeTool(ctx, sessionID, toolName, call.Arguments)
