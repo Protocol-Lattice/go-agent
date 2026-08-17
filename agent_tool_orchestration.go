@@ -312,16 +312,30 @@ JSON shape:
 		if err != nil {
 			return false, "", err
 		}
-		jsonStr := extractJSON(fmt.Sprint(raw))
+		rawText := fmt.Sprint(raw)
+		jsonStr := extractJSON(rawText)
+
 		if jsonStr == "" {
-			if len(observations) == 0 {
-				return false, "", nil
-			}
-			final := fmt.Sprintf("Stopped because the tool planner did not return valid JSON after %d tool step(s). Last observation:\n%s", len(observations), lastToolObservation(observations))
-			a.storeMemory(sessionID, "assistant", final, map[string]string{"source": "tool_loop"})
-			return true, final, nil
+			observations = append(observations, fmt.Sprintf(
+				"[planner] invalid_json: planner response was not valid JSON. "+
+					"Do not repeat the previous tool. Return ONLY the required JSON object. "+
+					"Previous response: %s",
+				truncate(rawText, 2000),
+			))
+			continue
 		}
+
 		var tc ToolChoice
+		if err := json.Unmarshal([]byte(jsonStr), &tc); err != nil {
+			observations = append(observations, fmt.Sprintf(
+				"[planner] invalid_json: %v. "+
+					"Return ONLY valid JSON matching the required schema. "+
+					"Previous response: %s",
+				err,
+				truncate(rawText, 2000),
+			))
+			continue
+		}
 		if err := json.Unmarshal([]byte(jsonStr), &tc); err != nil {
 			if len(observations) == 0 {
 				return false, "", nil
@@ -387,9 +401,9 @@ JSON shape:
 				continue
 			}
 
-			if mutationDone {
+			if mutationDone && plannedMutation {
 				observations = append(observations, fmt.Sprintf(
-					"[step %d] planner_error=duplicate_call_after_mutation tool=%s args=%s; the mutation already succeeded. Continue with verification or report completion instead of repeating the mutation.",
+					"[step %d] planner_error=duplicate_mutation_after_success tool=%s args=%s; the mutation already succeeded. Continue with verification or report completion.",
 					step,
 					toolName,
 					compactJSON(tc.Arguments),
