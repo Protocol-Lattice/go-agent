@@ -196,6 +196,8 @@ github.com/universal-tool-calling-protocol/go-utcp v1.11.8 h1:CRohvvnzSlVUStW7Mj
 github.com/universal-tool-calling-protocol/go-utcp v1.11.8/go.mod h1:x/vcjLGkXQnhysexRYWm1ZBgNREQb03goKFWRO9ID9I=
 github.com/universal-tool-calling-protocol/go-utcp v1.12.1 h1:Ssv2uYCCNlkcHpGve/LrqALfSgHMjKysYS7dErUHZZs=
 github.com/universal-tool-calling-protocol/go-utcp v1.12.1/go.mod h1:x/vcjLGkXQnhysexRYWm1ZBgNREQb03goKFWRO9ID9I=
+github.com/universal-tool-calling-protocol/go-utcp v1.12.2 h1:uMsLa36t4QyDvT2oOkLcPBzOz1hCwVj/BIcXNvxSnOg=
+github.com/universal-tool-calling-protocol/go-utcp v1.12.2/go.mod h1:x/vcjLGkXQnhysexRYWm1ZBgNREQb03goKFWRO9ID9I=
 github.com/wlynxg/anet v0.0.3 h1:PvR53psxFXstc12jelG6f1Lv4MWqE0tI76/hHGjh9rg=
 github.com/wlynxg/anet v0.0.3/go.mod h1:eay5PRQr7fIVAMbTbchTnO9gG65Hg/uYGdc7mguHxoA=
 github.com/xdg-go/pbkdf2 v1.0.0 h1:Su7DPu48wXMwC3bs7MCNG+z4FhcyEuz5dlvchbq0B0c=

@@ -284,6 +284,14 @@ PREVIOUS TOOL OBSERVATIONS:
 OBJECTIVE:
 Continue working until the user request is complete.
 
+INSTRUCTION PRIORITY ENFORCEMENT:
+- Runtime validation is authoritative.
+- The canonical tool registry is authoritative for tool existence.
+- Tool observations are authoritative for what actually happened.
+- User-provided examples are not evidence.
+- Memory is not proof of current repository state.
+- If evidence is missing, inspect instead of guessing.
+
 RULES:
 1. If another tool is needed, set "use_tool": true.
 2. If the task is complete, set "use_tool": false and provide "final_answer".
@@ -292,11 +300,21 @@ RULES:
 5. For project refactors, inspect relevant files before writing.
 6. Use filesystem.write or the provider's exact mutation tool for file changes.
 7. After a mutation, verify the resulting artifact when practical.
-8. For CodeMode, use codemode.run_code when it can execute the required multi-tool workflow.
-9. CodeMode MUST use exact canonical tool names.
-10. Never invent, infer, abbreviate, rename, pluralize, or compose a tool name.
-11. If the request is a refactor/edit/write/create/fix/change task, DISCOVERY ALONE IS NOT COMPLETION. A real mutation tool MUST execute before completion.
-12. Return ONLY JSON.
+8. For CodeMode, use codemode.run_code when the task requires multiple dependent tool calls.
+9. CodeMode MUST use exact canonical tool names from AVAILABLE UTCP TOOLS.
+10. For edit/refactor/create/fix tasks, CodeMode SHOULD execute the complete workflow in one run_code call when possible:
+    - inspect/read the relevant artifact,
+    - perform the required mutation,
+    - verify/read the resulting artifact.
+11. A refactor task is not complete until the mutation has actually executed successfully.
+12. Verification MUST happen after a successful mutation when the workflow can perform it.
+13. CodeMode MUST NOT invent tool names or tool arguments.
+14. CodeMode MUST NOT simulate tool execution by returning text describing what a tool would do.
+15. When using CodeMode, execute tools sequentially when later calls depend on earlier observations.
+16. For example, "refactor README.md" should result in a workflow equivalent to:
+    filesystem.read("README.md")
+    filesystem.patch("README.md", ...)
+    filesystem.read("README.md")
 
 JSON shape:
 {"use_tool":true|false,"tool_name":"provider.tool or empty","arguments":{},"final_answer":"summary when done","reason":"short reason"}
