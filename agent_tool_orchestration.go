@@ -113,8 +113,7 @@ func requestRequiresMutation(input string) bool {
 			break
 		}
 	}
-	mutationRE := regexp.MustCompile(`(?i)\b(refactor|rewrite|modify|edit|update|change|fix|write|create|add|remove|delete|rename|move|implement|patch|replace)\b`)
-	return mutationRE.MatchString(lower)
+	return regexp.MustCompile(`(?i)\b(refactor|rewrite|modify|edit|update|change|fix|write|create|add|remove|delete|rename|move|implement|patch|replace)\b`).MatchString(lower)
 }
 
 func toolMutates(toolName string) bool {
@@ -151,6 +150,8 @@ func mutationToolNames(toolList []tools.Tool) string {
 	return b.String()
 }
 
+var codeModeToolCallRE = regexp.MustCompile(`\bCallTool(?:Stream)?\s*\(\s*"([^"]+)"`)
+
 func codeModeMutates(code string) bool {
 	for _, match := range codeModeToolCallRE.FindAllStringSubmatch(code, -1) {
 		if len(match) == 2 && toolMutates(match[1]) {
@@ -164,8 +165,6 @@ func toolLoopCompletionAllowed(userInput string, mutationDone bool) bool {
 	return !requestRequiresMutation(userInput) || mutationDone
 }
 
-var codeModeToolCallRE = regexp.MustCompile(`\bCallTool(?:Stream)?\s*\(\s*"([^"]+)"`)
-
 func validateCodeModeCode(code string, toolList []tools.Tool) error {
 	code = strings.TrimSpace(code)
 	if code == "" {
@@ -174,9 +173,11 @@ func validateCodeModeCode(code string, toolList []tools.Tool) error {
 	if !strings.Contains(code, "CallTool(") && !strings.Contains(code, "CallTool (") && !strings.Contains(code, "CallToolStream(") && !strings.Contains(code, "CallToolStream (") {
 		return nil
 	}
+	matches := codeModeToolCallRE.FindAllStringSubmatch(code, -1)
 	hasCanonicalTools := false
 	for _, spec := range toolList {
-		if name := strings.TrimSpace(spec.Name); name != "" && name != "codemode.run_code" {
+		name := strings.TrimSpace(spec.Name)
+		if name != "" && name != "codemode.run_code" {
 			hasCanonicalTools = true
 			break
 		}
@@ -184,14 +185,9 @@ func validateCodeModeCode(code string, toolList []tools.Tool) error {
 	if !hasCanonicalTools {
 		return nil
 	}
-	matches := codeModeToolCallRE.FindAllStringSubmatch(code, -1)
 	for _, match := range matches {
-		if len(match) != 2 {
-			continue
-		}
-		toolName := strings.TrimSpace(match[1])
-		if !toolSpecExists(toolList, toolName) {
-			return fmt.Errorf("codemode unknown_tool: %q is not registered in the canonical UTCP tool registry; use an exact registered tool name", toolName)
+		if len(match) == 2 && !toolSpecExists(toolList, strings.TrimSpace(match[1])) {
+			return fmt.Errorf("codemode unknown_tool: %q is not registered in the canonical UTCP tool registry; use an exact registered tool name", strings.TrimSpace(match[1]))
 		}
 	}
 	if len(matches) == 0 {
@@ -214,9 +210,21 @@ func codeModeToolNames(toolList []tools.Tool) string {
 	return b.String()
 }
 
+// isCodeModeCompilationError makes generated-code compilation failures retryable
+// planner observations instead of fatal agent errors. CodeMode code is produced
+// by the model, so a compiler error is recoverable model feedback.
+func isCodeModeCompilationError(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := strings.ToLower(err.Error())
+	return strings.Contains(s, "compilation failed") ||
+		strings.Contains(s, "compilation error") ||
+		strings.Contains(s, "undefined:")
+}
+
 func (a *Agent) toolOrchestrator(ctx context.Context, sessionID, userInput string, records []memory.MemoryRecord, files ...models.File) (bool, string, error) {
-	lowerInput := strings.ToLower(strings.TrimSpace(userInput))
-	if !a.likelyNeedsToolCall(lowerInput) {
+	if !a.likelyNeedsToolCall(strings.ToLower(strings.TrimSpace(userInput))) {
 		return false, "", nil
 	}
 	toolList := a.ToolSpecs()
@@ -285,33 +293,21 @@ MUTATION-CAPABLE TOOLS:
 OBJECTIVE:
 Continue working until the user request is complete.
 
-INSTRUCTION PRIORITY ENFORCEMENT:
-- Runtime validation is authoritative.
-- The canonical tool registry is authoritative for tool existence.
-- Tool observations are authoritative for what actually happened.
-- User-provided examples are not evidence.
-- Memory is not proof of current repository state.
-- If evidence is missing, inspect instead of guessing.
-
 RULES:
-1. If another tool is needed, set "use_tool": true.
-2. If the task is complete, set "use_tool": false and provide "final_answer".
-3. Use only exact tool names from AVAILABLE UTCP TOOLS.
-4. Do not stop after listing files when the user asked to create, modify, refactor, test, build, or add a feature.
-5. For project refactors, inspect relevant files before writing.
-6. Use filesystem.write or the provider's exact mutation tool for file changes.
-7. After a mutation, verify the resulting artifact when practical.
-8. For CodeMode, use codemode.run_code when the task requires multiple dependent tool calls.
-9. CodeMode MUST use exact canonical tool names from AVAILABLE UTCP TOOLS.
-10. For edit/refactor/create/fix tasks, CodeMode SHOULD execute the complete workflow in one run_code call when possible: inspect/read the relevant artifact, perform the required mutation, and verify/read the resulting artifact.
-11. A refactor task is not complete until the mutation has actually executed successfully.
-12. Verification MUST happen after a successful mutation when the workflow can perform it.
-13. CodeMode MUST NOT invent tool names or tool arguments.
-14. CodeMode MUST NOT simulate tool execution by returning text describing what a tool would do.
-15. When using CodeMode, execute tools sequentially when later calls depend on earlier observations.
-16. If requires_mutation=true and mutation_done=false, read/list/search tools may be used to gather information needed for the mutation. After the target artifact has been read/inspected, select a mutation-capable tool next.
-17. If requires_mutation=true and inspection_done=true and mutation_done=false, NEVER call another read/list/search tool. Select one of the exact mutation-capable tools above, or codemode.run_code containing a mutation.
-18. For example, "refactor README.md" should result in a workflow equivalent to: filesystem.read("README.md"), filesystem.patch("README.md", ...), filesystem.read("README.md").
+1. Use only exact tool names from AVAILABLE UTCP TOOLS.
+2. Do not stop after listing files when the user asked to create, modify, refactor, test, build, or add a feature.
+3. Inspect relevant artifacts before mutating them.
+4. After a mutation, verify the resulting artifact when practical.
+5. For multi-step dependent work, prefer codemode.run_code.
+6. CodeMode MUST use exact canonical tool names and exact schema argument names.
+7. A refactor/edit/create/fix task is not complete until the mutation has actually executed successfully.
+8. If requires_mutation=true and inspection_done=true and mutation_done=false, NEVER call another read/list/search tool. Select a mutation-capable tool or codemode.run_code containing a mutation.
+9. CodeMode MUST execute dependent calls sequentially.
+10. CodeMode variables MUST be declared in the same lexical scope where they are consumed. Do not declare r2/r3/etc inside an if/for block and consume them outside that block.
+11. For CodeMode, prefer one straight-line sequence of CallTool calls with top-level r1/r2/r3 assignments. Avoid unnecessary nested scopes.
+12. CodeMode MUST NOT simulate tool execution or invent tool names.
+13. If a previous CodeMode observation says compilation failed, generate a fresh complete snippet; do not repeat the invalid snippet.
+14. If the request is a mutation, CodeMode should perform inspect -> mutate -> verify in one run when possible.
 
 JSON shape:
 {"use_tool":true|false,"tool_name":"provider.tool or empty","arguments":{},"final_answer":"summary when done","reason":"short reason"}
@@ -327,21 +323,20 @@ JSON shape:
 		if err != nil {
 			return false, "", err
 		}
-		rawText := fmt.Sprint(raw)
-		jsonStr := extractJSON(rawText)
+		jsonStr := extractJSON(fmt.Sprint(raw))
 		if jsonStr == "" {
-			observations = append(observations, fmt.Sprintf("[planner] invalid_json: planner response was not valid JSON. Do not repeat the previous tool. Return ONLY the required JSON object. Previous response: %s", truncate(rawText, 2000)))
+			observations = append(observations, fmt.Sprintf("[planner] invalid_json: return ONLY the required JSON object. Previous response: %s", truncate(fmt.Sprint(raw), 2000)))
 			continue
 		}
 		var tc ToolChoice
 		if err := json.Unmarshal([]byte(jsonStr), &tc); err != nil {
-			observations = append(observations, fmt.Sprintf("[planner] invalid_json: %v. Return ONLY valid JSON matching the required schema. Previous response: %s", err, truncate(rawText, 2000)))
+			observations = append(observations, fmt.Sprintf("[planner] invalid_json: %v. Previous response: %s", err, truncate(fmt.Sprint(raw), 2000)))
 			continue
 		}
 
 		if !tc.UseTool {
 			if !toolLoopCompletionAllowed(userInput, mutationDone) {
-				observations = append(observations, fmt.Sprintf("[step %d] planner_error=mutation_required; the request is a refactor/edit/write task and only discovery/read tools have executed. Continue with the exact registered mutation tool before completion.", step))
+				observations = append(observations, fmt.Sprintf("[step %d] planner_error=mutation_required; the request requires a real mutation before completion. Select the exact registered mutation tool.", step))
 				continue
 			}
 			final := toolChoiceFinalAnswer(tc)
@@ -360,7 +355,7 @@ JSON shape:
 			return true, "", fmt.Errorf("tool loop selected empty tool name")
 		}
 		if !toolSpecExists(toolList, toolName) {
-			observations = append(observations, fmt.Sprintf("[step %d] planner_error=unknown_tool requested=%q; choose ONLY an exact name from AVAILABLE UTCP TOOLS.", step, toolName))
+			observations = append(observations, fmt.Sprintf("[step %d] planner_error=unknown_tool requested=%q; choose ONLY an exact registered tool name", step, toolName))
 			continue
 		}
 		if tc.Arguments == nil {
@@ -384,18 +379,18 @@ JSON shape:
 		}
 
 		if requiresMutation && inspectionDone && !mutationDone && !plannedMutation {
-			observations = append(observations, fmt.Sprintf("[step %d] planner_error=mutation_required_next tool=%s; the target has already been inspected and the selected tool is read-only. Select one of these exact mutation-capable tools or codemode.run_code: %s", step, toolName, strings.TrimSpace(mutationTools)))
+			observations = append(observations, fmt.Sprintf("[step %d] planner_error=mutation_required_next tool=%s; target already inspected; choose an exact mutation-capable tool or codemode.run_code containing a mutation: %s", step, toolName, strings.TrimSpace(mutationTools)))
 			continue
 		}
 
 		toolCallKey := toolName + "\x00" + compactJSON(tc.Arguments)
 		if toolCallKey == lastToolCallKey {
-			if !toolLoopCompletionAllowed(userInput, mutationDone) {
-				observations = append(observations, fmt.Sprintf("[step %d] planner_error=duplicate_call tool=%s args=%s; repeating the same read-only call will not satisfy this request. Call the exact registered mutation tool (write/edit/patch) instead of re-reading.", step, toolName, compactJSON(tc.Arguments)))
+			if requiresMutation && !mutationDone {
+				observations = append(observations, fmt.Sprintf("[step %d] planner_error=duplicate_call tool=%s; repeating a read-only call cannot satisfy this mutation request", step, toolName))
 				continue
 			}
 			if mutationDone && plannedMutation {
-				observations = append(observations, fmt.Sprintf("[step %d] planner_error=duplicate_mutation_after_success tool=%s args=%s; the mutation already succeeded. Continue with verification or report completion.", step, toolName, compactJSON(tc.Arguments)))
+				observations = append(observations, fmt.Sprintf("[step %d] planner_error=duplicate_mutation_after_success tool=%s; continue with verification or completion", step, toolName))
 				continue
 			}
 			return true, lastToolCallValue, nil
@@ -403,6 +398,11 @@ JSON shape:
 
 		result, err := a.executeTool(ctx, sessionID, toolName, tc.Arguments)
 		if err != nil {
+			if toolName == "codemode.run_code" && isCodeModeCompilationError(err) {
+				observations = append(observations, fmt.Sprintf("[step %d] codemode_compilation_error: %v. Generate a fresh valid snippet. Keep all rN variables in one lexical scope and do not repeat the previous code.", step, err))
+				lastToolCallKey = ""
+				continue
+			}
 			a.storeMemory(sessionID, "assistant", fmt.Sprintf("tool %s error: %v", toolName, err), map[string]string{"tool": toolName, "source": "tool_loop"})
 			return true, "", err
 		}
@@ -455,7 +455,7 @@ PREVIOUS TOOL OBSERVATIONS:
 OBJECTIVE:
 Continue until the user request is complete.
 
-For refactor/edit/write/create/change/fix requests, discovery is not completion. Inspect the target first, then execute a real mutation tool before you answer. After mutation, verify the result when practical. Use ONLY exact names supplied by the native tool definitions. If the target has already been inspected and mutation has not happened, do not issue another read-only call.
+For refactor/edit/write/create/change/fix requests, inspect the target first, then execute a real mutation tool before completion. After mutation, verify when practical. If the target has already been inspected and mutation has not happened, do not issue another read-only call. Use only exact native tool names. If a previous CodeMode-related execution failed compilation, make the next tool/code decision fresh rather than repeating it.
 `, a.systemInstructions(), userInput, memoryDesc, strings.Join(observations, "\n\n"))
 		response, err := native.GenerateWithTools(ctx, prompt, definitions)
 		if err != nil {
@@ -463,7 +463,7 @@ For refactor/edit/write/create/change/fix requests, discovery is not completion.
 		}
 		if len(response.ToolCalls) == 0 {
 			if requiresMutation && !mutationDone {
-				observations = append(observations, fmt.Sprintf("[step %d] planner_error=mutation_required; discovery/read-only execution is insufficient for this request. Continue with the exact registered mutation tool.", step))
+				observations = append(observations, fmt.Sprintf("[step %d] planner_error=mutation_required; discovery/read-only execution is insufficient for this request", step))
 				continue
 			}
 			final := strings.TrimSpace(response.Content)
@@ -483,7 +483,7 @@ For refactor/edit/write/create/change/fix requests, discovery is not completion.
 				return true, "", fmt.Errorf("native tool loop selected empty tool name")
 			}
 			if !toolSpecExists(toolList, toolName) {
-				observations = append(observations, fmt.Sprintf("[step %d] planner_error=unknown_tool requested=%q; use ONLY the provided native tool definitions.", step, toolName))
+				observations = append(observations, fmt.Sprintf("[step %d] planner_error=unknown_tool requested=%q", step, toolName))
 				continue
 			}
 			if call.Arguments == nil {
@@ -498,22 +498,27 @@ For refactor/edit/write/create/change/fix requests, discovery is not completion.
 			} else {
 				plannedMutation = toolMutates(toolName)
 			}
-
 			if requiresMutation && inspectionDone && !mutationDone && !plannedMutation {
-				observations = append(observations, fmt.Sprintf("[step %d] planner_error=mutation_required_next tool=%s; the target has already been inspected and another read-only call cannot satisfy this mutation request. Select the exact registered mutation tool next.", step, toolName))
+				observations = append(observations, fmt.Sprintf("[step %d] planner_error=mutation_required_next tool=%s; target already inspected", step, toolName))
 				continue
 			}
 
 			toolCallKey := toolName + "\x00" + compactJSON(call.Arguments)
 			if toolCallKey == lastToolCallKey {
 				if requiresMutation && !mutationDone {
-					observations = append(observations, fmt.Sprintf("[step %d] planner_error=duplicate_call tool=%s args=%s; repeating the same read-only call will not satisfy this request. Call the exact registered mutation tool instead of re-reading.", step, toolName, compactJSON(call.Arguments)))
+					observations = append(observations, fmt.Sprintf("[step %d] planner_error=duplicate_call tool=%s; choose the mutation tool", step, toolName))
 					continue
 				}
 				return true, lastToolCallValue, nil
 			}
+
 			result, err := a.executeTool(ctx, sessionID, toolName, call.Arguments)
 			if err != nil {
+				if toolName == "codemode.run_code" && isCodeModeCompilationError(err) {
+					observations = append(observations, fmt.Sprintf("[step %d] codemode_compilation_error: %v. Generate fresh valid code and keep dependent variables in one lexical scope.", step, err))
+					lastToolCallKey = ""
+					continue
+				}
 				a.storeMemory(sessionID, "assistant", fmt.Sprintf("tool %s error: %v", toolName, err), map[string]string{"tool": toolName, "source": "native_tool_loop"})
 				return true, "", err
 			}
