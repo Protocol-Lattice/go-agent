@@ -59,6 +59,20 @@ func (a *Agent) GenerateStream(ctx context.Context, sessionID, userInput string)
 		return ch, nil
 	}
 
+	// Skill routing must happen before tool discovery so a matched skill can
+	// restrict the UTCP/CodeMode surface for this request. The scoped agent is
+	// created with DisableSkills=true, so this path cannot recurse.
+	if !a.disableSkills {
+		routing, err := a.RouteSkills(trimmed, 3)
+		if err != nil {
+			return nil, fmt.Errorf("route skills: %w", err)
+		}
+		if len(routing.Skills) > 0 {
+			result, err := a.generateWithRouting(ctx, sessionID, userInput, routing)
+			return immediateStream(result, err)
+		}
+	}
+
 	// 0. DIRECT TOOL INVOCATION
 	if toolName, args, ok := a.detectDirectToolCall(trimmed); ok {
 		result, err := a.executeTool(ctx, sessionID, toolName, args)
