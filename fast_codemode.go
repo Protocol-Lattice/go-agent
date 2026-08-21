@@ -56,6 +56,14 @@ func (a *Agent) generateFastCodeMode(ctx context.Context, sessionID, userInput s
 		return nil, false, nil
 	}
 
+	// Preserve the same input-safety contract as the normal Generate path.
+	if requestAgent.InputGuardrails != nil {
+		userInput, err = requestAgent.InputGuardrails.ValidateAndTransform(ctx, userInput)
+		if err != nil {
+			return nil, false, err
+		}
+	}
+
 	prompt := fastCodeModePrompt(requestAgent.systemPrompt, userInput, files)
 	handled, output, err := requestAgent.CodeMode.CallTool(ctx, prompt)
 	if err != nil {
