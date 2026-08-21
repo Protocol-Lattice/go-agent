@@ -17,7 +17,11 @@ func NewOpenAIEmbedder(model string) (Embedder, error) {
 	if key == "" {
 		key = os.Getenv("OPENAI_KEY")
 	}
+	baseUrl := os.Getenv("OPENAI_BASE_URL")
 	cfg := openai.DefaultConfig(key)
+	if baseUrl != "" {
+		cfg.BaseURL = baseUrl
+	}
 	cli := openai.NewClientWithConfig(cfg)
 	if model == "" {
 		// Good default in 2025; user may override via ADK_EMBED_MODEL

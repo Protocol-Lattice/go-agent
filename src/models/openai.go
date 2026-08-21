@@ -24,7 +24,15 @@ func NewOpenAILLM(model string, promptPrefix string) *OpenAILLM {
 	if apiKey == "" {
 		apiKey = os.Getenv("OPENAI_KEY") // fallback
 	}
-	client := openai.NewClient(apiKey)
+	baseUrl := os.Getenv("OPENAI_BASE_URL")
+
+	config := openai.DefaultConfig(apiKey)
+
+	if baseUrl != "" {
+		config.BaseURL = baseUrl
+	}
+
+	client := openai.NewClientWithConfig(config)
 	return &OpenAILLM{Client: client, Model: model, PromptPrefix: promptPrefix}
 }
 
