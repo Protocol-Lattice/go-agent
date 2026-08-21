@@ -42,12 +42,14 @@
   const pipeline = shell.querySelector('#harnessPipeline');
   const meta = shell.querySelector('#harnessMeta');
   const note = shell.querySelector('#harnessNote');
+  const stageEls = [];
 
   pipeline.replaceChildren(...stages.map(([id, title, subtitle]) => {
     const el = document.createElement('div');
     el.className = 'harness-stage';
     el.dataset.stage = id;
     el.innerHTML = `<div class="harness-stage-dot"></div><strong>${title}</strong><span>${subtitle}</span>`;
+    stageEls.push(el);
     return el;
   }));
 
@@ -58,21 +60,27 @@
     return el;
   }));
 
+  let currentStage = -1;
   function setStage(id) {
     const index = stages.findIndex(x => x[0] === id);
-    document.querySelectorAll('.harness-stage').forEach((el, i) => {
+    if (index === currentStage) return;
+    currentStage = index;
+    stageEls.forEach((el, i) => {
       el.classList.toggle('active', i === index);
-      el.classList.toggle('done', i < index);
+      el.classList.toggle('done', i >= 0 && i < index);
     });
   }
 
   function resetStages() {
-    document.querySelectorAll('.harness-stage').forEach(el => el.classList.remove('active', 'done'));
+    currentStage = -1;
+    stageEls.forEach(el => el.classList.remove('active', 'done'));
     setStage('planner');
   }
 
   function finishStages() {
-    document.querySelectorAll('.harness-stage').forEach(el => {
+    if (currentStage === stages.length) return;
+    currentStage = stages.length;
+    stageEls.forEach(el => {
       el.classList.remove('active');
       el.classList.add('done');
     });
@@ -80,22 +88,39 @@
 
   composer.addEventListener('submit', () => {
     resetStages();
-    setTimeout(() => setStage('context'), 250);
+    setStage('context');
   }, true);
 
-  const observer = new MutationObserver(() => {
-    if (messages.querySelector('.tool-thinking')) {
+  // Do not observe attributes. CodeMode updates classes, aria attributes and
+  // data attributes for every tool event; observing those caused a DOM query
+  // and stage calculation for every streamed token/tool update.
+  let scheduled = false;
+  const refresh = () => {
+    scheduled = false;
+    const workflow = messages.querySelector('.tool-thinking');
+    if (workflow) {
       setStage('editor');
-      const outputs = messages.querySelectorAll('.tool-activity-output[data-ready="true"]');
-      if (outputs.length) setStage('validator');
+      if (messages.querySelector('.tool-activity-output[data-ready="true"]')) {
+        setStage('validator');
+      }
+      return;
     }
+
     const thinking = messages.querySelector('.thinking-row');
     if (!thinking && messages.querySelector('.msg.assistant')) {
       const last = messages.lastElementChild;
-      if (last?.classList.contains('msg') && last.classList.contains('assistant')) finishStages();
+      if (last?.classList.contains('msg') && last.classList.contains('assistant')) {
+        finishStages();
+      }
     }
+  };
+
+  const observer = new MutationObserver(() => {
+    if (scheduled) return;
+    scheduled = true;
+    requestAnimationFrame(refresh);
   });
-  observer.observe(messages, { childList: true, subtree: true, attributes: true });
+  observer.observe(messages, { childList: true, subtree: true });
 
   shell.querySelectorAll('[data-mode]').forEach(button => {
     button.addEventListener('click', () => {
