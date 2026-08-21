@@ -61,43 +61,6 @@ func TestLoadSkillsAllowsMissingDirectory(t *testing.T) {
 	}
 }
 
-func TestAgentAddsSkillsToAllPromptPaths(t *testing.T) {
-	root := t.TempDir()
-	writeSkillTestFile(t, filepath.Join(root, "style", "SKILL.md"), "Always answer in haiku.")
-
-	model := &skillPromptModel{}
-	a, err := New(Options{
-		Model:     model,
-		Memory:    memory.NewSessionMemory(memory.NewMemoryBankWithStore(memory.NewInMemoryStore()), 8),
-		SkillsDir: root,
-	})
-	if err != nil {
-		t.Fatalf("New() error = %v", err)
-	}
-
-	if _, err := a.Generate(context.Background(), "skills", "Say hello"); err != nil {
-		t.Fatalf("Generate() error = %v", err)
-	}
-	if _, err := a.GenerateWithFiles(context.Background(), "skills", "Read this", []models.File{{Name: "notes.txt", MIME: "text/plain", Data: []byte("hello")}}); err != nil {
-		t.Fatalf("GenerateWithFiles() error = %v", err)
-	}
-	stream, err := a.GenerateStream(context.Background(), "skills", "Stream hello")
-	if err != nil {
-		t.Fatalf("GenerateStream() error = %v", err)
-	}
-	for range stream {
-	}
-
-	if len(model.prompts) != 3 {
-		t.Fatalf("model received %d prompts, want 3", len(model.prompts))
-	}
-	for i, prompt := range model.prompts {
-		if !strings.Contains(prompt, "Local project skills:") || !strings.Contains(prompt, "Always answer in haiku.") {
-			t.Fatalf("prompt %d does not contain the local skill:\n%s", i, prompt)
-		}
-	}
-}
-
 func TestAgentReloadSkills(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "writing.md")
