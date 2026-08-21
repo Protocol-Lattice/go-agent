@@ -5,9 +5,10 @@ import (
 	"fmt"
 	"strings"
 
-	utcp "github.com/universal-tool-calling-protocol/go-utcp"
-	"github.com/universal-tool-calling-protocol/go-utcp/src/tools"
 	"github.com/Protocol-Lattice/go-agent/src/models"
+	utcp "github.com/universal-tool-calling-protocol/go-utcp"
+	"github.com/universal-tool-calling-protocol/go-utcp/src/plugins/codemode"
+	"github.com/universal-tool-calling-protocol/go-utcp/src/tools"
 )
 
 type SkillRouting struct {
@@ -161,10 +162,10 @@ func (a *Agent) newSkillScopedAgent(routing SkillRouting) (*Agent, error) {
 		}
 	}
 
-	codeMode := a.CodeMode
-	if codeMode != nil && len(routing.Tools) > 0 {
-		if _, ok := routing.Tools["codemode.run_code"]; !ok {
-			codeMode = nil
+	var codeMode *codemode.CodeModeUTCP
+	if a.CodeMode != nil && (len(routing.Tools) == 0 || hasAllowedTool(routing.Tools, codemode.CodeModeToolName, "codemode.run_code")) {
+		if requestUTCP != nil {
+			codeMode = codemode.NewCodeModeUTCP(requestUTCP, a.model)
 		}
 	}
 
@@ -192,6 +193,15 @@ func (a *Agent) newSkillScopedAgent(routing SkillRouting) (*Agent, error) {
 		Guardrails:        a.Guardrails,
 		InputGuardrails:   a.InputGuardrails,
 	})
+}
+
+func hasAllowedTool(allowed map[string]struct{}, names ...string) bool {
+	for _, name := range names {
+		if _, ok := allowed[strings.ToLower(strings.TrimSpace(name))]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 type skillFilteredUTCPClient struct {
