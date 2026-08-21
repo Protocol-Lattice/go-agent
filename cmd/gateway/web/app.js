@@ -1,8 +1,14 @@
 const messages=document.getElementById('messages'),form=document.getElementById('composer'),input=document.getElementById('input'),sessionInput=document.getElementById('session'),send=document.getElementById('send'),statusText=document.getElementById('statusText'),statusDot=document.getElementById('statusDot');
 const skillsEl=document.getElementById('skills'),toolsEl=document.getElementById('tools'),skillCount=document.getElementById('skillCount'),toolCount=document.getElementById('toolCount');
+const skillExamplesEl=document.getElementById('skillExamples'),skillExampleCount=document.getElementById('skillExampleCount');
 const historyEl=document.getElementById('history'),newChat=document.getElementById('newChat');
 const subagentsEl=document.getElementById('subagents'),createSubagent=document.getElementById('createSubagent'),subagentModal=document.getElementById('subagentModal'),closeSubagent=document.getElementById('closeSubagent'),cancelSubagent=document.getElementById('cancelSubagent'),subagentForm=document.getElementById('subagentForm'),subagentName=document.getElementById('subagentName'),subagentDescription=document.getElementById('subagentDescription'),subagentPrompt=document.getElementById('subagentPrompt'),subagentError=document.getElementById('subagentError');
 const HISTORY_KEY='go-agent.webui.chat-history.v1';let activeSession=sessionInput.value.trim()||'web';
+const SKILL_EXAMPLES=[
+  {name:'refactor-readme',description:'Inspect, mutate, and verify README.md with the real filesystem workflow.',prompt:'Refactor README.md'},
+  {name:'code-review',description:'Review Go code for correctness, concurrency, APIs, tests, and regressions.',prompt:'Review the Go code for correctness, concurrency, API usage, tests, and regressions.'},
+  {name:'codemode',description:'Use CodeMode with canonical UTCP tool names for a compact multi-step workflow.',prompt:'Use CodeMode to inspect the available tools and explain the canonical tool names.'}
+];
 function loadHistoryJSON(){try{const raw=localStorage.getItem(HISTORY_KEY),data=raw?JSON.parse(raw):{};return data&&typeof data==='object'&&!Array.isArray(data)?data:{}}catch{return {}}}
 function saveHistoryJSON(data){localStorage.setItem(HISTORY_KEY,JSON.stringify(data,null,2))}function sessionHistory(id=activeSession){const all=loadHistoryJSON();return Array.isArray(all[id])?all[id]:[]}
 function persistMessage(role,text,id=activeSession){const all=loadHistoryJSON();if(!Array.isArray(all[id]))all[id]=[];all[id].push({role,text:String(text),timestamp:new Date().toISOString()});all[id]=all[id].slice(-200);saveHistoryJSON(all);renderHistory()}
@@ -11,106 +17,36 @@ function addThinking(){document.querySelector('.welcome')?.remove();const row=do
 
 function ensureWorkflowPanel(thinking){
   if(thinking.workflow)return thinking.workflow;
-  const workflow=document.createElement('div');
-  workflow.className='tool-workflow';
-  const header=document.createElement('div');
-  header.className='tool-workflow-header';
-  const title=document.createElement('strong');
-  title.textContent='CodeMode workflow';
-  const count=document.createElement('span');
-  count.className='tool-workflow-count';
-  count.textContent='0 steps';
-  const stepsList=document.createElement('div');
-  stepsList.className='tool-workflow-steps';
-  header.append(title,count);
-  workflow.append(header,stepsList);
-  thinking.bubble.replaceChildren(workflow);
-  thinking.bubble.classList.add('thinking-bubble');
-  thinking.label.textContent='Thinking';
-  thinking.dots.style.display='none';
-  thinking.row.classList.add('tool-thinking');
-  thinking.workflow={container:workflow,countEl:count,stepsList:stepsList,stepsMap:new Map()};
-  return thinking.workflow;
+  const workflow=document.createElement('div');workflow.className='tool-workflow';
+  const header=document.createElement('div');header.className='tool-workflow-header';
+  const title=document.createElement('strong');title.textContent='CodeMode workflow';
+  const count=document.createElement('span');count.className='tool-workflow-count';count.textContent='0 steps';
+  const stepsList=document.createElement('div');stepsList.className='tool-workflow-steps';header.append(title,count);workflow.append(header,stepsList);
+  thinking.bubble.replaceChildren(workflow);thinking.bubble.classList.add('thinking-bubble');thinking.label.textContent='Thinking';thinking.dots.style.display='none';thinking.row.classList.add('tool-thinking');
+  thinking.workflow={container:workflow,countEl:count,stepsList:stepsList,stepsMap:new Map()};return thinking.workflow;
 }
-
-function updateWorkflowCount(thinking,complete=false){
-  if(!thinking.workflow)return;
-  const total=thinking.workflow.stepsMap.size;
-  const statusText=complete?'complete':'running';
-  thinking.workflow.countEl.textContent=`${total} ${total===1?'step':'steps'} · ${statusText}`;
-}
-
-function ensureToolPanel(thinking,name){
-  name=String(name||'').trim();
-  if(!name)return null;
-  const wf=ensureWorkflowPanel(thinking);
-  if(wf.stepsMap.has(name)){
-    return wf.stepsMap.get(name);
-  }
-  const tool=document.createElement('div');
-  tool.className='tool-activity';
-  const button=document.createElement('button');
-  button.type='button';
-  button.className='tool-activity-toggle';
-  button.setAttribute('aria-expanded','false');
-  const icon=document.createElement('span');
-  icon.className='tool-activity-icon';
-  icon.textContent='⚙';
-  const title=document.createElement('span');
-  title.className='tool-activity-title';
-  title.textContent=`apply tool ${name}`;
-  const chevron=document.createElement('span');
-  chevron.className='tool-activity-chevron';
-  chevron.textContent='›';
-  button.append(icon,title,chevron);
-  const output=document.createElement('pre');
-  output.className='tool-activity-output';
-  output.hidden=true;
-  output.textContent='Running…';
-  button.addEventListener('click',()=>{
-    const open=output.hidden;
-    output.hidden=!open;
-    button.setAttribute('aria-expanded',String(open));
-    chevron.textContent=open?'⌄':'›';
-  });
-  tool.append(button,output);
-  wf.stepsList.appendChild(tool);
-  const panelData={name,tool,button,output,chevron};
-  wf.stepsMap.set(name,panelData);
-  thinking.tool=panelData;
-  updateWorkflowCount(thinking,false);
-  messages.scrollTop=messages.scrollHeight;
-  return panelData;
-}
-
+function updateWorkflowCount(thinking,complete=false){if(!thinking.workflow)return;const total=thinking.workflow.stepsMap.size;thinking.workflow.countEl.textContent=`${total} ${total===1?'step':'steps'} · ${complete?'complete':'running'}`}
+function ensureToolPanel(thinking,name){name=String(name||'').trim();if(!name)return null;const wf=ensureWorkflowPanel(thinking);if(wf.stepsMap.has(name))return wf.stepsMap.get(name);const tool=document.createElement('div');tool.className='tool-activity';const button=document.createElement('button');button.type='button';button.className='tool-activity-toggle';button.setAttribute('aria-expanded','false');const icon=document.createElement('span');icon.className='tool-activity-icon';icon.textContent='⚙';const title=document.createElement('span');title.className='tool-activity-title';title.textContent=`apply tool ${name}`;const chevron=document.createElement('span');chevron.className='tool-activity-chevron';chevron.textContent='›';button.append(icon,title,chevron);const output=document.createElement('pre');output.className='tool-activity-output';output.hidden=true;output.textContent='Running…';button.addEventListener('click',()=>{const open=output.hidden;output.hidden=!open;button.setAttribute('aria-expanded',String(open));chevron.textContent=open?'⌄':'›'});tool.append(button,output);wf.stepsList.appendChild(tool);const panelData={name,tool,button,output,chevron};wf.stepsMap.set(name,panelData);thinking.tool=panelData;updateWorkflowCount(thinking,false);messages.scrollTop=messages.scrollHeight;return panelData}
 function setThinkingTool(thinking,name){return ensureToolPanel(thinking,name)}
 function setToolOutput(thinking,name,result){const panel=ensureToolPanel(thinking,name);if(!panel)return;let text=result;if(typeof result==='object'&&result!==null){try{text=JSON.stringify(result,null,2)}catch{text=String(result)}}panel.output.textContent=String(text??'No output returned');panel.output.dataset.ready='true';messages.scrollTop=messages.scrollHeight}
-function finishToolPanel(thinking){
-  if(!thinking.workflow)return;
-  for(const panel of thinking.workflow.stepsMap.values()){
-    if(panel.output.dataset.ready!=='true'){
-      panel.output.textContent='No output returned';
-      panel.output.dataset.ready='true';
-    }
-    panel.tool.classList.add('tool-complete');
-    panel.chevron.textContent=panel.output.hidden?'›':'⌄';
-  }
-  updateWorkflowCount(thinking,true);
-}
+function finishToolPanel(thinking){if(!thinking.workflow)return;for(const panel of thinking.workflow.stepsMap.values()){if(panel.output.dataset.ready!=='true'){panel.output.textContent='No output returned';panel.output.dataset.ready='true'}panel.tool.classList.add('tool-complete');panel.chevron.textContent=panel.output.hidden?'›':'⌄'}updateWorkflowCount(thinking,true)}
 function toolNameFromText(text){const s=String(text||'');const direct=s.match(/\bapply\s+tool\s+[`"']?([A-Za-z0-9_.:/-]+)[`"']?/i);if(direct)return direct[1];const result=s.match(/\btool\s*:\s*[`"']?([A-Za-z0-9_.:/-]+)[`"']?/i);return result?result[1]:''}
 function looksLikeToolResult(text){const s=String(text||'').trim();return /^\{?\s*map\[/.test(s)||(s.includes('ok:true')&&s.includes('tool:'))||(/\btool\s*:\s*[A-Za-z0-9_.:/-]+/.test(s)&&s.includes('data:'))}
 function stripToolActivity(text){return String(text||'').replace(/^\s*apply\s+tool\s+[`"']?[A-Za-z0-9_.:/-]+[`"']?\s*$/gim,'').trim()}
+function setPrompt(prompt){input.value=prompt;input.focus();input.dispatchEvent(new Event('input'))}
 function deleteSession(id,event){event?.stopPropagation();const all=loadHistoryJSON();if(!Object.prototype.hasOwnProperty.call(all,id))return;delete all[id];saveHistoryJSON(all);if(id===activeSession){activeSession='web';sessionInput.value='web';renderSession('web')}renderHistory();input.focus()}
 function renderHistory(){const all=loadHistoryJSON(),sessions=Object.entries(all).filter(([,items])=>Array.isArray(items)&&items.length).sort((a,b)=>String(b[1].at(-1)?.timestamp||'').localeCompare(String(a[1].at(-1)?.timestamp||'')));historyEl.replaceChildren();for(const [id,items] of sessions){const el=document.createElement('div');el.className='history-item capability'+(id===activeSession?' active':'');const content=document.createElement('button');content.type='button';content.className='history-content';const title=document.createElement('strong');title.textContent=id;const preview=document.createElement('span');preview.textContent=items.at(-1)?.text||'Empty chat';content.append(title,preview);content.addEventListener('click',()=>loadSession(id));const remove=document.createElement('button');remove.type='button';remove.className='history-delete';remove.title=`Delete ${id}`;remove.setAttribute('aria-label',`Delete ${id}`);remove.textContent='×';remove.addEventListener('click',e=>deleteSession(id,e));el.append(content,remove);historyEl.append(el)}if(!sessions.length)historyEl.innerHTML='<div class="empty">No chats yet</div>'}
-function renderSession(id){messages.replaceChildren();const items=sessionHistory(id);if(!items.length){messages.innerHTML='<div class="welcome"><div class="welcome-mark">λ</div><h1>Build with your agent.</h1><p>Start a conversation. Messages are persisted as JSON in this browser.</p><div class="suggestions"><button data-prompt="What skills are available?">List skills</button><button data-prompt="What tools are available?">List tools</button></div></div>';document.querySelectorAll('[data-prompt]').forEach(b=>b.addEventListener('click',()=>{input.value=b.dataset.prompt;input.focus();input.dispatchEvent(new Event('input'))}));return}for(const item of items)addMessage(item.role,item.text,false);messages.scrollTop=messages.scrollHeight}
+function renderSession(id){messages.replaceChildren();const items=sessionHistory(id);if(!items.length){messages.innerHTML='<div class="welcome"><div class="welcome-mark">λ</div><h1>Build with your agent.</h1><p>Start a conversation. Messages are persisted as JSON in this browser.</p><div class="suggestions"><button data-prompt="What skills are available?">List skills</button><button data-prompt="Refactor README.md">Run README refactor skill</button><button data-prompt="Use CodeMode to inspect the available tools and explain the canonical tool names.">Try CodeMode skill</button></div></div>';document.querySelectorAll('[data-prompt]').forEach(b=>b.addEventListener('click',()=>setPrompt(b.dataset.prompt)));return}for(const item of items)addMessage(item.role,item.text,false);messages.scrollTop=messages.scrollHeight}
 function loadSession(id){activeSession=id;sessionInput.value=id;renderSession(id);renderHistory();input.focus()}function createSession(){let id=`chat-${new Date().toISOString().slice(0,19).replace(/[-:T]/g,'')}`,n=2;const all=loadHistoryJSON();while(all[id])id=`chat-${Date.now()}-${n++}`;activeSession=id;sessionInput.value=id;renderSession(id);renderHistory();input.focus()}
 async function health(){try{const r=await fetch('/health');if(!r.ok)throw 0;statusDot.classList.add('ok');statusText.textContent='Gateway connected'}catch{statusDot.classList.remove('ok');statusText.textContent='Gateway unavailable'}}
-function capabilityCard(item,type){const el=document.createElement('button');el.className='capability';const name=document.createElement('strong');name.textContent=item.name;const desc=document.createElement('span');desc.textContent=type==='skill'?(item.description||item.instructions||'Skill'):(item.description||'Tool');el.append(name,desc);if(type==='skill'&&item.tags?.length){const tags=document.createElement('small');tags.textContent=item.tags.slice(0,3).join(' · ');el.append(tags)}return el}
+function capabilityCard(item,type){const el=document.createElement('button');el.className='capability';const name=document.createElement('strong');name.textContent=item.name;const desc=document.createElement('span');desc.textContent=type==='skill'?(item.description||item.instructions||'Skill'):(item.description||'Tool');el.append(name,desc);if(type==='skill'&&item.tags?.length){const tags=document.createElement('small');tags.textContent=item.tags.slice(0,3).join(' · ');el.append(tags);el.addEventListener('click',()=>setPrompt(`Use the ${item.name} skill for this task.`))}return el}
+function skillExampleCard(item){const el=document.createElement('button');el.className='capability skill-example';const name=document.createElement('strong');name.textContent=item.name;const desc=document.createElement('span');desc.textContent=item.description;const prompt=document.createElement('small');prompt.textContent=item.prompt;el.append(name,desc,prompt);el.addEventListener('click',()=>setPrompt(item.prompt));return el}
+function renderSkillExamples(){skillExampleCount.textContent=SKILL_EXAMPLES.length;skillExamplesEl.replaceChildren(...SKILL_EXAMPLES.map(skillExampleCard))}
 async function loadCapabilities(){try{const [sr,tr]=await Promise.all([fetch('/api/skills'),fetch('/api/tools')]);if(!sr.ok||!tr.ok)throw 0;const skills=(await sr.json()).skills||[],tools=(await tr.json()).tools||[];skillCount.textContent=skills.length;toolCount.textContent=tools.length;skillsEl.replaceChildren(...skills.map(x=>capabilityCard(x,'skill')));toolsEl.replaceChildren(...tools.map(x=>capabilityCard(x,'tool')));if(!skills.length)skillsEl.innerHTML='<div class="empty">No enabled skills</div>';if(!tools.length)toolsEl.innerHTML='<div class="empty">No registered tools</div>'}catch{skillsEl.innerHTML='<div class="empty">Unavailable</div>';toolsEl.innerHTML='<div class="empty">Unavailable</div>'}}
-function subagentCard(item){const el=document.createElement('button');el.className='capability subagent';const name=document.createElement('strong');name.textContent=item.name;const desc=document.createElement('span');desc.textContent=item.description||'UTCP sub-agent';el.append(name,desc);el.addEventListener('click',()=>{input.value=`Delegate this task to the ${item.name} sub-agent.`;input.focus();input.dispatchEvent(new Event('input'))});return el}
+function subagentCard(item){const el=document.createElement('button');el.className='capability subagent';const name=document.createElement('strong');name.textContent=item.name;const desc=document.createElement('span');desc.textContent=item.description||'UTCP sub-agent';el.append(name,desc);el.addEventListener('click',()=>setPrompt(`Delegate this task to the ${item.name} sub-agent.`));return el}
 async function loadSubagents(){try{const r=await fetch('/api/subagents');if(!r.ok)throw 0;const items=(await r.json()).subagents||[];subagentsEl.replaceChildren(...items.map(subagentCard));if(!items.length)subagentsEl.innerHTML='<div class="empty">No sub-agents yet</div>'}catch{subagentsEl.innerHTML='<div class="empty">Unavailable</div>'}}
 function openSubagentModal(){subagentError.textContent='';subagentForm.reset();subagentModal.classList.remove('hidden');setTimeout(()=>subagentName.focus(),0)}function closeSubagentModal(){subagentModal.classList.add('hidden')}
-async function submitSubagent(e){e.preventDefault();subagentError.textContent='';const payload={name:subagentName.value.trim(),description:subagentDescription.value.trim(),system_prompt:subagentPrompt.value.trim()};if(!payload.name)return;const button=subagentForm.querySelector('button[type="submit"]');button.disabled=true;try{const r=await fetch('/api/subagents',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}),data=await r.json();if(!r.ok)throw Error(data.error||`Request failed (${r.status})`);closeSubagentModal();await loadSubagents();input.value=`Use the ${data.name} sub-agent for the next task.`;input.focus();input.dispatchEvent(new Event('input'))}catch(e){subagentError.textContent=e.message}finally{button.disabled=false}}
+async function submitSubagent(e){e.preventDefault();subagentError.textContent='';const payload={name:subagentName.value.trim(),description:subagentDescription.value.trim(),system_prompt:subagentPrompt.value.trim()};if(!payload.name)return;const button=subagentForm.querySelector('button[type="submit"]');button.disabled=true;try{const r=await fetch('/api/subagents',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}),data=await r.json();if(!r.ok)throw Error(data.error||`Request failed (${r.status})`);closeSubagentModal();await loadSubagents();setPrompt(`Use the ${data.name} sub-agent for the next task.`)}catch(e){subagentError.textContent=e.message}finally{button.disabled=false}}
 async function streamChat(session,message,bubble,thinking){const r=await fetch('/stream',{method:'POST',headers:{'Content-Type':'application/json','Accept':'text/event-stream'},body:JSON.stringify({session,message})});if(!r.ok){let d=`Request failed (${r.status})`;try{d=(await r.json()).error||d}catch{}throw Error(d)}if(!r.body)throw Error('Streaming is not supported by this browser');const reader=r.body.getReader(),decoder=new TextDecoder();let buffer='',answer='';while(true){const {value,done}=await reader.read();if(done)break;buffer+=decoder.decode(value,{stream:true});const events=buffer.split(/\n\n/);buffer=events.pop()||'';for(const event of events)for(const line of event.split('\n')){if(!line.startsWith('data: '))continue;const data=line.slice(6);if(!data)continue;try{const payload=JSON.parse(data);if(payload.error)throw Error(payload.error);if(payload.type==='tool_start'){setThinkingTool(thinking,payload.tool);continue}if(payload.type==='tool_result'){setToolOutput(thinking,payload.tool,payload.result);continue}if(payload.type==='delta'){const delta=String(payload.delta??'');const toolName=toolNameFromText(delta);if(looksLikeToolResult(delta)){if(toolName)setThinkingTool(thinking,toolName);if(thinking.tool)setToolOutput(thinking,thinking.tool.name,delta);continue}if(toolName){setThinkingTool(thinking,toolName);continue}answer+=delta;const clean=stripToolActivity(answer);if(clean){answer=clean;bubble.classList.remove('thinking-bubble');bubble.textContent=clean}}else if(payload.delta){const delta=String(payload.delta);const toolName=toolNameFromText(delta);if(looksLikeToolResult(delta)){if(toolName)setThinkingTool(thinking,toolName);if(thinking.tool)setToolOutput(thinking,thinking.tool.name,delta);continue}if(toolName){setThinkingTool(thinking,toolName);continue}answer+=delta;const clean=stripToolActivity(answer);if(clean){answer=clean;bubble.classList.remove('thinking-bubble');bubble.textContent=clean}}if(payload.done){finishToolPanel(thinking);const final=stripToolActivity(answer);if(final)persistMessage('assistant',final,session);return}}catch(e){if(e instanceof Error)throw e;answer+=data;bubble.classList.remove('thinking-bubble');bubble.textContent=answer}messages.scrollTop=messages.scrollHeight}}finishToolPanel(thinking);const final=stripToolActivity(answer);if(final)persistMessage('assistant',final,session)}
 async function submit(message){message=message.trim();if(!message||send.disabled)return;const session=sessionInput.value.trim()||activeSession||'web';activeSession=session;sessionInput.value=session;input.value='';input.style.height='auto';addMessage('user',message);const thinking=addThinking();send.disabled=true;input.disabled=true;try{await streamChat(session,message,thinking.bubble,thinking)}catch(e){finishToolPanel(thinking);thinking.bubble.classList.remove('thinking-bubble');thinking.bubble.textContent=`Error: ${e.message}`;persistMessage('assistant',thinking.bubble.textContent,session)}finally{send.disabled=false;input.disabled=false;input.focus();renderHistory()}}
-form.addEventListener('submit',e=>{e.preventDefault();submit(input.value)});input.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();form.requestSubmit()}});input.addEventListener('input',()=>{input.style.height='auto';input.style.height=`${Math.min(input.scrollHeight,180)}px`});newChat?.addEventListener('click',createSession);sessionInput.addEventListener('change',()=>loadSession(sessionInput.value.trim()||'web'));createSubagent?.addEventListener('click',openSubagentModal);closeSubagent?.addEventListener('click',closeSubagentModal);cancelSubagent?.addEventListener('click',closeSubagentModal);subagentModal?.addEventListener('click',e=>{if(e.target===subagentModal)closeSubagentModal()});subagentForm?.addEventListener('submit',submitSubagent);health();loadCapabilities();loadSubagents();renderHistory();renderSession(activeSession);setInterval(health,15000);setInterval(loadCapabilities,30000);setInterval(loadSubagents,10000);
+form.addEventListener('submit',e=>{e.preventDefault();submit(input.value)});input.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();form.requestSubmit()}});input.addEventListener('input',()=>{input.style.height='auto';input.style.height=`${Math.min(input.scrollHeight,180)}px`});newChat?.addEventListener('click',createSession);sessionInput.addEventListener('change',()=>loadSession(sessionInput.value.trim()||'web'));createSubagent?.addEventListener('click',openSubagentModal);closeSubagent?.addEventListener('click',closeSubagentModal);cancelSubagent?.addEventListener('click',closeSubagentModal);subagentModal?.addEventListener('click',e=>{if(e.target===subagentModal)closeSubagentModal()});subagentForm?.addEventListener('submit',submitSubagent);renderSkillExamples();health();loadCapabilities();loadSubagents();renderHistory();renderSession(activeSession);setInterval(health,15000);setInterval(loadCapabilities,30000);setInterval(loadSubagents,10000);
