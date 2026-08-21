@@ -82,7 +82,7 @@ func main() {
 	}
 
 	mux := setupMux(runtime)
-	log.Printf("gateway listening on %s (provider=%s model=%s, utcp=enabled, codemode=enabled)", *flagAddr, *flagProvider, *flagModel)
+	log.Printf("gateway listening on %s (provider=%s model=%s, utcp=enabled, codemode=enabled, skills=enabled)", *flagAddr, *flagProvider, *flagModel)
 	if err := http.ListenAndServe(*flagAddr, mux); err != nil {
 		log.Fatal(err)
 	}
@@ -320,12 +320,13 @@ func buildAgent(ctx context.Context) (*agent.Agent, utcp.UtcpClientInterface, er
 	codeMode := codemode.NewCodeModeUTCP(observedClient, model)
 	mem := memory.NewSessionMemory(memory.NewMemoryBankWithStore(memory.NewInMemoryStore()), *flagContext)
 	ag, err := agent.New(agent.Options{
-		Model:        model,
-		Memory:       mem,
-		SystemPrompt: *flagSystem,
-		ContextLimit: *flagContext,
-		UTCPClient:   observedClient,
-		CodeMode:     codeMode,
+		Model:            model,
+		Memory:           mem,
+		SystemPrompt:     *flagSystem,
+		ContextLimit:     *flagContext,
+		UTCPClient:       observedClient,
+		CodeMode:         codeMode,
+		AllowUnsafeTools: true,
 	})
 	if err != nil {
 		return nil, nil, err
@@ -359,11 +360,7 @@ func (p chatFilePayload) toModelFile() models.File {
 	} else {
 		data = []byte(p.Data)
 	}
-	return models.File{
-		Name: name,
-		MIME: mime,
-		Data: data,
-	}
+	return models.File{Name: name, MIME: mime, Data: data}
 }
 
 type chatRequest struct {
@@ -400,9 +397,9 @@ func handleChat(runtime *agentRuntime) http.HandlerFunc {
 			for _, f := range req.Files {
 				files = append(files, f.toModelFile())
 			}
-			out, err = ag.GenerateWithFiles(r.Context(), req.Session, req.Message, files)
+			out, err = ag.GenerateWithSkillRoutingWithFiles(r.Context(), req.Session, req.Message, files)
 		} else {
-			out, err = ag.Generate(r.Context(), req.Session, req.Message)
+			out, err = ag.GenerateWithSkillRouting(r.Context(), req.Session, req.Message)
 		}
 		if err != nil {
 			writeError(w, 500, err.Error())
@@ -454,7 +451,7 @@ func handleStream(runtime *agentRuntime) http.HandlerFunc {
 
 		go func() {
 			if len(files) > 0 {
-				out, err := ag.GenerateWithFiles(ctx, req.Session, req.Message, files)
+				out, err := ag.GenerateWithSkillRoutingWithFiles(ctx, req.Session, req.Message, files)
 				if err != nil {
 					ready <- struct {
 						stream <-chan models.StreamChunk
