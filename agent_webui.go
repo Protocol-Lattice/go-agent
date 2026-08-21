@@ -1,15 +1,21 @@
 package agent
 
 // WebUISkills returns the skills currently loaded by the Agent as
-// SkillDefinition values suitable for the Web UI. The runtime Agent stores
-// legacy Skill documents, while SkillDefinition is the richer declarative
-// Skill System 2.0 type, so the legacy fields are wrapped without inventing
-// v2 metadata that is not present at runtime.
+// SkillDefinition values suitable for the Web UI. It uses the same registry
+// and validation path as runtime skill routing so the UI cannot advertise a
+// different skill set from the execution path.
 func (a *Agent) WebUISkills() []SkillDefinition {
 	if a == nil {
 		return nil
 	}
 
+	registry, err := a.SkillRegistry()
+	if err == nil {
+		return registry.List()
+	}
+
+	// Keep the Web UI useful when a malformed skill is present: expose the
+	// legacy documents rather than hiding every skill behind one bad definition.
 	skills := a.Skills()
 	out := make([]SkillDefinition, 0, len(skills))
 	for _, skill := range skills {

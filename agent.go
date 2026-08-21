@@ -294,7 +294,7 @@ func (a *Agent) Generate(ctx context.Context, sessionID, userInput string) (any,
 	// ---------------------------------------------
 	// 2. CODEMODE (Go-like DSL)
 	// ---------------------------------------------
-	if a.CodeMode != nil {
+	if a.CodeMode != nil && !requestRequiresMutation(userInput) {
 		handled, output, err := a.CodeMode.CallTool(ctx, userInput)
 		if err != nil {
 			return "", err
@@ -460,7 +460,7 @@ func (a *Agent) GenerateWithFiles(
 
 	// Direct CodeMode does not receive files.
 	// If files are present, CodeMode must be disabled unless it receives full attachment context.
-	if trimmed != "" && !fileBacked && a.CodeMode != nil {
+	if trimmed != "" && !fileBacked && a.CodeMode != nil && !requestRequiresMutation(userInput) {
 		handled, output, err := a.CodeMode.CallTool(ctx, userInput)
 		if err != nil {
 			return "", err
