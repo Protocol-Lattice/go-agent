@@ -32,12 +32,8 @@
 
     const prefix = `Use the ${activeSkill} skill for this task.\n\n`;
     const value = input.value.trim();
-    if (!value || value.startsWith('Use the ')) {
-      input.value = prefix;
-    } else {
-      input.value = `${prefix}${input.value}`;
-    }
-
+    if (!value || value.startsWith('Use the ')) input.value = prefix;
+    else input.value = `${prefix}${input.value}`;
     input.focus();
     input.setSelectionRange(input.value.length, input.value.length);
     input.dispatchEvent(new Event('input', { bubbles: true }));
@@ -47,9 +43,7 @@
     skillsEl.querySelectorAll('.capability:not(.skill-decorated)').forEach((card) => {
       const name = card.querySelector('strong')?.textContent?.trim();
       if (!name) return;
-
       card.classList.add('skill-capability', 'skill-decorated');
-
       const apply = document.createElement('span');
       apply.className = 'skill-apply';
       apply.dataset.skill = name;
@@ -58,6 +52,23 @@
       apply.textContent = activeSkill === name ? 'Applied' : 'Apply';
       apply.title = `Apply ${name} skill`;
       card.appendChild(apply);
+    });
+  }
+
+  // The backend intentionally uses the existing tool_start channel for skill
+  // routing so old clients continue to receive one workflow stream. Translate
+  // the internal skill:<name> marker into the user-facing "apply skill" label.
+  function decorateWorkflowSkills() {
+    document.querySelectorAll('.tool-activity').forEach((activity) => {
+      const title = activity.querySelector('.tool-activity-title');
+      if (!title) return;
+      const match = title.textContent.trim().match(/^apply tool skill:(.+)$/i);
+      if (!match) return;
+      const name = match[1].trim();
+      title.textContent = `apply skill ${name}`;
+      activity.classList.add('skill-activity');
+      const icon = activity.querySelector('.tool-activity-icon');
+      if (icon) icon.textContent = '⚡';
     });
   }
 
@@ -78,7 +89,11 @@
     applySkill(apply.dataset.skill);
   });
 
-  const observer = new MutationObserver(decorate);
-  observer.observe(skillsEl, { childList: true, subtree: true });
+  const observer = new MutationObserver(() => {
+    decorate();
+    decorateWorkflowSkills();
+  });
+  observer.observe(document.body, { childList: true, subtree: true });
   decorate();
+  decorateWorkflowSkills();
 })();
