@@ -121,7 +121,15 @@ func (a *Agent) GenerateWithSkillRoutingWithFiles(ctx context.Context, sessionID
 	return fmt.Sprint(result), nil
 }
 
+// generateWithRouting is the single skill + CodeMode execution workflow.
+// Skill routing happens once, then the same scoped agent is used for the
+// CodeMode fast path and the normal tool/planner fallback. The workflow event
+// is emitted before execution so WebUI clients can render the real sequence.
 func (a *Agent) generateWithRouting(ctx context.Context, sessionID, userInput string, routing SkillRouting) (any, error) {
+	for _, skill := range routing.Skills {
+		emitSkillExecutionEvent(ctx, skill.Name)
+	}
+
 	if output, handled, err := a.generateFastCodeMode(ctx, sessionID, userInput, routing, nil); err != nil {
 		return nil, err
 	} else if handled {
@@ -136,6 +144,10 @@ func (a *Agent) generateWithRouting(ctx context.Context, sessionID, userInput st
 }
 
 func (a *Agent) generateWithRoutingFiles(ctx context.Context, sessionID, userInput string, routing SkillRouting, files []models.File) (any, error) {
+	for _, skill := range routing.Skills {
+		emitSkillExecutionEvent(ctx, skill.Name)
+	}
+
 	if output, handled, err := a.generateFastCodeMode(ctx, sessionID, userInput, routing, files); err != nil {
 		return nil, err
 	} else if handled {
