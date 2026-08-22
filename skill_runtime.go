@@ -39,6 +39,9 @@ func (a *Agent) RouteSkills(input string, limit int) (SkillRouting, error) {
 	if err != nil {
 		return SkillRouting{}, err
 	}
+	if limit <= 0 {
+		limit = 1
+	}
 	matches := registry.Match(input, limit)
 	names := make([]string, 0, len(matches))
 	for _, match := range matches {
@@ -102,7 +105,7 @@ func SkillPrompt(routing SkillRouting) string {
 }
 
 func (a *Agent) GenerateWithSkillRouting(ctx context.Context, sessionID, userInput string) (any, error) {
-	routing, err := a.RouteSkills(userInput, 3)
+	routing, err := a.RouteSkills(userInput, 1)
 	if err != nil {
 		return nil, fmt.Errorf("route skills: %w", err)
 	}
@@ -110,7 +113,7 @@ func (a *Agent) GenerateWithSkillRouting(ctx context.Context, sessionID, userInp
 }
 
 func (a *Agent) GenerateWithSkillRoutingWithFiles(ctx context.Context, sessionID, userInput string, files []models.File) (string, error) {
-	routing, err := a.RouteSkills(userInput, 3)
+	routing, err := a.RouteSkills(userInput, 1)
 	if err != nil {
 		return "", fmt.Errorf("route skills: %w", err)
 	}
@@ -121,15 +124,10 @@ func (a *Agent) GenerateWithSkillRoutingWithFiles(ctx context.Context, sessionID
 	return fmt.Sprint(result), nil
 }
 
-// generateWithRouting is the single skill + CodeMode execution workflow.
-// Skill routing happens once, then the same scoped agent is used for the
-// CodeMode fast path and the normal tool/planner fallback. The workflow event
-// is emitted before execution so WebUI clients can render the real sequence.
 func (a *Agent) generateWithRouting(ctx context.Context, sessionID, userInput string, routing SkillRouting) (any, error) {
-	for _, skill := range routing.Skills {
-		emitSkillExecutionEvent(ctx, skill.Name)
+	if len(routing.Skills) > 0 {
+		emitSkillExecutionEvent(ctx, routing.Skills[len(routing.Skills)-1].Name)
 	}
-
 	if output, handled, err := a.generateFastCodeMode(ctx, sessionID, userInput, routing, nil); err != nil {
 		return nil, err
 	} else if handled {
@@ -144,10 +142,9 @@ func (a *Agent) generateWithRouting(ctx context.Context, sessionID, userInput st
 }
 
 func (a *Agent) generateWithRoutingFiles(ctx context.Context, sessionID, userInput string, routing SkillRouting, files []models.File) (any, error) {
-	for _, skill := range routing.Skills {
-		emitSkillExecutionEvent(ctx, skill.Name)
+	if len(routing.Skills) > 0 {
+		emitSkillExecutionEvent(ctx, routing.Skills[len(routing.Skills)-1].Name)
 	}
-
 	if output, handled, err := a.generateFastCodeMode(ctx, sessionID, userInput, routing, files); err != nil {
 		return nil, err
 	} else if handled {
