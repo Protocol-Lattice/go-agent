@@ -160,6 +160,28 @@ func mutationToolNames(toolList []tools.Tool) string {
 	return b.String()
 }
 
+// plannerToolList applies the mutation gate before the planner sees tool
+// definitions. This prevents the model from repeatedly selecting read-only
+// tools after inspection has completed; rejected choices alone are not enough
+// because the model can keep regenerating the same invalid choice.
+func plannerToolList(toolList []tools.Tool, state orchestrationState) []tools.Tool {
+	if !state.requiresMutation || !state.inspected || state.mutated {
+		return toolList
+	}
+
+	filtered := make([]tools.Tool, 0, len(toolList))
+	for _, spec := range toolList {
+		name := strings.TrimSpace(spec.Name)
+		if name == "" {
+			continue
+		}
+		if name == codemode.CodeModeToolName || name == "codemode.run_code" || toolMutates(name) {
+			filtered = append(filtered, spec)
+		}
+	}
+	return filtered
+}
+
 var codeModeToolCallRE = regexp.MustCompile(`\bCallTool(?:Stream)?\s*\(\s*"((?:\\.|[^"\\])*)"`)
 
 func codeModeMutates(code string) bool {
@@ -309,18 +331,19 @@ func (a *Agent) toolOrchestrator(ctx context.Context, sessionID, userInput strin
 	}
 
 	state := orchestrationState{requiresMutation: requestRequiresMutation(userInput)}
-	toolPrompt := a.cachedToolPrompt(toolList)
 	memoryPrompt := a.renderMemory(records)
 	filePrompt := a.buildAttachmentPrompt("Files available for this turn", files)
 	workspacePrompt := fileBackedWorkspaceRules(files)
-	canonical := codeModeToolNames(toolList)
-	mutationTools := mutationToolNames(toolList)
 	maxSteps := configuredToolLoopMaxSteps()
 	observations := make([]string, 0, maxSteps)
 	lastKey := ""
 	lastValue := ""
 
 	for step := 1; step <= maxSteps; step++ {
+		plannerTools := plannerToolList(toolList, state)
+		toolPrompt := a.cachedToolPrompt(plannerTools)
+		canonical := codeModeToolNames(plannerTools)
+		mutationTools := mutationToolNames(plannerTools)
 		prompt := buildToolPlannerPrompt(a.systemInstructions(), userInput, memoryPrompt, filePrompt, workspacePrompt, toolPrompt, canonical, mutationTools, observations, state)
 		raw, err := a.model.Generate(ctx, prompt)
 		if err != nil {
@@ -353,7 +376,7 @@ func (a *Agent) toolOrchestrator(ctx context.Context, sessionID, userInput strin
 		if choice.Arguments == nil {
 			choice.Arguments = map[string]any{}
 		}
-		plannedMutation, err := validatePlannedTool(toolList, state, toolName, choice.Arguments)
+		plannedMutation, err := validatePlannedTool(plannerTools, state, toolName, choice.Arguments)
 		if err != nil {
 			observations = append(observations, fmt.Sprintf("[step %d] planner_error=%v", step, err))
 			continue
@@ -393,8 +416,7 @@ func (a *Agent) toolOrchestrator(ctx context.Context, sessionID, userInput strin
 
 func (a *Agent) toolOrchestratorNative(ctx context.Context, sessionID, userInput string, records []memory.MemoryRecord, toolList []tools.Tool, native models.ToolCallingAgent) (bool, string, error) {
 	state := orchestrationState{requiresMutation: requestRequiresMutation(userInput)}
-	definitions := nativeToolDefinitions(toolList)
-	if len(definitions) == 0 {
+	if len(toolList) == 0 {
 		return false, "", nil
 	}
 
@@ -405,6 +427,12 @@ func (a *Agent) toolOrchestratorNative(ctx context.Context, sessionID, userInput
 	lastValue := ""
 
 	for step := 1; step <= maxSteps; step++ {
+		plannerTools := plannerToolList(toolList, state)
+		definitions := nativeToolDefinitions(plannerTools)
+		if len(definitions) == 0 {
+			return false, "", nil
+		}
+
 		prompt := buildNativePlannerPrompt(a.systemInstructions(), userInput, memoryPrompt, observations, state)
 		response, err := native.GenerateWithTools(ctx, prompt, definitions)
 		if err != nil {
@@ -432,7 +460,7 @@ func (a *Agent) toolOrchestratorNative(ctx context.Context, sessionID, userInput
 			if call.Arguments == nil {
 				call.Arguments = map[string]any{}
 			}
-			plannedMutation, err := validatePlannedTool(toolList, state, toolName, call.Arguments)
+			plannedMutation, err := validatePlannedTool(plannerTools, state, toolName, call.Arguments)
 			if err != nil {
 				observations = append(observations, fmt.Sprintf("[step %d] planner_error=%v", step, err))
 				continue
