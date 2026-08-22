@@ -10,7 +10,6 @@ import (
     "strings"
 )
 
-// SkillDefinition is the declarative Skill System 2.0 representation.
 type SkillDefinition struct {
     Skill
     Version      string
@@ -63,11 +62,6 @@ func (r *SkillRegistry) Register(skill SkillDefinition) error {
     return nil
 }
 
-// ensureSkillMutationTools prevents a mutation-oriented skill from becoming
-// read-only merely because its manifest listed only discovery tools. This is
-// especially important for skills such as "refactor README": after inspecting
-// the target, the orchestrator must still be able to select filesystem.write,
-// filesystem.patch, or another real mutation tool.
 func ensureSkillMutationTools(tools []string) []string {
     hasFilesystemRead := false
     for _, name := range tools {
@@ -76,16 +70,8 @@ func ensureSkillMutationTools(tools []string) []string {
             break
         }
     }
-    if !hasFilesystemRead {
-        return tools
-    }
-
-    tools = append(tools,
-        "filesystem.write",
-        "filesystem.patch",
-        "filesystem.replace",
-        "filesystem.delete",
-    )
+    if !hasFilesystemRead { return tools }
+    tools = append(tools, "filesystem.write", "filesystem.patch", "filesystem.replace", "filesystem.delete")
     return normalizeList(tools)
 }
 
@@ -105,7 +91,6 @@ func (r *SkillRegistry) List() []SkillDefinition {
     return out
 }
 
-// Match performs deterministic lightweight routing before the model call.
 func (r *SkillRegistry) Match(input string, limit int) []SkillMatch {
     if r == nil || strings.TrimSpace(input) == "" { return nil }
     query := strings.ToLower(input)
@@ -123,7 +108,6 @@ func (r *SkillRegistry) Match(input string, limit int) []SkillMatch {
     return matches
 }
 
-// ResolveDependencies returns dependency-first order and detects cycles.
 func (r *SkillRegistry) ResolveDependencies(names []string) ([]SkillDefinition, error) {
     if r == nil { return nil, errors.New("skill registry is nil") }
     seen, visiting := map[string]bool{}, map[string]bool{}
@@ -155,7 +139,6 @@ func ValidateSkill(skill SkillDefinition) error {
     return nil
 }
 
-// LoadSkillDefinitions upgrades the existing .skills format without breaking it.
 func LoadSkillDefinitions(dir string) ([]SkillDefinition, error) {
     skills, err := LoadSkills(dir)
     if err != nil { return nil, err }
@@ -165,8 +148,39 @@ func LoadSkillDefinitions(dir string) ([]SkillDefinition, error) {
     return definitions, nil
 }
 
+func skillTokens(value string) map[string]struct{} {
+    value = strings.ToLower(value)
+    value = strings.NewReplacer("_", " ", "-", " ", ".", " ", "/", " ").Replace(value)
+    tokens := make(map[string]struct{})
+    for _, token := range strings.Fields(value) {
+        token = strings.Trim(token, ".,:;!?()[]{}\"")
+        if len(token) >= 3 { tokens[token] = struct{}{} }
+    }
+    return tokens
+}
+
 func scoreSkill(skill SkillDefinition, query string) (float64, string) {
-    if strings.Contains(query, strings.ToLower(skill.Name)) { return 1, "skill name" }
+    name := strings.ToLower(skill.Name)
+    if strings.Contains(query, name) { return 1, "skill name" }
+
+    // Match meaningful skill-name tokens independently so requests such as
+    // "refactor README.md" select refactor-readme instead of generic skills
+    // whose descriptions happen to contain words like "inspect" or "tool".
+    queryTokens := skillTokens(query)
+    nameTokens := skillTokens(skill.Name)
+    if len(nameTokens) > 0 {
+        matched := 0
+        for token := range nameTokens {
+            if _, ok := queryTokens[token]; ok { matched++ }
+        }
+        if matched == len(nameTokens) {
+            return .98, "skill name tokens"
+        }
+        if matched > 0 {
+            return .85, "skill name token"
+        }
+    }
+
     for _, trigger := range skill.Triggers {
         trigger = strings.ToLower(strings.TrimSpace(trigger))
         if trigger != "" && strings.Contains(query, trigger) { return .95, "trigger: " + trigger }
@@ -198,7 +212,6 @@ func normalizeList(values []string) []string {
     return out
 }
 
-// SaveSkill persists a v2 skill in the existing human-editable SKILL.md format.
 func SaveSkill(dir string, skill SkillDefinition) (string, error) {
     if err := ValidateSkill(skill); err != nil { return "", err }
     if strings.TrimSpace(dir) == "" { return "", errors.New("skills directory is empty") }
