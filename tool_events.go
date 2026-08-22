@@ -24,82 +24,70 @@ type ToolExecutionEvent struct {
 
 type toolExecutionObserverKey struct{}
 
-// WithToolExecutionObserver attaches a per-request workflow observer to the
-// context. Observers are request-scoped and therefore safe when the same Agent
-// serves multiple concurrent WebUI sessions.
 func WithToolExecutionObserver(ctx context.Context, observer func(ToolExecutionEvent)) context.Context {
-	if observer == nil {
-		return ctx
-	}
+	if observer == nil { return ctx }
 	return context.WithValue(ctx, toolExecutionObserverKey{}, observer)
 }
 
 func toolExecutionObserver(ctx context.Context) func(ToolExecutionEvent) {
-	if ctx == nil {
-		return nil
-	}
+	if ctx == nil { return nil }
 	observer, _ := ctx.Value(toolExecutionObserverKey{}).(func(ToolExecutionEvent))
 	return observer
 }
 
 func emitToolExecutionEvent(ctx context.Context, event ToolExecutionEvent) {
-	if observer := toolExecutionObserver(ctx); observer != nil {
-		observer(event)
-	}
+	if observer := toolExecutionObserver(ctx); observer != nil { observer(event) }
 }
 
+// Skills use the same workflow transport as tools so older WebUI clients can
+// render them without a second event channel. The skill marker is translated
+// to "apply skill <name>" by the WebUI renderer.
 func emitSkillExecutionEvent(ctx context.Context, skill string) {
-	if skill == "" {
-		return
-	}
-	emitToolExecutionEvent(ctx, ToolExecutionEvent{Type: "skill_start", Skill: skill})
+	if skill == "" { return }
+	emitToolExecutionEvent(ctx, ToolExecutionEvent{
+		Type: "tool_start",
+		Tool: "skill:" + skill,
+		Skill: skill,
+	})
 }
 
 // ObservedUTCPClient wraps a UTCP client without changing its behavior. Tool
 // calls made directly by the Agent and calls made from CodeMode both pass
 // through this wrapper, which gives us one canonical execution event stream.
-type ObservedUTCPClient struct {
-	utcp.UtcpClientInterface
-}
+type ObservedUTCPClient struct { utcp.UtcpClientInterface }
 
 func NewObservedUTCPClient(client utcp.UtcpClientInterface) utcp.UtcpClientInterface {
-	if client == nil {
-		return nil
-	}
+	if client == nil { return nil }
 	return &ObservedUTCPClient{UtcpClientInterface: client}
 }
 
 func (c *ObservedUTCPClient) CallTool(ctx context.Context, toolName string, args map[string]any) (any, error) {
 	emitToolExecutionEvent(ctx, ToolExecutionEvent{Type: "tool_start", Tool: toolName, Arguments: args})
-
 	result, err := c.UtcpClientInterface.CallTool(ctx, toolName, args)
 	if err != nil {
 		emitToolExecutionEvent(ctx, ToolExecutionEvent{Type: "tool_result", Tool: toolName, Arguments: args, Error: err.Error()})
 		return nil, err
 	}
-
 	emitToolExecutionEvent(ctx, ToolExecutionEvent{Type: "tool_result", Tool: toolName, Arguments: args, Result: result})
 	return result, nil
 }
 
 func (c *ObservedUTCPClient) CallToolStream(ctx context.Context, toolName string, args map[string]any) (transports.StreamResult, error) {
 	emitToolExecutionEvent(ctx, ToolExecutionEvent{Type: "tool_start", Tool: toolName, Arguments: args})
-
 	stream, err := c.UtcpClientInterface.CallToolStream(ctx, toolName, args)
 	if err != nil {
 		emitToolExecutionEvent(ctx, ToolExecutionEvent{Type: "tool_result", Tool: toolName, Arguments: args, Error: err.Error()})
 		return nil, err
 	}
-
 	return &observedStreamResult{inner: stream, ctx: ctx, tool: toolName, args: args}, nil
 }
 
 type observedStreamResult struct {
 	inner transports.StreamResult
-	ctx   context.Context
-	tool  string
-	args  map[string]any
-	done  bool
+	ctx context.Context
+	tool string
+	args map[string]any
+	done bool
 }
 
 func (s *observedStreamResult) Next() (any, error) {
@@ -107,17 +95,13 @@ func (s *observedStreamResult) Next() (any, error) {
 	if err != nil && !s.done {
 		s.done = true
 		event := ToolExecutionEvent{Type: "tool_result", Tool: s.tool, Arguments: s.args}
-		if !errors.Is(err, io.EOF) {
-			event.Error = err.Error()
-		}
+		if !errors.Is(err, io.EOF) { event.Error = err.Error() }
 		emitToolExecutionEvent(s.ctx, event)
 	}
 	return value, err
 }
 
 func (s *observedStreamResult) Close() error {
-	if s.inner == nil {
-		return nil
-	}
+	if s.inner == nil { return nil }
 	return s.inner.Close()
 }
