@@ -9,12 +9,14 @@ import (
 	"github.com/universal-tool-calling-protocol/go-utcp/src/transports"
 )
 
-// ToolExecutionEvent describes one real UTCP tool execution. It is emitted
-// from the same client used by the agent and CodeMode, so the WebUI can render
-// the actual execution order instead of inferring tool calls from model text.
+// ToolExecutionEvent is the canonical workflow event emitted while an agent
+// executes a request. Despite the historical name, it also carries skill
+// routing events so the WebUI can render one workflow for skills + CodeMode +
+// UTCP tools in the exact execution order.
 type ToolExecutionEvent struct {
 	Type      string         `json:"type"`
-	Tool      string         `json:"tool"`
+	Tool      string         `json:"tool,omitempty"`
+	Skill     string         `json:"skill,omitempty"`
 	Arguments map[string]any `json:"arguments,omitempty"`
 	Result    any            `json:"result,omitempty"`
 	Error     string         `json:"error,omitempty"`
@@ -22,9 +24,9 @@ type ToolExecutionEvent struct {
 
 type toolExecutionObserverKey struct{}
 
-// WithToolExecutionObserver attaches a per-request observer to the context.
-// Observers are request-scoped and therefore safe when the same Agent serves
-// multiple concurrent WebUI sessions.
+// WithToolExecutionObserver attaches a per-request workflow observer to the
+// context. Observers are request-scoped and therefore safe when the same Agent
+// serves multiple concurrent WebUI sessions.
 func WithToolExecutionObserver(ctx context.Context, observer func(ToolExecutionEvent)) context.Context {
 	if observer == nil {
 		return ctx
@@ -46,6 +48,13 @@ func emitToolExecutionEvent(ctx context.Context, event ToolExecutionEvent) {
 	}
 }
 
+func emitSkillExecutionEvent(ctx context.Context, skill string) {
+	if skill == "" {
+		return
+	}
+	emitToolExecutionEvent(ctx, ToolExecutionEvent{Type: "skill_start", Skill: skill})
+}
+
 // ObservedUTCPClient wraps a UTCP client without changing its behavior. Tool
 // calls made directly by the Agent and calls made from CodeMode both pass
 // through this wrapper, which gives us one canonical execution event stream.
@@ -61,34 +70,24 @@ func NewObservedUTCPClient(client utcp.UtcpClientInterface) utcp.UtcpClientInter
 }
 
 func (c *ObservedUTCPClient) CallTool(ctx context.Context, toolName string, args map[string]any) (any, error) {
-	emitToolExecutionEvent(ctx, ToolExecutionEvent{
-		Type: "tool_start", Tool: toolName, Arguments: args,
-	})
+	emitToolExecutionEvent(ctx, ToolExecutionEvent{Type: "tool_start", Tool: toolName, Arguments: args})
 
 	result, err := c.UtcpClientInterface.CallTool(ctx, toolName, args)
 	if err != nil {
-		emitToolExecutionEvent(ctx, ToolExecutionEvent{
-			Type: "tool_result", Tool: toolName, Arguments: args, Error: err.Error(),
-		})
+		emitToolExecutionEvent(ctx, ToolExecutionEvent{Type: "tool_result", Tool: toolName, Arguments: args, Error: err.Error()})
 		return nil, err
 	}
 
-	emitToolExecutionEvent(ctx, ToolExecutionEvent{
-		Type: "tool_result", Tool: toolName, Arguments: args, Result: result,
-	})
+	emitToolExecutionEvent(ctx, ToolExecutionEvent{Type: "tool_result", Tool: toolName, Arguments: args, Result: result})
 	return result, nil
 }
 
 func (c *ObservedUTCPClient) CallToolStream(ctx context.Context, toolName string, args map[string]any) (transports.StreamResult, error) {
-	emitToolExecutionEvent(ctx, ToolExecutionEvent{
-		Type: "tool_start", Tool: toolName, Arguments: args,
-	})
+	emitToolExecutionEvent(ctx, ToolExecutionEvent{Type: "tool_start", Tool: toolName, Arguments: args})
 
 	stream, err := c.UtcpClientInterface.CallToolStream(ctx, toolName, args)
 	if err != nil {
-		emitToolExecutionEvent(ctx, ToolExecutionEvent{
-			Type: "tool_result", Tool: toolName, Arguments: args, Error: err.Error(),
-		})
+		emitToolExecutionEvent(ctx, ToolExecutionEvent{Type: "tool_result", Tool: toolName, Arguments: args, Error: err.Error()})
 		return nil, err
 	}
 
