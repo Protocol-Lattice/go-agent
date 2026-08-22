@@ -25,6 +25,18 @@ func TestSkillRegistryDetectsCycles(t *testing.T) {
     if _, err := r.ResolveDependencies([]string{"a"}); err == nil { t.Fatal("expected cycle error") }
 }
 
+func TestSkillRegistryPrefersSpecificSkillNameTokens(t *testing.T) {
+    r := NewSkillRegistry()
+    if err := r.Register(SkillDefinition{Skill: Skill{Name: "code-review", Description: "Review Go code for correctness.", Instructions: "review"}, Enabled: true}); err != nil { t.Fatal(err) }
+    if err := r.Register(SkillDefinition{Skill: Skill{Name: "refactor-readme", Description: "Refactor README documentation.", Instructions: "refactor"}, Enabled: true}); err != nil { t.Fatal(err) }
+
+    matches := r.Match("Use the README refactoring skill, inspect README.md, then modify it", 1)
+    if len(matches) != 1 || matches[0].Skill.Name != "refactor-readme" {
+        t.Fatalf("expected refactor-readme, got %+v", matches)
+    }
+    if matches[0].Score < .98 { t.Fatalf("expected strong skill-name match, got %.2f", matches[0].Score) }
+}
+
 type testSkillEvaluator struct{}
 func (testSkillEvaluator) Evaluate(context.Context, SkillEvaluation) (SkillEvaluationResult, error) { return SkillEvaluationResult{Score: 1, Passed: true}, nil }
 
