@@ -1,69 +1,58 @@
 (() => {
-  const skillsRoot = document.getElementById('skills');
-  if (!skillsRoot) return;
-
-  const applySkill = (card) => {
-    const name = card.querySelector('strong')?.textContent?.trim();
-    if (!name) return;
-    if (typeof setPrompt === 'function') {
-      setPrompt(`Use the ${name} skill for this task.`);
-    }
-    card.classList.add('skill-applied');
-    window.setTimeout(() => card.classList.remove('skill-applied'), 900);
-  };
-
-  const enhance = () => {
-    skillsRoot.querySelectorAll('.capability').forEach((card) => {
-      if (card.dataset.skillApplyReady === 'true') return;
-      card.dataset.skillApplyReady = 'true';
-
-      const action = document.createElement('span');
-      action.className = 'skill-apply-action';
-      action.textContent = 'Apply skill';
-      card.appendChild(action);
-
-      card.addEventListener('click', (event) => {
-        event.preventDefault();
-        event.stopImmediatePropagation();
-        applySkill(card);
-      }, true);
-    });
-  };
+  const skillsEl = document.getElementById('skills');
+  if (!skillsEl) return;
 
   const style = document.createElement('style');
   style.textContent = `
-    #skills .capability { cursor: pointer; position: relative; }
-    #skills .skill-apply-action {
-      display: inline-flex;
-      align-items: center;
-      margin-top: 7px;
-      padding: 3px 7px;
-      border: 1px solid #3c4e2f;
-      border-radius: 6px;
-      background: #182017;
-      color: #b8f36a;
-      font-size: 9px;
-      font-weight: 800;
-      letter-spacing: .02em;
-      transition: background .18s, border-color .18s, transform .18s;
+    .capability.skill-capability { position: relative; padding-right: 72px; }
+    .skill-apply {
+      position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
+      border: 1px solid rgba(255,255,255,.14); border-radius: 7px;
+      background: rgba(255,255,255,.06); color: inherit; padding: 4px 8px;
+      font: inherit; font-size: 11px; cursor: pointer; z-index: 2;
     }
-    #skills .capability:hover .skill-apply-action {
-      background: #202b1b;
-      border-color: #587441;
-    }
-    #skills .capability.skill-applied .skill-apply-action {
-      background: #2a421f;
-      border-color: #7aaa50;
-      transform: scale(1.03);
-    }
-    #skills .capability.skill-applied {
-      background: #182017;
-      border-color: #405431;
-      box-shadow: inset 2px 0 #b8f36a;
-    }
+    .skill-apply:hover { background: rgba(255,255,255,.12); }
+    .skill-apply.active { background: rgba(100,160,255,.18); border-color: rgba(100,160,255,.45); }
   `;
   document.head.appendChild(style);
 
-  enhance();
-  new MutationObserver(enhance).observe(skillsRoot, { childList: true, subtree: true });
+  let activeSkill = '';
+
+  function applySkill(name, button) {
+    activeSkill = String(name || '').trim();
+    document.querySelectorAll('.skill-apply').forEach((el) => {
+      el.classList.toggle('active', el === button);
+      el.textContent = el === button ? 'Applied' : 'Apply';
+    });
+
+    const input = document.getElementById('input');
+    if (!input) return;
+    const prefix = `Use the ${activeSkill} skill for this task.\n\n`;
+    if (!input.value.trim() || input.value.trim().startsWith('Use the ')) input.value = prefix;
+    input.focus();
+    input.setSelectionRange(input.value.length, input.value.length);
+    input.dispatchEvent(new Event('input'));
+  }
+
+  function decorate() {
+    skillsEl.querySelectorAll('.capability:not(.skill-decorated)').forEach((card) => {
+      card.classList.add('skill-capability', 'skill-decorated');
+      const name = card.querySelector('strong')?.textContent?.trim();
+      if (!name) return;
+      const apply = document.createElement('span');
+      apply.className = 'skill-apply';
+      apply.textContent = activeSkill === name ? 'Applied' : 'Apply';
+      apply.title = `Apply ${name} skill`;
+      apply.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        applySkill(name, apply);
+      });
+      card.appendChild(apply);
+    });
+  }
+
+  const observer = new MutationObserver(decorate);
+  observer.observe(skillsEl, { childList: true, subtree: true });
+  decorate();
 })();

@@ -101,9 +101,6 @@ func SkillPrompt(routing SkillRouting) string {
 	return strings.TrimSpace(b.String())
 }
 
-// GenerateWithSkillRouting runs one request with an isolated skill/tool scope.
-// It is the safe entry point for hosts such as the Web UI that want skill
-// routing without changing the semantics of the lower-level Generate method.
 func (a *Agent) GenerateWithSkillRouting(ctx context.Context, sessionID, userInput string) (any, error) {
 	routing, err := a.RouteSkills(userInput, 3)
 	if err != nil {
@@ -112,8 +109,6 @@ func (a *Agent) GenerateWithSkillRouting(ctx context.Context, sessionID, userInp
 	return a.generateWithRouting(ctx, sessionID, userInput, routing)
 }
 
-// GenerateWithSkillRoutingWithFiles is the file-aware equivalent used by
-// hosts that attach workspace files to a skill-routed request.
 func (a *Agent) GenerateWithSkillRoutingWithFiles(ctx context.Context, sessionID, userInput string, files []models.File) (string, error) {
 	routing, err := a.RouteSkills(userInput, 3)
 	if err != nil {
@@ -127,6 +122,12 @@ func (a *Agent) GenerateWithSkillRoutingWithFiles(ctx context.Context, sessionID
 }
 
 func (a *Agent) generateWithRouting(ctx context.Context, sessionID, userInput string, routing SkillRouting) (any, error) {
+	if output, handled, err := a.generateFastCodeMode(ctx, sessionID, userInput, routing, nil); err != nil {
+		return nil, err
+	} else if handled {
+		return output, nil
+	}
+
 	requestAgent, err := a.newSkillScopedAgent(routing)
 	if err != nil {
 		return nil, err
@@ -135,6 +136,12 @@ func (a *Agent) generateWithRouting(ctx context.Context, sessionID, userInput st
 }
 
 func (a *Agent) generateWithRoutingFiles(ctx context.Context, sessionID, userInput string, routing SkillRouting, files []models.File) (any, error) {
+	if output, handled, err := a.generateFastCodeMode(ctx, sessionID, userInput, routing, files); err != nil {
+		return nil, err
+	} else if handled {
+		return output, nil
+	}
+
 	requestAgent, err := a.newSkillScopedAgent(routing)
 	if err != nil {
 		return nil, err
