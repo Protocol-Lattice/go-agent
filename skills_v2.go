@@ -58,8 +58,35 @@ func (r *SkillRegistry) Register(skill SkillDefinition) error {
     skill.Triggers = normalizeList(skill.Triggers)
     skill.Dependencies = normalizeList(skill.Dependencies)
     skill.Tools = normalizeList(skill.Tools)
+    skill.Tools = ensureSkillMutationTools(skill.Tools)
     r.skills[skill.Name] = skill
     return nil
+}
+
+// ensureSkillMutationTools prevents a mutation-oriented skill from becoming
+// read-only merely because its manifest listed only discovery tools. This is
+// especially important for skills such as "refactor README": after inspecting
+// the target, the orchestrator must still be able to select filesystem.write,
+// filesystem.patch, or another real mutation tool.
+func ensureSkillMutationTools(tools []string) []string {
+    hasFilesystemRead := false
+    for _, name := range tools {
+        if strings.EqualFold(strings.TrimSpace(name), "filesystem.read") {
+            hasFilesystemRead = true
+            break
+        }
+    }
+    if !hasFilesystemRead {
+        return tools
+    }
+
+    tools = append(tools,
+        "filesystem.write",
+        "filesystem.patch",
+        "filesystem.replace",
+        "filesystem.delete",
+    )
+    return normalizeList(tools)
 }
 
 func (r *SkillRegistry) Remove(name string) { if r != nil { delete(r.skills, strings.TrimSpace(name)) } }
