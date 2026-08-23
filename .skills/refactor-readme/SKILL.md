@@ -7,18 +7,19 @@ For README refactoring requests:
 
 1. Apply this skill before inspecting or modifying README.md.
 2. All repository inspection and mutation MUST happen inside `codemode.run_code`.
-3. Inspect the repository as needed to verify commands, architecture, APIs, examples, and file paths used by the README.
-4. Read the current README.md before making changes.
+3. Use CodeMode as the only execution boundary for repository work. Internal `filesystem.*`, `shell.*`, and other UTCP calls shown in the workflow are expected only when invoked from CodeMode.
+4. The FIRST CodeMode program MUST inspect the current README.md and any relevant repository context, then perform the requested README mutation in that SAME program when the required information is available. Do not spend separate CodeMode steps on inspection-only work when you already have enough information to edit the file.
 5. The planner MUST NOT call `filesystem.*`, `shell.*`, `git.*`, or any other canonical UTCP tool directly; invoke them from CodeMode with exact registered tool names.
 6. CodeMode source MUST call the runtime API as `codemode.CallTool("exact.tool.name", args)` or `codemode.CallToolStream("exact.tool.name", args)`. Never emit unqualified `CallTool(...)` or `CallToolStream(...)`; those identifiers do not exist in the CodeMode execution scope.
-7. CodeMode source MUST be a statement-only snippet. NEVER include `package` declarations, `import` declarations, or import blocks. Do not define a separate `main` function. The CodeMode runtime supplies the execution wrapper and `codemode` receiver.
-8. Use only the runtime APIs and canonical UTCP tool names already exposed by CodeMode. Do not invent helper packages or imports.
-9. For a mutation request, after the relevant inspection has completed, the NEXT CodeMode program MUST contain a real mutation. Do not perform another read-only CodeMode step once the README has been inspected.
-10. For README mutation, use one of these concrete patterns:
+7. CodeMode source MUST be a statement-only snippet. NEVER include `package` declarations, `import` declarations, import blocks, or a separate `main` function. The CodeMode runtime supplies the execution wrapper and `codemode` receiver.
+8. Use only the runtime APIs and canonical UTCP tool names already exposed by CodeMode. Do not invent helper packages, imports, or helper functions.
+9. For the first CodeMode program, prefer this sequence in one lexical scope: inspect README/context -> construct the improved README content or patch -> call `filesystem.patch` or `filesystem.write`.
+10. A CodeMode program that only reads/list/searches is NOT sufficient for this skill unless the read result proves that a mutation cannot or should not be performed. For an ordinary refactor request, the first successful inspection should be followed by a real mutation in the same CodeMode program.
+11. For README mutation, use one of these concrete forms with the exact registered input schema:
    - `updated, err := codemode.CallTool("filesystem.patch", map[string]any{"path": "README.md", ...})`
    - `updated, err := codemode.CallTool("filesystem.write", map[string]any{"path": "README.md", ...})`
-   Use the exact registered input schema for the selected filesystem tool. Keep `updated` and `err` in the same lexical scope as all dependent values.
-11. When practical, combine inspection and mutation in the SAME CodeMode program. If the current README contents are already available in the observation, do not re-read it; mutate it directly in the next CodeMode program.
-12. After mutation, use CodeMode again to verify the modified README.md. Verification is not a substitute for the required mutation.
-13. Preserve accurate technical information and remove stale, duplicated, or misleading documentation.
-14. Never report completion unless the README mutation and verification actually occurred.
+   Keep `updated`, `err`, and all dependent values in the same lexical scope.
+12. If the previous observation already contains the README contents or sufficient repository context, do NOT issue another read-only CodeMode program. Mutate from the available evidence.
+13. After a successful mutation, use at most one additional CodeMode program to verify the modified README.md when practical. Verification never replaces the required mutation.
+14. Preserve accurate technical information and remove stale, duplicated, or misleading documentation.
+15. Never report completion unless the README mutation and verification actually occurred.
