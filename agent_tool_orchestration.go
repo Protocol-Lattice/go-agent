@@ -78,6 +78,14 @@ func appendCodeModeToolSpec(specs []tools.Tool) []tools.Tool {
 	return append(append([]tools.Tool(nil), specs...), tools.Tool{
 		Name:        codemode.CodeModeToolName,
 		Description: "Execute Go code against the canonical UTCP tool registry. All repository inspection and mutation must happen inside CodeMode.",
+		Inputs: tools.ToolInputOutputSchema{
+			Type: "object",
+			Properties: map[string]any{
+				"code":    map[string]any{"type": "string", "description": "Go source to execute. Invoke only exact canonical UTCP tool names through CallTool or CallToolStream."},
+				"timeout": map[string]any{"type": "integer", "description": "Execution timeout in milliseconds."},
+			},
+			Required: []string{"code"},
+		},
 	})
 }
 
@@ -89,6 +97,28 @@ func codeModePlannerTools(specs []tools.Tool) []tools.Tool {
 		}
 	}
 	return result
+}
+
+func formatToolObservation(step int, toolName string, args map[string]any, result any) string {
+	return fmt.Sprintf("[step %d] tool=%s args=%s\nresult=%s", step, toolName, compactJSON(args), truncate(fmt.Sprint(result), defaultToolObservationMaxBytes))
+}
+
+func compactJSON(v any) string {
+	if v == nil {
+		return "{}"
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		return fmt.Sprint(v)
+	}
+	return string(b)
+}
+
+func lastToolObservation(observations []string) string {
+	if len(observations) == 0 {
+		return ""
+	}
+	return observations[len(observations)-1]
 }
 
 var mutationRequestRE = regexp.MustCompile(`(?i)\b(refactor|rewrite|modify|update|edit|change|fix|patch|write|create|delete|remove|rename|move|replace|apply)\b`)
