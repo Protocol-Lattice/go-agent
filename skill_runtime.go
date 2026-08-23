@@ -134,7 +134,7 @@ func (a *Agent) generateWithRouting(ctx context.Context, sessionID, userInput st
 		return nil, err
 	}
 
-	if output, handled, err := requestAgent.generateSkillCodeMode(ctx, sessionID, userInput, nil); err != nil {
+	if handled, output, err := requestAgent.generateSkillCodeMode(ctx, sessionID, userInput, nil); err != nil {
 		return nil, err
 	} else if handled {
 		return output, nil
@@ -159,7 +159,7 @@ func (a *Agent) generateWithRoutingFiles(ctx context.Context, sessionID, userInp
 		return nil, err
 	}
 
-	if output, handled, err := requestAgent.generateSkillCodeMode(ctx, sessionID, userInput, files); err != nil {
+	if handled, output, err := requestAgent.generateSkillCodeMode(ctx, sessionID, userInput, files); err != nil {
 		return nil, err
 	} else if handled {
 		return output, nil
@@ -174,10 +174,6 @@ func (a *Agent) generateWithRoutingFiles(ctx context.Context, sessionID, userInp
 	return requestAgent.GenerateWithFiles(ctx, sessionID, userInput, files)
 }
 
-// generateSkillCodeMode is the skill-aware fast path. A matched skill is
-// routing/context only; the next executable operation is always CodeMode.
-// Tool execution remains inside CodeMode and therefore still uses the
-// canonical UTCP registry rather than direct planner tool calls.
 func (a *Agent) generateSkillCodeMode(ctx context.Context, sessionID, userInput string, files []models.File) (any, bool, error) {
 	if a == nil || a.CodeMode == nil {
 		return nil, false, nil
@@ -187,24 +183,22 @@ func (a *Agent) generateSkillCodeMode(ctx context.Context, sessionID, userInput 
 	emitToolExecutionEvent(ctx, ToolExecutionEvent{
 		Type: "tool_start",
 		Tool: codemode.CodeModeToolName,
-		Arguments: map[string]any{
-			"source": "skill",
-		},
+		Arguments: map[string]any{"source": "skill"},
 	})
 
-	output, handled, err := a.CodeMode.CallTool(ctx, prompt)
+	handled, output, err := a.CodeMode.CallTool(ctx, prompt)
 	if err != nil {
 		emitToolExecutionEvent(ctx, ToolExecutionEvent{
-			Type:  "tool_result",
-			Tool:  codemode.CodeModeToolName,
+			Type: "tool_result",
+			Tool: codemode.CodeModeToolName,
 			Error: err.Error(),
 		})
 		return nil, false, nil
 	}
 	if !handled {
 		emitToolExecutionEvent(ctx, ToolExecutionEvent{
-			Type:   "tool_result",
-			Tool:   codemode.CodeModeToolName,
+			Type: "tool_result",
+			Tool: codemode.CodeModeToolName,
 			Result: "CodeMode did not handle the request",
 		})
 		return nil, false, nil
@@ -219,8 +213,8 @@ func (a *Agent) generateSkillCodeMode(ctx context.Context, sessionID, userInput 
 	}
 
 	emitToolExecutionEvent(ctx, ToolExecutionEvent{
-		Type:   "tool_result",
-		Tool:   codemode.CodeModeToolName,
+		Type: "tool_result",
+		Tool: codemode.CodeModeToolName,
 		Result: output,
 	})
 	a.storeMemory(sessionID, "assistant", fmt.Sprint(output), map[string]string{"source": "skill_codemode"})
@@ -276,15 +270,6 @@ func (a *Agent) newSkillScopedAgent(routing SkillRouting) (*Agent, error) {
 		Guardrails:        a.Guardrails,
 		InputGuardrails:   a.InputGuardrails,
 	})
-}
-
-func hasAllowedTool(allowed map[string]struct{}, names ...string) bool {
-	for _, name := range names {
-		if _, ok := allowed[strings.ToLower(strings.TrimSpace(name))]; ok {
-			return true
-		}
-	}
-	return false
 }
 
 type skillFilteredUTCPClient struct {
