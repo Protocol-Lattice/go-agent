@@ -192,16 +192,16 @@ func (a *Agent) generateSkillCodeMode(ctx context.Context, sessionID, userInput 
 		},
 	})
 
-	handled, output, err := a.CodeMode.CallTool(ctx, prompt)
+	output, err := a.CodeMode.CallTool(ctx, prompt)
 	if err != nil {
 		emitToolExecutionEvent(ctx, ToolExecutionEvent{
-			Type:  "tool_result",
-			Tool:  codemode.CodeModeToolName,
+			Type: "tool_result",
+			Tool: codemode.CodeModeToolName,
 			Error: err.Error(),
 		})
 		return nil, false, nil
 	}
-	if !handled {
+	if output == nil {
 		emitToolExecutionEvent(ctx, ToolExecutionEvent{
 			Type: "tool_result",
 			Tool: codemode.CodeModeToolName,
