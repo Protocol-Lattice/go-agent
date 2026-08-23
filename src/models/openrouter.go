@@ -59,7 +59,12 @@ func (o *OpenRouterLLM) buildPrompt(prompt string) string {
 			"  codemode.CallToolStream(\"exact.tool.name\", args)\n" +
 			"- NEVER emit bare CallTool(...) or CallToolStream(...).\n" +
 			"- NEVER invent a global CallTool function.\n" +
-			"- Keep all dependent variables in the same lexical scope.\n"
+			"- Keep all dependent variables in the same lexical scope.\n" +
+			"- Return exactly ONE JSON object.\n" +
+			"- Do NOT wrap the JSON in Markdown fences or surrounding prose.\n" +
+			"- The value of arguments.code MUST be a JSON string. Escape every newline as \\n and every inner double quote as \\\".\n" +
+			"- NEVER place literal line breaks inside the arguments.code JSON string.\n" +
+			"- Use the exact schema keys use_tool, tool_name, arguments, reason, final_answer.\n"
 	}
 
 	return full
