@@ -134,7 +134,7 @@ func (a *Agent) generateWithRouting(ctx context.Context, sessionID, userInput st
 		return nil, err
 	}
 
-	if handled, output, err := requestAgent.generateSkillCodeMode(ctx, sessionID, userInput, nil); err != nil {
+	if output, handled, err := requestAgent.generateSkillCodeMode(ctx, sessionID, userInput, nil); err != nil {
 		return nil, err
 	} else if handled {
 		return output, nil
@@ -159,7 +159,7 @@ func (a *Agent) generateWithRoutingFiles(ctx context.Context, sessionID, userInp
 		return nil, err
 	}
 
-	if handled, output, err := requestAgent.generateSkillCodeMode(ctx, sessionID, userInput, files); err != nil {
+	if output, handled, err := requestAgent.generateSkillCodeMode(ctx, sessionID, userInput, files); err != nil {
 		return nil, err
 	} else if handled {
 		return output, nil
@@ -192,19 +192,19 @@ func (a *Agent) generateSkillCodeMode(ctx context.Context, sessionID, userInput 
 		},
 	})
 
-	output, err := a.CodeMode.CallTool(ctx, prompt)
+	output, handled, err := a.CodeMode.CallTool(ctx, prompt)
 	if err != nil {
 		emitToolExecutionEvent(ctx, ToolExecutionEvent{
-			Type: "tool_result",
-			Tool: codemode.CodeModeToolName,
+			Type:  "tool_result",
+			Tool:  codemode.CodeModeToolName,
 			Error: err.Error(),
 		})
 		return nil, false, nil
 	}
-	if output == nil {
+	if !handled {
 		emitToolExecutionEvent(ctx, ToolExecutionEvent{
-			Type: "tool_result",
-			Tool: codemode.CodeModeToolName,
+			Type:   "tool_result",
+			Tool:   codemode.CodeModeToolName,
 			Result: "CodeMode did not handle the request",
 		})
 		return nil, false, nil
@@ -278,6 +278,21 @@ func (a *Agent) newSkillScopedAgent(routing SkillRouting) (*Agent, error) {
 	})
 }
 
+func hasAllowedTool(allowed map[string]struct{}, names ...string) bool {
+	for _, name := range names {
+		if _, ok := allowed[strings.ToLower(strings.TrimSpace(name))]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+type skillFilteredUTCPClient struct {
+	utcp.UtcpClientInterface
+	inner   utcp.UtcpClientInterface
+	allowed map[string]struct{}
+}
+
 func (c *skillFilteredUTCPClient) allowedTool(name string) bool {
 	name = strings.ToLower(strings.TrimSpace(name))
 	if _, ok := c.allowed[name]; ok {
@@ -289,12 +304,6 @@ func (c *skillFilteredUTCPClient) allowedTool(name string) bool {
 		}
 	}
 	return false
-}
-
-type skillFilteredUTCPClient struct {
-	utcp.UtcpClientInterface
-	inner   utcp.UtcpClientInterface
-	allowed map[string]struct{}
 }
 
 func (c *skillFilteredUTCPClient) SearchTools(query string, limit int) ([]tools.Tool, error) {
