@@ -134,9 +134,12 @@ func (a *Agent) generateWithRouting(ctx context.Context, sessionID, userInput st
 		return nil, err
 	}
 
-	// Skill application is routing/context, not execution. Always continue into
-	// the CodeMode-only orchestrator so repository inspection and mutation are
-	// performed through codemode.run_code and the canonical UTCP registry.
+	if handled, output, err := requestAgent.generateSkillCodeMode(ctx, sessionID, userInput, nil); err != nil {
+		return nil, err
+	} else if handled {
+		return output, nil
+	}
+
 	if handled, output, err := requestAgent.toolOrchestrator(ctx, sessionID, userInput, nil); err != nil {
 		return nil, err
 	} else if handled {
@@ -156,6 +159,12 @@ func (a *Agent) generateWithRoutingFiles(ctx context.Context, sessionID, userInp
 		return nil, err
 	}
 
+	if handled, output, err := requestAgent.generateSkillCodeMode(ctx, sessionID, userInput, files); err != nil {
+		return nil, err
+	} else if handled {
+		return output, nil
+	}
+
 	if handled, output, err := requestAgent.toolOrchestrator(ctx, sessionID, userInput, nil, files...); err != nil {
 		return nil, err
 	} else if handled {
@@ -163,6 +172,59 @@ func (a *Agent) generateWithRoutingFiles(ctx context.Context, sessionID, userInp
 	}
 
 	return requestAgent.GenerateWithFiles(ctx, sessionID, userInput, files)
+}
+
+// generateSkillCodeMode is the skill-aware fast path. A matched skill is
+// routing/context only; the next executable operation is always CodeMode.
+// Tool execution remains inside CodeMode and therefore still uses the
+// canonical UTCP registry rather than direct planner tool calls.
+func (a *Agent) generateSkillCodeMode(ctx context.Context, sessionID, userInput string, files []models.File) (any, bool, error) {
+	if a == nil || a.CodeMode == nil {
+		return nil, false, nil
+	}
+
+	prompt := fastCodeModePrompt(a.systemPrompt, userInput, files)
+	emitToolExecutionEvent(ctx, ToolExecutionEvent{
+		Type: "tool_start",
+		Tool: codemode.CodeModeToolName,
+		Arguments: map[string]any{
+			"source": "skill",
+		},
+	})
+
+	handled, output, err := a.CodeMode.CallTool(ctx, prompt)
+	if err != nil {
+		emitToolExecutionEvent(ctx, ToolExecutionEvent{
+			Type:  "tool_result",
+			Tool:  codemode.CodeModeToolName,
+			Error: err.Error(),
+		})
+		return nil, false, nil
+	}
+	if !handled {
+		emitToolExecutionEvent(ctx, ToolExecutionEvent{
+			Type: "tool_result",
+			Tool: codemode.CodeModeToolName,
+			Result: "CodeMode did not handle the request",
+		})
+		return nil, false, nil
+	}
+
+	if a.Guardrails != nil {
+		validated, guardrailErr := a.Guardrails.ValidateAndRepair(ctx, fmt.Sprint(output))
+		if guardrailErr != nil {
+			return nil, false, guardrailErr
+		}
+		output = validated
+	}
+
+	emitToolExecutionEvent(ctx, ToolExecutionEvent{
+		Type:   "tool_result",
+		Tool:   codemode.CodeModeToolName,
+		Result: output,
+	})
+	a.storeMemory(sessionID, "assistant", fmt.Sprint(output), map[string]string{"source": "skill_codemode"})
+	return output, true, nil
 }
 
 func (a *Agent) newSkillScopedAgent(routing SkillRouting) (*Agent, error) {
@@ -187,8 +249,6 @@ func (a *Agent) newSkillScopedAgent(routing SkillRouting) (*Agent, error) {
 
 	var codeMode *codemode.CodeModeUTCP
 	if a.CodeMode != nil && requestUTCP != nil {
-		// CodeMode is the orchestration primitive and must remain available even
-		// when the skill itself lists only its canonical UTCP child tools.
 		codeMode = codemode.NewCodeModeUTCP(requestUTCP, a.model)
 	}
 
@@ -218,21 +278,6 @@ func (a *Agent) newSkillScopedAgent(routing SkillRouting) (*Agent, error) {
 	})
 }
 
-func hasAllowedTool(allowed map[string]struct{}, names ...string) bool {
-	for _, name := range names {
-		if _, ok := allowed[strings.ToLower(strings.TrimSpace(name))]; ok {
-			return true
-		}
-	}
-	return false
-}
-
-type skillFilteredUTCPClient struct {
-	utcp.UtcpClientInterface
-	inner   utcp.UtcpClientInterface
-	allowed map[string]struct{}
-}
-
 func (c *skillFilteredUTCPClient) allowedTool(name string) bool {
 	name = strings.ToLower(strings.TrimSpace(name))
 	if _, ok := c.allowed[name]; ok {
@@ -244,6 +289,12 @@ func (c *skillFilteredUTCPClient) allowedTool(name string) bool {
 		}
 	}
 	return false
+}
+
+type skillFilteredUTCPClient struct {
+	utcp.UtcpClientInterface
+	inner   utcp.UtcpClientInterface
+	allowed map[string]struct{}
 }
 
 func (c *skillFilteredUTCPClient) SearchTools(query string, limit int) ([]tools.Tool, error) {
