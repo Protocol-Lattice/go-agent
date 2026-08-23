@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	openrouter "github.com/OpenRouterTeam/go-sdk"
 	"github.com/OpenRouterTeam/go-sdk/models/components"
@@ -26,6 +27,7 @@ func NewOpenRouterLLM(model string, promptPrefix string) *OpenRouterLLM {
 
 	client := openrouter.New(
 		openrouter.WithSecurity(apiKey),
+		openrouter.WithTimeout(15*time.Minute),
 	)
 	return &OpenRouterLLM{
 		Client:       client,
@@ -160,7 +162,6 @@ func getOpenRouterMimeType(mt string) string {
 	mt = strings.ToLower(strings.TrimSpace(mt))
 	switch {
 	case strings.HasPrefix(mt, "image/"):
-		// OpenRouter supports: image/jpeg, image/png, image/gif, image/webp
 		switch mt {
 		case "image/jpeg", "image/jpg":
 			return "image/jpeg"
@@ -171,10 +172,9 @@ func getOpenRouterMimeType(mt string) string {
 		case "image/webp":
 			return "image/webp"
 		default:
-			return "" // Unsupported image format
+			return ""
 		}
 	case strings.HasPrefix(mt, "video/"):
-		// OpenRouter supports various video formats
 		return mt
 	default:
 		return ""
@@ -184,7 +184,6 @@ func getOpenRouterMimeType(mt string) string {
 func (o *OpenRouterLLM) GenerateWithFiles(ctx context.Context, prompt string, files []File) (any, error) {
 	fullPrompt := o.buildPrompt(prompt)
 
-	// Separate files by type
 	var textFiles []File
 	var imageFiles []File
 	var pdfFiles []File
@@ -201,13 +200,11 @@ func (o *OpenRouterLLM) GenerateWithFiles(ctx context.Context, prompt string, fi
 		}
 	}
 
-	// If no media files, fall back to text-only approach
 	if len(imageFiles) == 0 && len(pdfFiles) == 0 {
 		combined := combinePromptWithFiles(fullPrompt, textFiles)
 		return o.Generate(ctx, combined)
 	}
 
-	// Build the text prompt with inline text files
 	textPrompt := fullPrompt
 	if len(textFiles) > 0 {
 		textPrompt = combinePromptWithFiles(fullPrompt, textFiles)
@@ -217,7 +214,6 @@ func (o *OpenRouterLLM) GenerateWithFiles(ctx context.Context, prompt string, fi
 
 	switch {
 	case len(imageFiles) > 0:
-		// Only the first image is attached, matching the original function's behavior.
 		firstImage := imageFiles[0]
 		encoded := base64.StdEncoding.EncodeToString(firstImage.Data)
 		dataURL := fmt.Sprintf(
