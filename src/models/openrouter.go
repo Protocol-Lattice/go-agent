@@ -49,20 +49,17 @@ func (o *OpenRouterLLM) buildPrompt(prompt string) string {
 	}
 
 	// OpenRouter models must emit code for the actual UTCP CodeMode runtime.
-	// The Yaegi environment exposes the `codemode` receiver; bare CallTool(...)
-	// is not a valid executable symbol and results in `undefined: CallTool`.
+	// The Yaegi environment exposes the codemode receiver; bare CallTool(...)
+	// is not a valid executable symbol and results in undefined: CallTool.
 	if strings.Contains(full, "codemode.run_code") || strings.Contains(full, "CodeMode") {
-		full += `
-
-CRITICAL CODEMODE ABI
-- Generated CodeMode source is executed by Yaegi.
-- ALWAYS call UTCP tools through the `codemode` receiver:
-  `codemode.CallTool("exact.tool.name", args)`
-  `codemode.CallToolStream("exact.tool.name", args)`
-- NEVER emit bare `CallTool(...)` or `CallToolStream(...)`.
-- NEVER invent a global CallTool function.
-- Keep all dependent variables in the same lexical scope.
-`
+		full += "\n\nCRITICAL CODEMODE ABI\n" +
+			"- Generated CodeMode source is executed by Yaegi.\n" +
+			"- ALWAYS call UTCP tools through the codemode receiver:\n" +
+			"  codemode.CallTool(\"exact.tool.name\", args)\n" +
+			"  codemode.CallToolStream(\"exact.tool.name\", args)\n" +
+			"- NEVER emit bare CallTool(...) or CallToolStream(...).\n" +
+			"- NEVER invent a global CallTool function.\n" +
+			"- Keep all dependent variables in the same lexical scope.\n"
 	}
 
 	return full
