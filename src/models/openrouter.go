@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"strings"
 	"time"
@@ -25,8 +26,13 @@ func NewOpenRouterLLM(model string, promptPrefix string) *OpenRouterLLM {
 		apiKey = os.Getenv("OPENROUTER_KEY") // fallback
 	}
 
+	// The HTTP client must not impose its own wall-clock timeout on streamed or
+	// slow LLM responses. Request cancellation is controlled by the caller's
+	// context and the SDK operation timeout below.
+	httpClient := &http.Client{}
 	client := openrouter.New(
 		openrouter.WithSecurity(apiKey),
+		openrouter.WithClient(httpClient),
 		openrouter.WithTimeout(15*time.Minute),
 	)
 	return &OpenRouterLLM{
@@ -190,7 +196,6 @@ func (o *OpenRouterLLM) GenerateWithFiles(ctx context.Context, prompt string, fi
 
 	for _, f := range files {
 		mt := normalizeMIME(f.Name, f.MIME)
-
 		if strings.HasPrefix(mt, "image/") && getOpenRouterMimeType(mt) != "" {
 			imageFiles = append(imageFiles, f)
 		} else if strings.HasPrefix(mt, "application/pdf") {
