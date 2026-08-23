@@ -18,7 +18,7 @@ import (
 )
 
 const (
-	defaultToolLoopMaxSteps        = 4
+	defaultToolLoopMaxSteps        = 6
 	defaultToolObservationMaxBytes = 4000
 	defaultPlannerRepairAttempts   = 2
 )
@@ -81,7 +81,7 @@ func appendCodeModeToolSpec(specs []tools.Tool) []tools.Tool {
 		Inputs: tools.ToolInputOutputSchema{
 			Type: "object",
 			Properties: map[string]any{
-				"code":    map[string]any{"type": "string", "description": "Go source to execute. Invoke only exact canonical UTCP tool names through CallTool or CallToolStream."},
+				"code":    map[string]any{"type": "string", "description": "Go source to execute. Invoke only exact canonical UTCP tool names through codemode.CallTool or codemode.CallToolStream."},
 				"timeout": map[string]any{"type": "integer", "description": "Execution timeout in milliseconds."},
 			},
 			Required: []string{"code"},
@@ -185,6 +185,22 @@ func validateCodeModeCode(code string, canonicalTools []tools.Tool) error {
 	if code == "" {
 		return errors.New("codemode.run_code received empty code")
 	}
+
+	// CodeMode has a small, explicit helper API. Reject invented helpers before
+	// execution so the planner gets a deterministic repair signal.
+	for _, forbidden := range []string{
+		"codemode.Return",
+		"codemode.Result",
+		"codemode.Output",
+		"codemode.Emit",
+		"codemode.Finish",
+		"codemode.Done",
+	} {
+		if strings.Contains(code, forbidden) {
+			return fmt.Errorf("codemode invalid_api: %s does not exist; use codemode.CallTool, codemode.CallToolStream, codemode.SearchTools, codemode.Sprintf, or codemode.Errorf; assign the final result to __out", forbidden)
+		}
+	}
+
 	if !strings.Contains(code, "CallTool") {
 		return nil
 	}
@@ -256,6 +272,7 @@ func validatePlannedTool(plannerTools, canonicalTools []tools.Tool, state orches
 	}
 	return plannedMutation, nil
 }
+
 func validateToolChoice(choice ToolChoice) error {
 	if choice.UseTool {
 		if strings.TrimSpace(choice.ToolName) == "" {
@@ -266,13 +283,12 @@ func validateToolChoice(choice ToolChoice) error {
 		}
 		return nil
 	}
-
 	if strings.TrimSpace(choice.ToolName) != "" {
 		return errors.New("invalid_plan: tool_name must be empty when use_tool=false")
 	}
-
 	return nil
 }
+
 func parseToolChoice(raw string) (ToolChoice, error) {
 	jsonStr := extractJSON(raw)
 	if jsonStr == "" {
@@ -303,7 +319,7 @@ Return ONLY one valid JSON object using this exact envelope.
 For a tool action:
 {"use_tool":true,"tool_name":"codemode.run_code","arguments":{"code":"..."},"reason":"next concrete action","final_answer":""}
 For completion:
-{"use_tool":false,"tool_name":"","arguments":{},"reason":"complete","final_answer":"..."}
+{"use_tool":false,"tool_name":"","arguments":{},"reason":"complete","final_answer":""}
 Do not return markdown, prose, arrays, multiple objects, or unregistered tool names.`, originalPrompt, parseErr, rawResponse)
 }
 
@@ -410,7 +426,7 @@ func (a *Agent) toolOrchestrator(ctx context.Context, sessionID, userInput strin
 		result, err := a.executeTool(ctx, sessionID, toolName, plannedArgs)
 		if err != nil {
 			if isCodeModeCompilationError(err) {
-				observations = append(observations, fmt.Sprintf("[step %d] codemode_compilation_error=%v; generate fresh code and keep dependent values in one lexical scope", step, err))
+				observations = append(observations, fmt.Sprintf("[step %d] codemode_compilation_error=%v; generate fresh code. The runtime API is limited to codemode.CallTool, codemode.CallToolStream, codemode.SearchTools, codemode.Sprintf, and codemode.Errorf. Do not use codemode.Return or other invented helpers. Assign the final result to __out and keep dependent values in one lexical scope.", step, err))
 				lastKey = ""
 				continue
 			}
@@ -455,7 +471,7 @@ HARD EXECUTION CONTRACT
 - CodeMode is the ONLY planner/execution tool available to you.
 - NEVER return filesystem.*, shell.*, git.*, or any other canonical UTCP tool as tool_name.
 - Repository inspection and mutation MUST happen inside codemode.run_code.
-- If the task requires repository work, your next action must be a codemode.run_code call containing Go code that invokes exact canonical tools through CallTool or CallToolStream.
+- If the task requires repository work, your next action must be a codemode.run_code call containing Go code that invokes exact canonical tools through codemode.CallTool or codemode.CallToolStream.
 - Do NOT emit narration such as "I'll inspect..." instead of a tool call.
 - Return the JSON tool call immediately when another action is required.
 %s
@@ -498,7 +514,9 @@ mutation_complete=%t
 verification_complete=%t
 
 CODEMODE RULES
-- Use exact canonical tool names only.
+- Use only the real CodeMode API: codemode.CallTool, codemode.CallToolStream, codemode.SearchTools, codemode.Sprintf, codemode.Errorf.
+- NEVER invent codemode.Return, codemode.Result, codemode.Output, codemode.Emit, codemode.Finish, or codemode.Done.
+- The final CodeMode value must be assigned to __out.
 - Keep dependent values in one lexical scope.
 - For inspection, call the appropriate canonical read/search/list tool from inside CodeMode.
 - For mutation, call filesystem.write or filesystem.patch from inside CodeMode when those exact tools are registered.
@@ -512,8 +530,8 @@ OUTPUT
 Return ONLY one JSON object:
 {"use_tool":true,"tool_name":"codemode.run_code","arguments":{"code":"..."},"reason":"next concrete action","final_answer":""}
 OR, only when the request is actually complete:
-{"use_tool":false,"tool_name":"","arguments":{},"reason":"complete","final_answer":"..."}
-`, phase, systemPrompt, userInput, toolPrompt, canonicalTools, memoryPrompt, filePrompt, workspacePrompt, strings.Join(observations, "\n\n"), state.requiresMutation, state.inspected, state.mutated, state.verified)
+{"use_tool":false,"tool_name":"","arguments":{},"reason":"complete","final_answer":""}
+`, phase, userInput, systemPrompt, toolPrompt, canonicalTools, memoryPrompt, filePrompt, workspacePrompt, strings.Join(observations, "\n\n"), state.requiresMutation, state.inspected, state.mutated, state.verified)
 }
 
 func codeModeToolNames(toolList []tools.Tool) string {
