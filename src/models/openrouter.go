@@ -43,10 +43,29 @@ func NewOpenRouterLLM(model string, promptPrefix string) *OpenRouterLLM {
 }
 
 func (o *OpenRouterLLM) buildPrompt(prompt string) string {
+	full := prompt
 	if o.PromptPrefix != "" {
-		return o.PromptPrefix + "\n" + prompt
+		full = o.PromptPrefix + "\n" + prompt
 	}
-	return prompt
+
+	// OpenRouter models must emit code for the actual UTCP CodeMode runtime.
+	// The Yaegi environment exposes the `codemode` receiver; bare CallTool(...)
+	// is not a valid executable symbol and results in `undefined: CallTool`.
+	if strings.Contains(full, "codemode.run_code") || strings.Contains(full, "CodeMode") {
+		full += `
+
+CRITICAL CODEMODE ABI
+- Generated CodeMode source is executed by Yaegi.
+- ALWAYS call UTCP tools through the `codemode` receiver:
+  `codemode.CallTool("exact.tool.name", args)`
+  `codemode.CallToolStream("exact.tool.name", args)`
+- NEVER emit bare `CallTool(...)` or `CallToolStream(...)`.
+- NEVER invent a global CallTool function.
+- Keep all dependent variables in the same lexical scope.
+`
+	}
+
+	return full
 }
 
 // firstChoiceText extracts the assistant's text out of a non-streaming
