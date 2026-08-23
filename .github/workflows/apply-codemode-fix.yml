@@ -1,0 +1,60 @@
+name: apply codemode mutation fix
+
+on:
+  push:
+    branches:
+      - fix/codemode-mutation
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/codemode-mutation
+
+      - name: Apply fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path("agent.go")
+          s = p.read_text()
+          s = s.replace(
+              'if a.CodeMode != nil && !requestRequiresMutation(userInput) {',
+              'if a.CodeMode != nil && codeModeEligible(userInput, false) {',
+          )
+          s = s.replace(
+              'if trimmed != "" && !fileBacked && a.CodeMode != nil && !requestRequiresMutation(userInput) {',
+              'if trimmed != "" && codeModeEligible(userInput, fileBacked) && a.CodeMode != nil {',
+          )
+          p.write_text(s)
+          PY
+
+          cat > codemode_policy.go <<'GO'
+          package agent
+
+          // codeModeEligible is the policy gate for the direct CodeMode selection pass.
+          // CodeMode is intentionally available for mutation requests; the mutation
+          // requirement is enforced by the tool orchestrator after CodeMode execution.
+          // File-backed requests stay out of this path because the direct CodeMode API
+          // does not receive attachment contents.
+          func codeModeEligible(_ string, fileBacked bool) bool {
+            return !fileBacked
+          }
+          GO
+
+          rm -f .github/workflows/apply-codemode-fix.yml
+          gofmt -w agent.go codemode_policy.go agent_codemode_mutation_test.go
+          go test ./...
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add agent.go codemode_policy.go agent_codemode_mutation_test.go .github/workflows/apply-codemode-fix.yml
+          git commit -m 'fix: route mutation requests through CodeMode' || exit 0
+          git push origin HEAD:fix/codemode-mutation
