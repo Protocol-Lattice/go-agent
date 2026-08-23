@@ -1,9 +1,9 @@
 name: apply codemode mutation fix
 
 on:
-  push:
+  pull_request:
     branches:
-      - fix/codemode-mutation
+      - main
 
 permissions:
   contents: write
