@@ -76,11 +76,11 @@ func appendCodeModeToolSpec(specs []tools.Tool) []tools.Tool {
 	}
 	return append(append([]tools.Tool(nil), specs...), tools.Tool{
 		Name:        codemode.CodeModeToolName,
-		Description: "Execute Go code against the canonical UTCP tool registry. CallTool and CallToolStream require exact registered UTCP tool names.",
+		Description: "Execute Go code against the canonical UTCP tool registry. All repository inspection and mutation must happen inside CodeMode.",
 		Inputs: tools.ToolInputOutputSchema{
 			Type: "object",
 			Properties: map[string]any{
-				"code":    map[string]any{"type": "string", "description": "Go source to execute. Use only exact canonical UTCP tool names."},
+				"code":    map[string]any{"type": "string", "description": "Go source to execute. Invoke only exact canonical UTCP tool names through CallTool or CallToolStream."},
 				"timeout": map[string]any{"type": "integer", "description": "Execution timeout in milliseconds."},
 			},
 			Required: []string{"code"},
@@ -135,6 +135,8 @@ func requestRequiresMutation(input string) bool {
 	return mutationRequestRE.MatchString(lower)
 }
 
+var codeModeToolCallRE = regexp.MustCompile(`\bCallTool(?:Stream)?\s*\(\s*"((?:\\.|[^"\\])*)"`)
+
 func toolMutates(toolName string) bool {
 	name := strings.ToLower(strings.TrimSpace(toolName))
 	for _, word := range []string{"write", "edit", "patch", "delete", "remove", "create", "rename", "move", "apply", "replace", "update", "insert"} {
@@ -144,8 +146,6 @@ func toolMutates(toolName string) bool {
 	}
 	return false
 }
-
-var codeModeToolCallRE = regexp.MustCompile(`\bCallTool(?:Stream)?\s*\(\s*"((?:\\.|[^"\\])*)"`)
 
 func codeModeMutates(code string) bool {
 	for _, match := range codeModeToolCallRE.FindAllStringSubmatch(code, -1) {
@@ -167,13 +167,11 @@ func validateCodeModeCode(code string, canonicalTools []tools.Tool) error {
 	if !strings.Contains(code, "CallTool") {
 		return nil
 	}
-
 	matches := codeModeToolCallRE.FindAllStringSubmatch(code, -1)
 	invocations := regexp.MustCompile(`\bCallTool(?:Stream)?\s*\(`).FindAllStringIndex(code, -1)
 	if len(matches) != len(invocations) {
 		return errors.New("codemode rejected: every CallTool/CallToolStream invocation must use an exact string-literal tool name")
 	}
-
 	for _, match := range matches {
 		name, err := strconv.Unquote(`"` + match[1] + `"`)
 		if err != nil {
@@ -186,33 +184,6 @@ func validateCodeModeCode(code string, canonicalTools []tools.Tool) error {
 	return nil
 }
 
-func codeModeToolNames(toolList []tools.Tool) string {
-	var b strings.Builder
-	for _, spec := range toolList {
-		name := strings.TrimSpace(spec.Name)
-		if name == "" || name == codemode.CodeModeToolName || name == "codemode.run_code" {
-			continue
-		}
-		b.WriteString("- ")
-		b.WriteString(name)
-		b.WriteByte('\n')
-	}
-	return b.String()
-}
-
-func mutationToolNames(toolList []tools.Tool) string {
-	var b strings.Builder
-	for _, spec := range toolList {
-		name := strings.TrimSpace(spec.Name)
-		if name != "" && name != codemode.CodeModeToolName && name != "codemode.run_code" && toolMutates(name) {
-			b.WriteString("- ")
-			b.WriteString(name)
-			b.WriteByte('\n')
-		}
-	}
-	return b.String()
-}
-
 func isCodeModeCompilationError(err error) bool {
 	if err == nil {
 		return false
@@ -221,7 +192,7 @@ func isCodeModeCompilationError(err error) bool {
 	return strings.Contains(s, "compilation failed") || strings.Contains(s, "compilation error") || strings.Contains(s, "undefined:")
 }
 
-func (s *orchestrationState) observe(toolName string, plannedMutation bool) {
+func (s *orchestrationState) observe(plannedMutation bool) {
 	if plannedMutation {
 		s.mutated = true
 	}
@@ -238,7 +209,6 @@ func validatePlannedTool(plannerTools, canonicalTools []tools.Tool, state orches
 	if !toolSpecExists(plannerTools, toolName) {
 		return false, fmt.Errorf("unknown_tool: %q is not registered as the CodeMode orchestration tool", toolName)
 	}
-
 	code, ok := args["code"].(string)
 	if !ok || strings.TrimSpace(code) == "" {
 		return false, errors.New("codemode_invalid_code: code must be a non-empty string")
@@ -246,9 +216,8 @@ func validatePlannedTool(plannerTools, canonicalTools []tools.Tool, state orches
 	if err := validateCodeModeCode(code, canonicalTools); err != nil {
 		return false, err
 	}
-
 	plannedMutation := codeModeMutates(code)
-	if state.requiresMutation && state.mutated == false && !plannedMutation {
+	if state.requiresMutation && !state.mutated && !plannedMutation {
 		return false, errors.New("mutation_required: this request requires a real mutation inside CodeMode")
 	}
 	return plannedMutation, nil
@@ -265,8 +234,9 @@ func (a *Agent) toolOrchestrator(ctx context.Context, sessionID, userInput strin
 	}
 
 	orchestrationTools := appendCodeModeToolSpec(nil)
-	if len(orchestrationTools) == 0 {
-		return false, "", errors.New("codemode_only: CodeMode is not configured")
+	plannerTools := codeModePlannerTools(orchestrationTools)
+	if len(plannerTools) != 1 {
+		return false, "", errors.New("codemode_only: CodeMode is not configured as the sole planner tool")
 	}
 
 	state := orchestrationState{requiresMutation: requestRequiresMutation(userInput)}
@@ -279,10 +249,9 @@ func (a *Agent) toolOrchestrator(ctx context.Context, sessionID, userInput strin
 	lastValue := ""
 
 	for step := 1; step <= maxSteps; step++ {
-		plannerTools := codeModePlannerTools(orchestrationTools)
 		toolPrompt := a.cachedToolPrompt(plannerTools)
 		canonical := codeModeToolNames(canonicalTools)
-		prompt := buildToolPlannerPrompt(a.systemInstructions(), userInput, memoryPrompt, filePrompt, workspacePrompt, toolPrompt, canonical, "", observations, state)
+		prompt := buildToolPlannerPrompt(a.systemInstructions(), userInput, memoryPrompt, filePrompt, workspacePrompt, toolPrompt, canonical, observations, state)
 		raw, err := a.model.Generate(ctx, prompt)
 		if err != nil {
 			return false, "", err
@@ -340,7 +309,7 @@ func (a *Agent) toolOrchestrator(ctx context.Context, sessionID, userInput strin
 			return true, "", err
 		}
 
-		state.observe(toolName, plannedMutation)
+		state.observe(plannedMutation)
 		rawResult := fmt.Sprint(result)
 		lastKey, lastValue = key, rawResult
 		observations = append(observations, formatToolObservation(step, toolName, choice.Arguments, rawResult))
@@ -369,18 +338,20 @@ func parseToolChoice(raw string) (ToolChoice, error) {
 	return choice, nil
 }
 
-func buildToolPlannerPrompt(systemPrompt, userInput, memoryPrompt, filePrompt, workspacePrompt, toolPrompt, canonicalTools, mutationTools string, observations []string, state orchestrationState) string {
+func buildToolPlannerPrompt(systemPrompt, userInput, memoryPrompt, filePrompt, workspacePrompt, toolPrompt, canonicalTools string, observations []string, state orchestrationState) string {
 	return fmt.Sprintf(`
 You are the execution controller for a UTCP agent.
 
 MISSION
 Execute the user's request. Do not merely describe a plan.
 
-AUTHORITATIVE ORDER
-1. Runtime constraints and tool schemas.
-2. System instructions.
-3. User request.
-4. Tool observations, files, memory, and workspace data.
+HARD EXECUTION CONTRACT
+- CodeMode is the ONLY planner/execution tool available to you.
+- NEVER return filesystem.*, shell.*, git.*, or any other canonical UTCP tool as tool_name.
+- Repository inspection and mutation MUST happen inside codemode.run_code.
+- If the task requires repository work, your next action must be a codemode.run_code call containing Go code that invokes exact canonical tools through CallTool or CallToolStream.
+- Do NOT emit narration such as "I'll inspect..." instead of a tool call.
+- Return the JSON tool call immediately when another action is required.
 
 USER REQUEST
 %q
@@ -388,7 +359,7 @@ USER REQUEST
 SYSTEM INSTRUCTIONS
 %s
 
-ORCHESTRATION TOOL
+ONLY AVAILABLE PLANNER TOOL
 %s
 
 CANONICAL UTCP TOOL NAMES AVAILABLE INSIDE CODEMODE
@@ -416,34 +387,39 @@ OBSERVATIONS
 
 EXECUTION STATE
 requires_mutation=%t
+inspection_complete=%t
 mutation_complete=%t
 verification_complete=%t
 
-CODEMODE-ONLY CONTRACT
-- The ONLY tool you may select is codemode.run_code.
-- Never select filesystem.read, filesystem.write, filesystem.patch, shell, git, search, or any other UTCP tool directly.
-- All real work MUST happen inside the Go program passed to codemode.run_code.
-- CallTool and CallToolStream MUST use ONLY exact names from CANONICAL UTCP TOOL NAMES AVAILABLE INSIDE CODEMODE.
-- Never invent, abbreviate, rename, compose, or infer a tool name.
-- Use exact argument keys from the canonical tool schema.
-- Keep dependent calls in one lexical scope so values returned by earlier calls can be reused.
+CODEMODE RULES
+- Use exact canonical tool names only.
+- Keep dependent values in one lexical scope.
+- For inspection, call the appropriate canonical read/search/list tool from inside CodeMode.
+- For mutation, call filesystem.write or filesystem.patch from inside CodeMode when those exact tools are registered.
+- After mutation, use CodeMode again to verify when practical.
+- A prose explanation is not an execution step.
 - A CodeMode program containing only reads does not satisfy a mutation request.
-- For mutation requests, include a real write/edit/patch/create/delete/rename/move/update operation in the CodeMode program.
-- If CodeMode compilation fails, generate fresh code rather than repeating the failed snippet.
-- Never claim a mutation occurred unless CodeMode returned a successful result.
-
-STATE MACHINE
-A. DISCOVER: if needed, use CallTool inside CodeMode to inspect the target.
-B. MUTATE: execute the required mutation inside the same CodeMode program whenever possible.
-C. VERIFY: verify the resulting state inside CodeMode when practical.
-D. COMPLETE: stop only when the requested outcome is actually achieved.
 
 OUTPUT
-Return ONLY JSON:
-{"use_tool":true,"tool_name":"codemode.run_code","arguments":{"code":"..."},"reason":"next concrete CodeMode program","final_answer":""}
-or
+Return ONLY one JSON object:
+{"use_tool":true,"tool_name":"codemode.run_code","arguments":{"code":"..."},"reason":"next concrete action","final_answer":""}
+OR, only when the request is actually complete:
 {"use_tool":false,"tool_name":"","arguments":{},"reason":"complete","final_answer":"..."}
-`, systemPrompt, userInput, toolPrompt, canonicalTools, memoryPrompt, filePrompt, workspacePrompt, strings.Join(observations, "\n\n"), state.requiresMutation, state.mutated, state.verified)
+`, systemPrompt, userInput, toolPrompt, canonicalTools, memoryPrompt, filePrompt, workspacePrompt, strings.Join(observations, "\n\n"), state.requiresMutation, state.inspected, state.mutated, state.verified)
+}
+
+func codeModeToolNames(toolList []tools.Tool) string {
+	var b strings.Builder
+	for _, spec := range toolList {
+		name := strings.TrimSpace(spec.Name)
+		if name == "" || name == codemode.CodeModeToolName || name == "codemode.run_code" {
+			continue
+		}
+		b.WriteString("- ")
+		b.WriteString(name)
+		b.WriteByte('\n')
+	}
+	return b.String()
 }
 
 func extractJSON(response string) string {
