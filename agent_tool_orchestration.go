@@ -78,55 +78,23 @@ func appendCodeModeToolSpec(specs []tools.Tool) []tools.Tool {
 	return append(append([]tools.Tool(nil), specs...), tools.Tool{
 		Name:        codemode.CodeModeToolName,
 		Description: "Execute Go code against the canonical UTCP tool registry. All repository inspection and mutation must happen inside CodeMode.",
-		Inputs: tools.ToolInputOutputSchema{
-			Type: "object",
-			Properties: map[string]any{
-				"code":    map[string]any{"type": "string", "description": "Go source to execute. Invoke only exact canonical UTCP tool names through CallTool or CallToolStream."},
-				"timeout": map[string]any{"type": "integer", "description": "Execution timeout in milliseconds."},
-			},
-			Required: []string{"code"},
-		},
 	})
 }
 
-func codeModePlannerTools(toolList []tools.Tool) []tools.Tool {
-	for _, spec := range toolList {
+func codeModePlannerTools(specs []tools.Tool) []tools.Tool {
+	var result []tools.Tool
+	for _, spec := range specs {
 		if spec.Name == codemode.CodeModeToolName || spec.Name == "codemode.run_code" {
-			return []tools.Tool{spec}
+			result = append(result, spec)
 		}
 	}
-	return nil
+	return result
 }
 
-func formatToolObservation(step int, toolName string, args map[string]any, result any) string {
-	return fmt.Sprintf("[step %d] tool=%s args=%s\nresult=%s", step, toolName, compactJSON(args), truncate(fmt.Sprint(result), defaultToolObservationMaxBytes))
-}
-
-func compactJSON(v any) string {
-	if v == nil {
-		return "{}"
-	}
-	b, err := json.Marshal(v)
-	if err != nil {
-		return fmt.Sprint(v)
-	}
-	return string(b)
-}
-
-func lastToolObservation(observations []string) string {
-	if len(observations) == 0 {
-		return ""
-	}
-	return observations[len(observations)-1]
-}
-
-var mutationRequestRE = regexp.MustCompile(`(?i)\b(refactor|rewrite|modify|edit|update|change|fix|write|create|add|remove|delete|rename|move|implement|patch|replace)\b`)
+var mutationRequestRE = regexp.MustCompile(`(?i)\b(refactor|rewrite|modify|update|edit|change|fix|patch|write|create|delete|remove|rename|move|replace|apply)\b`)
 
 func requestRequiresMutation(input string) bool {
 	lower := strings.ToLower(strings.TrimSpace(input))
-	if idx := strings.Index(lower, "user instruction:\n"); idx >= 0 {
-		lower = strings.TrimSpace(lower[idx+len("user instruction:\n"):])
-	}
 	for _, marker := range []string{"for example", "e.g.", "e.g.,"} {
 		if idx := strings.Index(lower, marker); idx >= 0 {
 			lower = strings.TrimSpace(lower[:idx])
@@ -403,6 +371,10 @@ func (a *Agent) toolOrchestrator(ctx context.Context, sessionID, userInput strin
 		if key == lastKey {
 			if state.requiresMutation && state.inspected && !state.mutated {
 				observations = append(observations, fmt.Sprintf("[step %d] planner_error=duplicate_call; inspection is complete and mutation has not occurred", step))
+				continue
+			}
+			if state.requiresMutation && state.mutated && !state.verified {
+				observations = append(observations, fmt.Sprintf("[step %d] planner_error=verification_required; duplicate action cannot satisfy post-mutation verification", step))
 				continue
 			}
 			return true, lastValue, nil
