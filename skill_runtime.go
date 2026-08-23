@@ -179,46 +179,62 @@ func (a *Agent) generateSkillCodeMode(ctx context.Context, sessionID, userInput 
 		return false, nil, nil
 	}
 
-	prompt := fastCodeModePrompt(a.systemPrompt, userInput, files)
+	basePrompt := fastCodeModePrompt(a.systemPrompt, userInput, files)
+	prompts := []string{
+		basePrompt,
+		basePrompt + "\n\nCOMPILATION RETRY RULES\n- Keep every generated variable in the same top-level run() lexical scope.\n- Do not declare values inside if/for/switch blocks and reference them outside.\n- Prefer `var r1, r2, err error` before conditional work, then use assignments.\n- Do not create helper functions or closures for intermediate tool results.\n- Use one straight-line sequence of CallTool calls: inspect -> mutate -> verify.\n- The previous generated program failed with an undefined-variable lexical-scope error. Generate a fresh program; do not repeat that structure."},
+		basePrompt + "\n\nFINAL COMPILATION RETRY\nGenerate the smallest possible single-scope CodeMode program. Declare all intermediate results before any conditional block and keep all CallTool values in the same run() scope. Avoid nested scopes entirely unless a value is fully consumed inside that scope."},
+	}
+
 	emitToolExecutionEvent(ctx, ToolExecutionEvent{
 		Type: "tool_start",
 		Tool: codemode.CodeModeToolName,
 		Arguments: map[string]any{"source": "skill"},
 	})
 
-	handled, output, err := a.CodeMode.CallTool(ctx, prompt)
-	if err != nil {
-		emitToolExecutionEvent(ctx, ToolExecutionEvent{
-			Type:  "tool_result",
-			Tool:  codemode.CodeModeToolName,
-			Error: err.Error(),
-		})
-		return false, nil, nil
-	}
-	if !handled {
+	for attempt, prompt := range prompts {
+		handled, output, err := a.CodeMode.CallTool(ctx, prompt)
+		if err != nil {
+			emitToolExecutionEvent(ctx, ToolExecutionEvent{
+				Type:  "tool_result",
+				Tool:  codemode.CodeModeToolName,
+				Error: fmt.Sprintf("attempt %d: %v", attempt+1, err),
+			})
+			if attempt < len(prompts)-1 {
+				continue
+			}
+			return false, nil, nil
+		}
+		if !handled {
+			if attempt < len(prompts)-1 {
+				continue
+			}
+			emitToolExecutionEvent(ctx, ToolExecutionEvent{
+				Type:   "tool_result",
+				Tool:   codemode.CodeModeToolName,
+				Result: "CodeMode did not handle the request",
+			})
+			return false, nil, nil
+		}
+
+		if a.Guardrails != nil {
+			validated, guardrailErr := a.Guardrails.ValidateAndRepair(ctx, fmt.Sprint(output))
+			if guardrailErr != nil {
+				return false, nil, guardrailErr
+			}
+			output = validated
+		}
+
 		emitToolExecutionEvent(ctx, ToolExecutionEvent{
 			Type:   "tool_result",
 			Tool:   codemode.CodeModeToolName,
-			Result: "CodeMode did not handle the request",
+			Result: output,
 		})
-		return false, nil, nil
+		a.storeMemory(sessionID, "assistant", fmt.Sprint(output), map[string]string{"source": "skill_codemode"})
+		return true, output, nil
 	}
 
-	if a.Guardrails != nil {
-		validated, guardrailErr := a.Guardrails.ValidateAndRepair(ctx, fmt.Sprint(output))
-		if guardrailErr != nil {
-			return false, nil, guardrailErr
-		}
-		output = validated
-	}
-
-	emitToolExecutionEvent(ctx, ToolExecutionEvent{
-		Type:   "tool_result",
-		Tool:   codemode.CodeModeToolName,
-		Result: output,
-	})
-	a.storeMemory(sessionID, "assistant", fmt.Sprint(output), map[string]string{"source": "skill_codemode"})
-	return true, output, nil
+	return false, nil, nil
 }
 
 func (a *Agent) newSkillScopedAgent(routing SkillRouting) (*Agent, error) {
