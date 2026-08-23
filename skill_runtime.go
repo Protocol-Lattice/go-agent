@@ -89,10 +89,9 @@ func SkillPrompt(routing SkillRouting) string {
 		if skill.Version != "" {
 			b.WriteString(" (v")
 			b.WriteString(skill.Version)
-			b.WriteString(")\n")
-		} else {
-			b.WriteString("\n")
+			b.WriteString(")")
 		}
+		b.WriteString("\n")
 		if skill.Description != "" {
 			b.WriteString("Description: ")
 			b.WriteString(skill.Description)
@@ -175,9 +174,9 @@ func (a *Agent) generateWithRoutingFiles(ctx context.Context, sessionID, userInp
 	return requestAgent.GenerateWithFiles(ctx, sessionID, userInput, files)
 }
 
-func (a *Agent) generateSkillCodeMode(ctx context.Context, sessionID, userInput string, files []models.File) (any, bool, error) {
+func (a *Agent) generateSkillCodeMode(ctx context.Context, sessionID, userInput string, files []models.File) (bool, any, error) {
 	if a == nil || a.CodeMode == nil {
-		return nil, false, nil
+		return false, nil, nil
 	}
 
 	prompt := fastCodeModePrompt(a.systemPrompt, userInput, files)
@@ -187,28 +186,28 @@ func (a *Agent) generateSkillCodeMode(ctx context.Context, sessionID, userInput 
 		Arguments: map[string]any{"source": "skill"},
 	})
 
-	output, handled, err := a.CodeMode.CallTool(ctx, prompt)
+	handled, output, err := a.CodeMode.CallTool(ctx, prompt)
 	if err != nil {
 		emitToolExecutionEvent(ctx, ToolExecutionEvent{
 			Type:  "tool_result",
 			Tool:  codemode.CodeModeToolName,
 			Error: err.Error(),
 		})
-		return nil, false, nil
+		return false, nil, nil
 	}
 	if !handled {
 		emitToolExecutionEvent(ctx, ToolExecutionEvent{
-			Type: "tool_result",
-			Tool: codemode.CodeModeToolName,
+			Type:   "tool_result",
+			Tool:   codemode.CodeModeToolName,
 			Result: "CodeMode did not handle the request",
 		})
-		return nil, false, nil
+		return false, nil, nil
 	}
 
 	if a.Guardrails != nil {
 		validated, guardrailErr := a.Guardrails.ValidateAndRepair(ctx, fmt.Sprint(output))
 		if guardrailErr != nil {
-			return nil, false, guardrailErr
+			return false, nil, guardrailErr
 		}
 		output = validated
 	}
@@ -219,7 +218,7 @@ func (a *Agent) generateSkillCodeMode(ctx context.Context, sessionID, userInput 
 		Result: output,
 	})
 	a.storeMemory(sessionID, "assistant", fmt.Sprint(output), map[string]string{"source": "skill_codemode"})
-	return output, true, nil
+	return true, output, nil
 }
 
 func (a *Agent) newSkillScopedAgent(routing SkillRouting) (*Agent, error) {
