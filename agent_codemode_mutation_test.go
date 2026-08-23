@@ -2,7 +2,7 @@ package agent
 
 import "testing"
 
-func TestShouldUseCodeModeForMutationRequests(t *testing.T) {
+func TestCodeModeEligibleForMutationRequests(t *testing.T) {
 	cases := []struct {
 		name       string
 		userInput  string
@@ -16,8 +16,8 @@ func TestShouldUseCodeModeForMutationRequests(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := shouldUseCodeMode(tc.userInput, tc.fileBacked); got != tc.want {
-				t.Fatalf("shouldUseCodeMode(%q, %v) = %v, want %v", tc.userInput, tc.fileBacked, got, tc.want)
+			if got := codeModeEligible(tc.userInput, tc.fileBacked); got != tc.want {
+				t.Fatalf("codeModeEligible(%q, %v) = %v, want %v", tc.userInput, tc.fileBacked, got, tc.want)
 			}
 		})
 	}
