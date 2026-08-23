@@ -134,12 +134,8 @@ func (a *Agent) generateWithRouting(ctx context.Context, sessionID, userInput st
 		return nil, err
 	}
 
-	if handled, output, err := requestAgent.generateSkillCodeMode(ctx, sessionID, userInput, nil); err != nil {
-		return nil, err
-	} else if handled {
-		return output, nil
-	}
-
+	// CodeMode is executed exclusively by toolOrchestrator. Calling
+	// CodeMode.CallTool here would create a second nested planner.
 	if handled, output, err := requestAgent.toolOrchestrator(ctx, sessionID, userInput, nil); err != nil {
 		return nil, err
 	} else if handled {
@@ -159,12 +155,8 @@ func (a *Agent) generateWithRoutingFiles(ctx context.Context, sessionID, userInp
 		return nil, err
 	}
 
-	if handled, output, err := requestAgent.generateSkillCodeMode(ctx, sessionID, userInput, files); err != nil {
-		return nil, err
-	} else if handled {
-		return output, nil
-	}
-
+	// CodeMode is executed exclusively by toolOrchestrator. Calling
+	// CodeMode.CallTool here would create a second nested planner.
 	if handled, output, err := requestAgent.toolOrchestrator(ctx, sessionID, userInput, nil, files...); err != nil {
 		return nil, err
 	} else if handled {
@@ -174,53 +166,10 @@ func (a *Agent) generateWithRoutingFiles(ctx context.Context, sessionID, userInp
 	return requestAgent.GenerateWithFiles(ctx, sessionID, userInput, files)
 }
 
+// generateSkillCodeMode remains for compatibility with older callers, but
+// skill execution intentionally belongs to the single CodeMode orchestrator.
 func (a *Agent) generateSkillCodeMode(ctx context.Context, sessionID, userInput string, files []models.File) (bool, any, error) {
-	if a == nil || a.CodeMode == nil {
-		return false, nil, nil
-	}
-
-	prompt := fastCodeModePrompt(a.systemPrompt, userInput, files)
-	emitToolExecutionEvent(ctx, ToolExecutionEvent{
-		Type: "tool_start",
-		Tool: codemode.CodeModeToolName,
-		Arguments: map[string]any{"source": "skill"},
-	})
-
-	handled, output, err := a.CodeMode.CallTool(ctx, prompt)
-	if err != nil {
-		// Let the normal CodeMode-only orchestrator recover from compilation and
-		// lexical-scope errors. Do not burn multiple LLM calls in this fast path.
-		emitToolExecutionEvent(ctx, ToolExecutionEvent{
-			Type:  "tool_result",
-			Tool:  codemode.CodeModeToolName,
-			Error: err.Error(),
-		})
-		return false, nil, nil
-	}
-	if !handled {
-		emitToolExecutionEvent(ctx, ToolExecutionEvent{
-			Type:   "tool_result",
-			Tool:   codemode.CodeModeToolName,
-			Result: "CodeMode did not handle the request",
-		})
-		return false, nil, nil
-	}
-
-	if a.Guardrails != nil {
-		validated, guardrailErr := a.Guardrails.ValidateAndRepair(ctx, fmt.Sprint(output))
-		if guardrailErr != nil {
-			return false, nil, guardrailErr
-		}
-		output = validated
-	}
-
-	emitToolExecutionEvent(ctx, ToolExecutionEvent{
-		Type:   "tool_result",
-		Tool:   codemode.CodeModeToolName,
-		Result: output,
-	})
-	a.storeMemory(sessionID, "assistant", fmt.Sprint(output), map[string]string{"source": "skill_codemode"})
-	return true, output, nil
+	return false, nil, nil
 }
 
 func (a *Agent) newSkillScopedAgent(routing SkillRouting) (*Agent, error) {
