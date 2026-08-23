@@ -10,7 +10,6 @@ import (
 	"net/url"
 	"os"
 	"strings"
-	"time"
 
 	ollama "github.com/ollama/ollama/api" // <- correct import
 )
@@ -36,9 +35,11 @@ func NewOllamaLLM(model string, promptPrefix string) (*OllamaLLM, error) {
 		return nil, fmt.Errorf("invalid OLLAMA_HOST %q: %w", host, err)
 	}
 
-	httpClient := &http.Client{
-		Timeout: 60 * time.Second,
-	}
+	// Do not impose a fixed wall-clock timeout on streamed LLM generation.
+	// Request cancellation is controlled by the caller's context (the gateway
+	// request timeout or an explicit model context), so slow CodeMode generations
+	// can continue reading the response without net/http aborting at 60 seconds.
+	httpClient := &http.Client{}
 
 	c := ollama.NewClient(u, httpClient)
 	return &OllamaLLM{
