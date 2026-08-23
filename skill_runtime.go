@@ -128,16 +128,21 @@ func (a *Agent) generateWithRouting(ctx context.Context, sessionID, userInput st
 	if len(routing.Skills) > 0 {
 		emitSkillExecutionEvent(ctx, routing.Skills[len(routing.Skills)-1].Name)
 	}
-	if output, handled, err := a.generateFastCodeMode(ctx, sessionID, userInput, routing, nil); err != nil {
-		return nil, err
-	} else if handled {
-		return output, nil
-	}
 
 	requestAgent, err := a.newSkillScopedAgent(routing)
 	if err != nil {
 		return nil, err
 	}
+
+	// Skill application is routing/context, not execution. Always continue into
+	// the CodeMode-only orchestrator so repository inspection and mutation are
+	// performed through codemode.run_code and the canonical UTCP registry.
+	if handled, output, err := requestAgent.toolOrchestrator(ctx, sessionID, userInput, nil); err != nil {
+		return nil, err
+	} else if handled {
+		return output, nil
+	}
+
 	return requestAgent.Generate(ctx, sessionID, userInput)
 }
 
@@ -145,16 +150,18 @@ func (a *Agent) generateWithRoutingFiles(ctx context.Context, sessionID, userInp
 	if len(routing.Skills) > 0 {
 		emitSkillExecutionEvent(ctx, routing.Skills[len(routing.Skills)-1].Name)
 	}
-	if output, handled, err := a.generateFastCodeMode(ctx, sessionID, userInput, routing, files); err != nil {
-		return nil, err
-	} else if handled {
-		return output, nil
-	}
 
 	requestAgent, err := a.newSkillScopedAgent(routing)
 	if err != nil {
 		return nil, err
 	}
+
+	if handled, output, err := requestAgent.toolOrchestrator(ctx, sessionID, userInput, nil, files...); err != nil {
+		return nil, err
+	} else if handled {
+		return output, nil
+	}
+
 	return requestAgent.GenerateWithFiles(ctx, sessionID, userInput, files)
 }
 
@@ -179,10 +186,10 @@ func (a *Agent) newSkillScopedAgent(routing SkillRouting) (*Agent, error) {
 	}
 
 	var codeMode *codemode.CodeModeUTCP
-	if a.CodeMode != nil && (len(routing.Tools) == 0 || hasAllowedTool(routing.Tools, codemode.CodeModeToolName, "codemode.run_code")) {
-		if requestUTCP != nil {
-			codeMode = codemode.NewCodeModeUTCP(requestUTCP, a.model)
-		}
+	if a.CodeMode != nil && requestUTCP != nil {
+		// CodeMode is the orchestration primitive and must remain available even
+		// when the skill itself lists only its canonical UTCP child tools.
+		codeMode = codemode.NewCodeModeUTCP(requestUTCP, a.model)
 	}
 
 	prompt := strings.TrimSpace(a.systemPrompt)
