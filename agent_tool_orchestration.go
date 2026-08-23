@@ -289,6 +289,42 @@ func validateToolChoice(choice ToolChoice) error {
 	return nil
 }
 
+func buildMutationRepairPrompt(
+	originalPrompt string,
+	rawResponse string,
+	plannerErr error,
+) string {
+	return fmt.Sprintf(`%s
+
+MUTATION REPAIR REQUIRED
+
+Your previous CodeMode action was rejected.
+
+Error:
+%v
+
+Previous planner response:
+<invalid-plan>
+%s
+</invalid-plan>
+
+The repository has already been inspected.
+
+The NEXT action MUST perform a real mutation.
+
+Generate a NEW CodeMode program that:
+- uses codemode.CallTool or codemode.CallToolStream;
+- invokes an exact canonical mutation tool;
+- prefers filesystem.patch or filesystem.write when available;
+- does NOT perform another read/list/search operation;
+- does NOT return a completion plan;
+- keeps dependent values in one lexical scope.
+
+Return ONLY one JSON object:
+{"use_tool":true,"tool_name":"codemode.run_code","arguments":{"code":"..."},"reason":"perform required mutation","final_answer":""}
+`, originalPrompt, plannerErr, rawResponse)
+}
+
 func parseToolChoice(raw string) (ToolChoice, error) {
 	jsonStr := extractJSON(raw)
 	if jsonStr == "" {
@@ -401,10 +437,121 @@ func (a *Agent) toolOrchestrator(ctx context.Context, sessionID, userInput strin
 
 		toolName := strings.TrimSpace(choice.ToolName)
 		plannedArgs := choice.Arguments
-		plannedMutation, err := validatePlannedTool(plannerTools, canonicalTools, state, toolName, plannedArgs)
+		plannedMutation, err := validatePlannedTool(
+			plannerTools,
+			canonicalTools,
+			state,
+			toolName,
+			plannedArgs,
+		)
 		if err != nil {
-			observations = append(observations, fmt.Sprintf("[step %d] planner_error=%v", step, err))
-			continue
+			observations = append(
+				observations,
+				fmt.Sprintf("[step %d] planner_error=%v", step, err),
+			)
+
+			if strings.Contains(err.Error(), "mutation_required") {
+				repairPrompt := buildMutationRepairPrompt(
+					prompt,
+					fmt.Sprint(raw),
+					err,
+				)
+
+				repairedRaw, repairErr := a.model.Generate(ctx, repairPrompt)
+				if repairErr != nil {
+					observations = append(
+						observations,
+						fmt.Sprintf(
+							"[step %d] mutation_repair_error=%v",
+							step,
+							repairErr,
+						),
+					)
+					continue
+				}
+
+				repairedChoice, parseErr := parseToolChoice(
+					fmt.Sprint(repairedRaw),
+				)
+				if parseErr != nil {
+					observations = append(
+						observations,
+						fmt.Sprintf(
+							"[step %d] mutation_repair_invalid_json=%v",
+							step,
+							parseErr,
+						),
+					)
+					continue
+				}
+
+				if !repairedChoice.UseTool {
+					observations = append(
+						observations,
+						fmt.Sprintf(
+							"[step %d] mutation_repair_invalid: repair returned completion instead of mutation",
+							step,
+						),
+					)
+					continue
+				}
+
+				repairedToolName := strings.TrimSpace(
+					repairedChoice.ToolName,
+				)
+
+				repairedArgs := repairedChoice.Arguments
+
+				repairedMutation, repairValidationErr :=
+					validatePlannedTool(
+						plannerTools,
+						canonicalTools,
+						state,
+						repairedToolName,
+						repairedArgs,
+					)
+
+				if repairValidationErr != nil {
+					observations = append(
+						observations,
+						fmt.Sprintf(
+							"[step %d] mutation_repair_rejected=%v",
+							step,
+							repairValidationErr,
+						),
+					)
+					continue
+				}
+
+				if !repairedMutation {
+					observations = append(
+						observations,
+						fmt.Sprintf(
+							"[step %d] mutation_repair_rejected=generated CodeMode program is not mutating",
+							step,
+						),
+					)
+					continue
+				}
+
+				// Replace the rejected planner decision with the repaired one.
+				toolName = repairedToolName
+				plannedArgs = repairedArgs
+				plannedMutation = repairedMutation
+				code, ok := plannedArgs["code"].(string)
+				if !ok || strings.TrimSpace(code) == "" {
+					observations = append(
+						observations,
+						fmt.Sprintf(
+							"[step %d] mutation_repair_rejected=missing code",
+							step,
+						),
+					)
+					continue
+				}
+			} else {
+				continue
+			}
 		}
 
 		code := plannedArgs["code"].(string)
