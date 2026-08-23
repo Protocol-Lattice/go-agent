@@ -8,6 +8,16 @@ import (
 	"github.com/universal-tool-calling-protocol/go-utcp/src/tools"
 )
 
+func TestParseToolChoiceRejectsInvalidJSON(t *testing.T) {
+	_, err := parseToolChoice(`{"use_tool":true`)
+	if err == nil {
+		t.Fatal("expected invalid JSON to be rejected")
+	}
+	if !strings.Contains(err.Error(), "invalid_json") {
+		t.Fatalf("expected invalid_json error, got %v", err)
+	}
+}
+
 func TestParseToolChoiceRejectsEmptyPlannerObject(t *testing.T) {
 	_, err := parseToolChoice(`{}`)
 	if err == nil {
@@ -51,6 +61,44 @@ func TestCompletionRequiresVerificationAfterMutation(t *testing.T) {
 	state.verified = true
 	if !state.completionAllowed() {
 		t.Fatal("verified mutation should allow completion")
+	}
+}
+
+func TestValidatePlannedToolRejectsDirectTool(t *testing.T) {
+	plannerTools := []tools.Tool{{Name: codemode.CodeModeToolName}}
+	canonicalTools := []tools.Tool{{Name: "filesystem.write"}}
+	_, err := validatePlannedTool(plannerTools, canonicalTools, orchestrationState{}, "filesystem.write", map[string]any{
+		"path": "README.md",
+	})
+	if err == nil || !strings.Contains(err.Error(), "codemode_only") {
+		t.Fatalf("expected codemode_only error, got %v", err)
+	}
+}
+
+func TestValidatePlannedToolRejectsUnknownCodeModeTool(t *testing.T) {
+	plannerTools := []tools.Tool{{Name: codemode.CodeModeToolName}}
+	canonicalTools := []tools.Tool{{Name: "filesystem.read"}}
+	_, err := validatePlannedTool(plannerTools, canonicalTools, orchestrationState{}, codemode.CodeModeToolName, map[string]any{
+		"code": `CallTool("filesystem.write", map[string]any{"path":"README.md"})`,
+	})
+	if err == nil || !strings.Contains(err.Error(), "unknown_tool") {
+		t.Fatalf("expected unknown_tool error, got %v", err)
+	}
+}
+
+func TestValidatePlannedToolAllowsMutationAfterInspection(t *testing.T) {
+	plannerTools := []tools.Tool{{Name: codemode.CodeModeToolName}}
+	canonicalTools := []tools.Tool{{Name: "filesystem.read"}, {Name: "filesystem.write"}}
+	state := orchestrationState{requiresMutation: true, inspected: true}
+
+	mutates, err := validatePlannedTool(plannerTools, canonicalTools, state, codemode.CodeModeToolName, map[string]any{
+		"code": `CallTool("filesystem.write", map[string]any{"path":"README.md","content":"updated"})`,
+	})
+	if err != nil {
+		t.Fatalf("expected mutation to be allowed, got %v", err)
+	}
+	if !mutates {
+		t.Fatal("expected filesystem.write CodeMode plan to be mutation-capable")
 	}
 }
 
