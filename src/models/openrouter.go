@@ -65,6 +65,24 @@ func (o *OpenRouterLLM) buildPrompt(prompt string) string {
 	return full
 }
 
+// normalizePlannerText removes presentation wrappers commonly added by
+// OpenRouter models around structured planner output. It intentionally does
+// not attempt to repair malformed JSON; the planner parser remains strict.
+func normalizePlannerText(text string) string {
+	text = strings.TrimSpace(text)
+	if strings.HasPrefix(text, "```") && strings.HasSuffix(text, "```") {
+		lines := strings.Split(text, "\n")
+		if len(lines) >= 2 {
+			first := strings.TrimSpace(lines[0])
+			last := strings.TrimSpace(lines[len(lines)-1])
+			if strings.HasPrefix(first, "```") && last == "```" {
+				text = strings.TrimSpace(strings.Join(lines[1:len(lines)-1], "\n"))
+			}
+		}
+	}
+	return text
+}
+
 // firstChoiceText extracts the assistant's text out of a non-streaming
 // ChatResult. Content is normally a plain string (ChatUserMessageContentTypeStr
 // equivalent on the response side), but defensively also handles the
@@ -80,7 +98,7 @@ func firstChoiceText(result *components.ChatResult) (string, error) {
 	}
 
 	if content.Str != nil {
-		return *content.Str, nil
+		return normalizePlannerText(*content.Str), nil
 	}
 
 	if len(content.ArrayOfChatContentItems) > 0 {
@@ -90,7 +108,7 @@ func firstChoiceText(result *components.ChatResult) (string, error) {
 				sb.WriteString(item.ChatContentText.Text)
 			}
 		}
-		return sb.String(), nil
+		return normalizePlannerText(sb.String()), nil
 	}
 
 	return "", errors.New("unsupported response content shape from OpenRouter")
