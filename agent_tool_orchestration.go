@@ -18,7 +18,7 @@ import (
 )
 
 const (
-	defaultToolLoopMaxSteps        = 12
+	defaultToolLoopMaxSteps        = 4
 	defaultToolObservationMaxBytes = 4000
 )
 
@@ -147,11 +147,33 @@ func toolMutates(toolName string) bool {
 	return false
 }
 
+func toolInspects(toolName string) bool {
+	name := strings.ToLower(strings.TrimSpace(toolName))
+	for _, word := range []string{"read", "list", "search", "find", "stat", "inspect", "describe", "get"} {
+		if strings.Contains(name, word) {
+			return true
+		}
+	}
+	return false
+}
+
 func codeModeMutates(code string) bool {
 	for _, match := range codeModeToolCallRE.FindAllStringSubmatch(code, -1) {
 		if len(match) == 2 {
 			name, err := strconv.Unquote(`"` + match[1] + `"`)
 			if err == nil && toolMutates(name) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func codeModeInspects(code string) bool {
+	for _, match := range codeModeToolCallRE.FindAllStringSubmatch(code, -1) {
+		if len(match) == 2 {
+			name, err := strconv.Unquote(`"` + match[1] + `"`)
+			if err == nil && toolInspects(name) {
 				return true
 			}
 		}
@@ -192,7 +214,10 @@ func isCodeModeCompilationError(err error) bool {
 	return strings.Contains(s, "compilation failed") || strings.Contains(s, "compilation error") || strings.Contains(s, "undefined:")
 }
 
-func (s *orchestrationState) observe(plannedMutation bool) {
+func (s *orchestrationState) observe(plannedMutation, plannedInspection bool) {
+	if plannedInspection {
+		s.inspected = true
+	}
 	if plannedMutation {
 		s.mutated = true
 	}
@@ -217,8 +242,12 @@ func validatePlannedTool(plannerTools, canonicalTools []tools.Tool, state orches
 		return false, err
 	}
 	plannedMutation := codeModeMutates(code)
-	if state.requiresMutation && !state.mutated && !plannedMutation {
-		return false, errors.New("mutation_required: this request requires a real mutation inside CodeMode")
+	plannedInspection := codeModeInspects(code)
+	if state.requiresMutation && state.inspected && !state.mutated && !plannedMutation {
+		return false, errors.New("mutation_required: inspection is complete; the next CodeMode step must perform a real mutation")
+	}
+	if state.requiresMutation && !state.inspected && !plannedMutation && !plannedInspection {
+		return false, errors.New("inspection_required: mutation requests must first inspect the repository inside CodeMode")
 	}
 	return plannedMutation, nil
 }
@@ -265,7 +294,7 @@ func (a *Agent) toolOrchestrator(ctx context.Context, sessionID, userInput strin
 
 		if !choice.UseTool {
 			if !state.completionAllowed() {
-				observations = append(observations, fmt.Sprintf("[step %d] planner_error=mutation_required; CodeMode must execute a real mutation before completion", step))
+				observations = append(observations, fmt.Sprintf("[step %d] planner_error=mutation_required; inspect first, then perform a real mutation inside CodeMode", step))
 				continue
 			}
 			final := toolChoiceFinalAnswer(choice)
@@ -289,10 +318,12 @@ func (a *Agent) toolOrchestrator(ctx context.Context, sessionID, userInput strin
 			continue
 		}
 
+		code, _ := choice.Arguments["code"].(string)
+		plannedInspection := codeModeInspects(code)
 		key := toolName + "\x00" + compactJSON(choice.Arguments)
 		if key == lastKey {
-			if state.requiresMutation && !state.mutated {
-				observations = append(observations, fmt.Sprintf("[step %d] planner_error=duplicate_call; CodeMode program still does not contain a mutation", step))
+			if state.requiresMutation && state.inspected && !state.mutated {
+				observations = append(observations, fmt.Sprintf("[step %d] planner_error=duplicate_call; inspection is complete and mutation has not occurred", step))
 				continue
 			}
 			return true, lastValue, nil
@@ -309,7 +340,7 @@ func (a *Agent) toolOrchestrator(ctx context.Context, sessionID, userInput strin
 			return true, "", err
 		}
 
-		state.observe(plannedMutation)
+		state.observe(plannedMutation, plannedInspection)
 		rawResult := fmt.Sprint(result)
 		lastKey, lastValue = key, rawResult
 		observations = append(observations, formatToolObservation(step, toolName, choice.Arguments, rawResult))
@@ -339,6 +370,15 @@ func parseToolChoice(raw string) (ToolChoice, error) {
 }
 
 func buildToolPlannerPrompt(systemPrompt, userInput, memoryPrompt, filePrompt, workspacePrompt, toolPrompt, canonicalTools string, observations []string, state orchestrationState) string {
+	phase := ""
+	if state.requiresMutation && !state.inspected {
+		phase = "\nPHASE: INSPECTION\nPerform repository inspection first using CodeMode. Do not attempt to finish the request until you have inspected the relevant files.\n"
+	} else if state.requiresMutation && state.inspected && !state.mutated {
+		phase = "\nPHASE: MUTATION\nInspection is complete. Your next CodeMode action MUST perform the requested mutation using filesystem.patch or filesystem.write when available.\n"
+	} else if state.requiresMutation && state.mutated && !state.verified {
+		phase = "\nPHASE: VERIFICATION\nThe mutation has occurred. Verify the resulting file and only then finish.\n"
+	}
+
 	return fmt.Sprintf(`
 You are the execution controller for a UTCP agent.
 
@@ -352,7 +392,7 @@ HARD EXECUTION CONTRACT
 - If the task requires repository work, your next action must be a codemode.run_code call containing Go code that invokes exact canonical tools through CallTool or CallToolStream.
 - Do NOT emit narration such as "I'll inspect..." instead of a tool call.
 - Return the JSON tool call immediately when another action is required.
-
+%s
 USER REQUEST
 %q
 
@@ -398,14 +438,15 @@ CODEMODE RULES
 - For mutation, call filesystem.write or filesystem.patch from inside CodeMode when those exact tools are registered.
 - After mutation, use CodeMode again to verify when practical.
 - A prose explanation is not an execution step.
-- A CodeMode program containing only reads does not satisfy a mutation request.
+- A CodeMode program containing only reads is allowed during the inspection phase.
+- Once inspection_complete=true and mutation_complete=false, a read-only CodeMode program is forbidden.
 
 OUTPUT
 Return ONLY one JSON object:
 {"use_tool":true,"tool_name":"codemode.run_code","arguments":{"code":"..."},"reason":"next concrete action","final_answer":""}
 OR, only when the request is actually complete:
 {"use_tool":false,"tool_name":"","arguments":{},"reason":"complete","final_answer":"..."}
-`, systemPrompt, userInput, toolPrompt, canonicalTools, memoryPrompt, filePrompt, workspacePrompt, strings.Join(observations, "\n\n"), state.requiresMutation, state.inspected, state.mutated, state.verified)
+`, phase, systemPrompt, userInput, toolPrompt, canonicalTools, memoryPrompt, filePrompt, workspacePrompt, strings.Join(observations, "\n\n"), state.requiresMutation, state.inspected, state.mutated, state.verified)
 }
 
 func codeModeToolNames(toolList []tools.Tool) string {
