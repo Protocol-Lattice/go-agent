@@ -20,6 +20,7 @@ import (
 const (
 	defaultToolLoopMaxSteps        = 4
 	defaultToolObservationMaxBytes = 4000
+	defaultPlannerRepairAttempts   = 2
 )
 
 type ToolChoice struct {
@@ -214,17 +215,23 @@ func isCodeModeCompilationError(err error) bool {
 	return strings.Contains(s, "compilation failed") || strings.Contains(s, "compilation error") || strings.Contains(s, "undefined:")
 }
 
-func (s *orchestrationState) observe(plannedMutation, plannedInspection bool) {
+func (s *orchestrationState) observe(plannedMutation, plannedInspection, plannedVerification bool) {
 	if plannedInspection {
 		s.inspected = true
 	}
 	if plannedMutation {
 		s.mutated = true
 	}
+	if plannedVerification {
+		s.verified = true
+	}
 }
 
 func (s orchestrationState) completionAllowed() bool {
-	return !s.requiresMutation || s.mutated
+	if !s.requiresMutation {
+		return true
+	}
+	return s.mutated && s.verified
 }
 
 func validatePlannedTool(plannerTools, canonicalTools []tools.Tool, state orchestrationState, toolName string, args map[string]any) (bool, error) {
@@ -250,6 +257,59 @@ func validatePlannedTool(plannerTools, canonicalTools []tools.Tool, state orches
 		return false, errors.New("inspection_required: mutation requests must first inspect the repository inside CodeMode")
 	}
 	return plannedMutation, nil
+}
+
+func validateToolChoice(choice ToolChoice) error {
+	if choice.UseTool {
+		if strings.TrimSpace(choice.ToolName) == "" {
+			return errors.New("invalid_plan: tool_name is required when use_tool=true")
+		}
+		if choice.Arguments == nil {
+			return errors.New("invalid_plan: arguments is required when use_tool=true")
+		}
+		return nil
+	}
+	if strings.TrimSpace(choice.ToolName) != "" {
+		return errors.New("invalid_plan: tool_name must be empty when use_tool=false")
+	}
+	if strings.TrimSpace(choice.FinalAnswer) == "" && strings.TrimSpace(choice.Answer) == "" {
+		return errors.New("invalid_plan: final_answer or answer is required when use_tool=false")
+	}
+	return nil
+}
+
+func parseToolChoice(raw string) (ToolChoice, error) {
+	jsonStr := extractJSON(raw)
+	if jsonStr == "" {
+		return ToolChoice{}, errors.New("invalid_json: planner must return a JSON object")
+	}
+	var choice ToolChoice
+	if err := json.Unmarshal([]byte(jsonStr), &choice); err != nil {
+		return ToolChoice{}, fmt.Errorf("invalid_json: %w", err)
+	}
+	if err := validateToolChoice(choice); err != nil {
+		return ToolChoice{}, err
+	}
+	return choice, nil
+}
+
+func buildPlannerRepairPrompt(originalPrompt, rawResponse string, parseErr error) string {
+	return fmt.Sprintf(`%s
+
+PLANNER REPAIR REQUIRED
+Your previous planner response was rejected.
+Error: %v
+Previous response:
+<invalid-planner-response>
+%s
+</invalid-planner-response>
+
+Return ONLY one valid JSON object using this exact envelope.
+For a tool action:
+{"use_tool":true,"tool_name":"codemode.run_code","arguments":{"code":"..."},"reason":"next concrete action","final_answer":""}
+For completion:
+{"use_tool":false,"tool_name":"","arguments":{},"reason":"complete","final_answer":"..."}
+Do not return markdown, prose, arrays, multiple objects, or unregistered tool names.`, originalPrompt, parseErr, rawResponse)
 }
 
 func (a *Agent) toolOrchestrator(ctx context.Context, sessionID, userInput string, records []memory.MemoryRecord, files ...models.File) (bool, string, error) {
@@ -288,13 +348,33 @@ func (a *Agent) toolOrchestrator(ctx context.Context, sessionID, userInput strin
 
 		choice, err := parseToolChoice(fmt.Sprint(raw))
 		if err != nil {
-			observations = append(observations, fmt.Sprintf("[step %d] planner_error=%v", step, err))
-			continue
+			repaired := false
+			for attempt := 1; attempt <= defaultPlannerRepairAttempts; attempt++ {
+				repairPrompt := buildPlannerRepairPrompt(prompt, fmt.Sprint(raw), err)
+				repairedRaw, repairErr := a.model.Generate(ctx, repairPrompt)
+				if repairErr != nil {
+					err = repairErr
+					continue
+				}
+				repairedChoice, parseErr := parseToolChoice(fmt.Sprint(repairedRaw))
+				if parseErr == nil {
+					choice = repairedChoice
+					repaired = true
+					break
+				}
+				raw = repairedRaw
+				err = parseErr
+			}
+			if !repaired {
+				final := fmt.Sprintf("Stopped after %d CodeMode step(s) before completion. planner_error=invalid_json: %v", step-1, err)
+				a.storeMemory(sessionID, "assistant", final, map[string]string{"source": "codemode_tool_loop"})
+				return true, final, nil
+			}
 		}
 
 		if !choice.UseTool {
 			if !state.completionAllowed() {
-				observations = append(observations, fmt.Sprintf("[step %d] planner_error=mutation_required; inspect first, then perform a real mutation inside CodeMode", step))
+				observations = append(observations, fmt.Sprintf("[step %d] planner_error=verification_required; mutation occurred but verification is incomplete", step))
 				continue
 			}
 			final := toolChoiceFinalAnswer(choice)
@@ -309,18 +389,17 @@ func (a *Agent) toolOrchestrator(ctx context.Context, sessionID, userInput strin
 		}
 
 		toolName := strings.TrimSpace(choice.ToolName)
-		if choice.Arguments == nil {
-			choice.Arguments = map[string]any{}
-		}
-		plannedMutation, err := validatePlannedTool(plannerTools, canonicalTools, state, toolName, choice.Arguments)
+		plannedArgs := choice.Arguments
+		plannedMutation, err := validatePlannedTool(plannerTools, canonicalTools, state, toolName, plannedArgs)
 		if err != nil {
 			observations = append(observations, fmt.Sprintf("[step %d] planner_error=%v", step, err))
 			continue
 		}
 
-		code, _ := choice.Arguments["code"].(string)
+		code := plannedArgs["code"].(string)
 		plannedInspection := codeModeInspects(code)
-		key := toolName + "\x00" + compactJSON(choice.Arguments)
+		plannedVerification := state.mutated && plannedInspection
+		key := toolName + "\x00" + compactJSON(plannedArgs)
 		if key == lastKey {
 			if state.requiresMutation && state.inspected && !state.mutated {
 				observations = append(observations, fmt.Sprintf("[step %d] planner_error=duplicate_call; inspection is complete and mutation has not occurred", step))
@@ -329,7 +408,7 @@ func (a *Agent) toolOrchestrator(ctx context.Context, sessionID, userInput strin
 			return true, lastValue, nil
 		}
 
-		result, err := a.executeTool(ctx, sessionID, toolName, choice.Arguments)
+		result, err := a.executeTool(ctx, sessionID, toolName, plannedArgs)
 		if err != nil {
 			if isCodeModeCompilationError(err) {
 				observations = append(observations, fmt.Sprintf("[step %d] codemode_compilation_error=%v; generate fresh code and keep dependent values in one lexical scope", step, err))
@@ -340,10 +419,10 @@ func (a *Agent) toolOrchestrator(ctx context.Context, sessionID, userInput strin
 			return true, "", err
 		}
 
-		state.observe(plannedMutation, plannedInspection)
+		state.observe(plannedMutation, plannedInspection, plannedVerification)
 		rawResult := fmt.Sprint(result)
 		lastKey, lastValue = key, rawResult
-		observations = append(observations, formatToolObservation(step, toolName, choice.Arguments, rawResult))
+		observations = append(observations, formatToolObservation(step, toolName, plannedArgs, rawResult))
 		storeToolObservation(a, sessionID, toolName, rawResult, "codemode_tool_loop")
 	}
 
@@ -355,18 +434,6 @@ func (a *Agent) toolOrchestrator(ctx context.Context, sessionID, userInput strin
 func storeToolObservation(a *Agent, sessionID, toolName, rawResult, source string) {
 	toonBytes, _ := gotoon.Encode(rawResult)
 	a.storeMemory(sessionID, "assistant", fmt.Sprintf("%s\n\n.toon:\n%s", rawResult, string(toonBytes)), map[string]string{"tool": toolName, "source": source})
-}
-
-func parseToolChoice(raw string) (ToolChoice, error) {
-	jsonStr := extractJSON(raw)
-	if jsonStr == "" {
-		return ToolChoice{}, errors.New("invalid_json: planner must return a JSON object")
-	}
-	var choice ToolChoice
-	if err := json.Unmarshal([]byte(jsonStr), &choice); err != nil {
-		return ToolChoice{}, fmt.Errorf("invalid_json: %w", err)
-	}
-	return choice, nil
 }
 
 func buildToolPlannerPrompt(systemPrompt, userInput, memoryPrompt, filePrompt, workspacePrompt, toolPrompt, canonicalTools string, observations []string, state orchestrationState) string {
@@ -440,6 +507,7 @@ CODEMODE RULES
 - A prose explanation is not an execution step.
 - A CodeMode program containing only reads is allowed during the inspection phase.
 - Once inspection_complete=true and mutation_complete=false, a read-only CodeMode program is forbidden.
+- Once mutation_complete=true and verification_complete=false, use CodeMode to verify the resulting state before returning complete.
 
 OUTPUT
 Return ONLY one JSON object:
