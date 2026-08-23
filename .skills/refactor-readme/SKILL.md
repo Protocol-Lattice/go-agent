@@ -11,7 +11,9 @@ For README refactoring requests:
 4. Read the current README.md before making changes.
 5. The planner MUST NOT call `filesystem.*`, `shell.*`, `git.*`, or any other canonical UTCP tool directly; invoke them from CodeMode with exact registered tool names.
 6. CodeMode source MUST call the runtime API as `codemode.CallTool("exact.tool.name", args)` or `codemode.CallToolStream("exact.tool.name", args)`. Never emit unqualified `CallTool(...)` or `CallToolStream(...)`; those identifiers do not exist in the CodeMode execution scope.
-7. For a mutation request, actually modify README.md using `filesystem.patch` or `filesystem.write` from inside CodeMode. Do not stop after reading or planning.
-8. Preserve accurate technical information and remove stale, duplicated, or misleading documentation.
-9. Verify the modified README.md after the mutation using CodeMode and, when practical, validate referenced commands or examples.
-10. Never report completion unless the README mutation and verification actually occurred.
+7. CodeMode source MUST be a statement-only snippet. NEVER include `package` declarations, `import` declarations, or import blocks. Do not define a separate `main` function. The CodeMode runtime supplies the execution wrapper and `codemode` receiver.
+8. Use only the runtime APIs and canonical UTCP tool names already exposed by CodeMode. Do not invent helper packages or imports.
+9. For a mutation request, actually modify README.md using `filesystem.patch` or `filesystem.write` from inside CodeMode. Do not stop after reading or planning.
+10. Preserve accurate technical information and remove stale, duplicated, or misleading documentation.
+11. Verify the modified README.md after the mutation using CodeMode and, when practical, validate referenced commands or examples.
+12. Never report completion unless the README mutation and verification actually occurred.
