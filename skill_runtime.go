@@ -89,9 +89,10 @@ func SkillPrompt(routing SkillRouting) string {
 		if skill.Version != "" {
 			b.WriteString(" (v")
 			b.WriteString(skill.Version)
-			b.WriteString(")")
+			b.WriteString(")\n")
+		} else {
+			b.WriteString("\n")
 		}
-		b.WriteString("\n")
 		if skill.Description != "" {
 			b.WriteString("Description: ")
 			b.WriteString(skill.Description)
@@ -186,11 +187,11 @@ func (a *Agent) generateSkillCodeMode(ctx context.Context, sessionID, userInput 
 		Arguments: map[string]any{"source": "skill"},
 	})
 
-	handled, output, err := a.CodeMode.CallTool(ctx, prompt)
+	output, handled, err := a.CodeMode.CallTool(ctx, prompt)
 	if err != nil {
 		emitToolExecutionEvent(ctx, ToolExecutionEvent{
-			Type: "tool_result",
-			Tool: codemode.CodeModeToolName,
+			Type:  "tool_result",
+			Tool:  codemode.CodeModeToolName,
 			Error: err.Error(),
 		})
 		return nil, false, nil
@@ -213,8 +214,8 @@ func (a *Agent) generateSkillCodeMode(ctx context.Context, sessionID, userInput 
 	}
 
 	emitToolExecutionEvent(ctx, ToolExecutionEvent{
-		Type: "tool_result",
-		Tool: codemode.CodeModeToolName,
+		Type:   "tool_result",
+		Tool:   codemode.CodeModeToolName,
 		Result: output,
 	})
 	a.storeMemory(sessionID, "assistant", fmt.Sprint(output), map[string]string{"source": "skill_codemode"})
@@ -270,6 +271,15 @@ func (a *Agent) newSkillScopedAgent(routing SkillRouting) (*Agent, error) {
 		Guardrails:        a.Guardrails,
 		InputGuardrails:   a.InputGuardrails,
 	})
+}
+
+func hasAllowedTool(allowed map[string]struct{}, names ...string) bool {
+	for _, name := range names {
+		if _, ok := allowed[strings.ToLower(strings.TrimSpace(name))]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 type skillFilteredUTCPClient struct {
