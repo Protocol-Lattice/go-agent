@@ -256,7 +256,6 @@ func validatePlannedTool(plannerTools, canonicalTools []tools.Tool, state orches
 	}
 	return plannedMutation, nil
 }
-
 func validateToolChoice(choice ToolChoice) error {
 	if choice.UseTool {
 		if strings.TrimSpace(choice.ToolName) == "" {
@@ -267,15 +266,13 @@ func validateToolChoice(choice ToolChoice) error {
 		}
 		return nil
 	}
+
 	if strings.TrimSpace(choice.ToolName) != "" {
 		return errors.New("invalid_plan: tool_name must be empty when use_tool=false")
 	}
-	if strings.TrimSpace(choice.FinalAnswer) == "" && strings.TrimSpace(choice.Answer) == "" {
-		return errors.New("invalid_plan: final_answer or answer is required when use_tool=false")
-	}
+
 	return nil
 }
-
 func parseToolChoice(raw string) (ToolChoice, error) {
 	jsonStr := extractJSON(raw)
 	if jsonStr == "" {
