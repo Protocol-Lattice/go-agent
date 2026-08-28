@@ -63,6 +63,53 @@ func TestGenerateWithFilesRoutesRepositoryWorkThroughToolOrchestrator(t *testing
 	}
 }
 
+func TestGeneratePreservesExplicitCodeModeRouting(t *testing.T) {
+	agent, utcpClient := newToolRoutingTestAgent(t)
+
+	out, err := agent.Generate(
+		context.Background(),
+		"session",
+		"Run code with CodeMode using the echo tool.",
+	)
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+
+	if utcpClient.callCount != 1 {
+		t.Fatalf("UTCP call count = %d, want 1", utcpClient.callCount)
+	}
+	if utcpClient.lastToolName != "echo" {
+		t.Fatalf("last UTCP tool = %q, want echo for an explicit CodeMode request", utcpClient.lastToolName)
+	}
+	if got, want := fmt.Sprint(out), "utcp says echo"; got != want {
+		t.Fatalf("Generate output = %q, want %q", got, want)
+	}
+}
+
+func TestGenerateWithFilesPreservesExplicitCodeModeRoutingWithoutFiles(t *testing.T) {
+	agent, utcpClient := newToolRoutingTestAgent(t)
+
+	out, err := agent.GenerateWithFiles(
+		context.Background(),
+		"session",
+		"Run code with CodeMode using the echo tool.",
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("GenerateWithFiles returned error: %v", err)
+	}
+
+	if utcpClient.callCount != 1 {
+		t.Fatalf("UTCP call count = %d, want 1", utcpClient.callCount)
+	}
+	if utcpClient.lastToolName != "echo" {
+		t.Fatalf("last UTCP tool = %q, want echo for an explicit CodeMode request", utcpClient.lastToolName)
+	}
+	if got, want := out, "utcp says echo"; got != want {
+		t.Fatalf("GenerateWithFiles output = %q, want %q", got, want)
+	}
+}
+
 func newToolRoutingTestAgent(t *testing.T) (*Agent, *stubUTCPClient) {
 	t.Helper()
 
