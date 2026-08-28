@@ -224,11 +224,23 @@ func codeModeToolNames(toolList []tools.Tool) string {
 	return b.String()
 }
 
+type plannedTool struct {
+	toolName  string
+	arguments map[string]any
+}
+
+type toolPlan struct {
+	useTool     bool
+	toolCalls   []plannedTool
+	finalAnswer string
+}
+
 func (a *Agent) toolOrchestrator(ctx context.Context, sessionID, userInput string, records []memory.MemoryRecord, files ...models.File) (bool, string, error) {
 	lowerInput := strings.ToLower(strings.TrimSpace(userInput))
 	if !a.likelyNeedsToolCall(lowerInput) {
 		return false, "", nil
 	}
+
 	toolList := a.ToolSpecs()
 	if a.CodeMode != nil {
 		toolList = appendCodeModeToolSpec(toolList)
@@ -236,6 +248,7 @@ func (a *Agent) toolOrchestrator(ctx context.Context, sessionID, userInput strin
 	if len(toolList) == 0 {
 		return false, "", nil
 	}
+
 	if native, ok := a.model.(models.ToolCallingAgent); ok && len(files) == 0 {
 		handled, output, err := a.toolOrchestratorNative(ctx, sessionID, userInput, records, toolList, native)
 		if !errors.Is(err, models.ErrToolCallingUnsupported) {
@@ -247,14 +260,10 @@ func (a *Agent) toolOrchestrator(ctx context.Context, sessionID, userInput strin
 	memoryDesc := a.renderMemory(records)
 	fileDesc := a.buildAttachmentPrompt("Files available for this turn", files)
 	workspaceRules := fileBackedWorkspaceRules(files)
-	maxSteps := configuredToolLoopMaxSteps()
 	canonicalToolNames := codeModeToolNames(toolList)
-	mutationDone := false
-	var observations []string
-	var lastToolCallKey, lastToolCallValue string
 
-	for step := 1; step <= maxSteps; step++ {
-		choicePrompt := fmt.Sprintf(`
+	planPrompt := func(observations []string) string {
+		return fmt.Sprintf(`
 You are an agentic UTCP tool execution loop.
 
 SYSTEM INSTRUCTIONS:
@@ -301,138 +310,49 @@ RULES:
 JSON shape:
 {"use_tool":true|false,"tool_name":"provider.tool or empty","arguments":{},"final_answer":"summary when done","reason":"short reason"}
 `, a.systemInstructions(), userInput, memoryDesc, fileDesc, workspaceRules, toolDesc, canonicalToolNames, strings.Join(observations, "\n\n"))
+	}
 
+	planFromModel := func(ctx context.Context, _step int, observations []string) (toolPlan, error) {
+		prompt := planPrompt(observations)
 		var raw any
 		var err error
 		if len(files) > 0 {
-			raw, err = a.model.GenerateWithFiles(ctx, choicePrompt, files)
+			raw, err = a.model.GenerateWithFiles(ctx, prompt, files)
 		} else {
-			raw, err = a.model.Generate(ctx, choicePrompt)
+			raw, err = a.model.Generate(ctx, prompt)
 		}
 		if err != nil {
-			return false, "", err
+			return toolPlan{}, err
 		}
 		rawText := fmt.Sprint(raw)
-		jsonStr := extractJSON(rawText)
-
-		if jsonStr == "" {
-			observations = append(observations, fmt.Sprintf(
-				"[planner] invalid_json: planner response was not valid JSON. "+
-					"Do not repeat the previous tool. Return ONLY the required JSON object. "+
-					"Previous response: %s",
-				truncate(rawText, 2000),
-			))
-			continue
+		jsonText := extractJSON(rawText)
+		if jsonText == "" {
+			return toolPlan{}, fmt.Errorf("planner_invalid_json")
 		}
-
 		var tc ToolChoice
-		if err := json.Unmarshal([]byte(jsonStr), &tc); err != nil {
-			observations = append(observations, fmt.Sprintf(
-				"[planner] invalid_json: %v. "+
-					"Return ONLY valid JSON matching the required schema. "+
-					"Previous response: %s",
-				err,
-				truncate(rawText, 2000),
-			))
-			continue
-		}
-		if err := json.Unmarshal([]byte(jsonStr), &tc); err != nil {
-			if len(observations) == 0 {
-				return false, "", nil
-			}
-			final := fmt.Sprintf("Stopped because the tool planner returned invalid JSON after %d tool step(s). Last observation:\n%s", len(observations), lastToolObservation(observations))
-			a.storeMemory(sessionID, "assistant", final, map[string]string{"source": "tool_loop"})
-			return true, final, nil
-		}
-
-		if !tc.UseTool {
-			if !toolLoopCompletionAllowed(userInput, mutationDone) {
-				observations = append(observations, fmt.Sprintf("[step %d] planner_error=mutation_required; the request is a refactor/edit/write task and only discovery/read tools have executed. Continue with the exact registered mutation tool before completion.", step))
-				continue
-			}
-			final := toolChoiceFinalAnswer(tc)
-			if final == "" {
-				if len(observations) == 0 {
-					return false, "", nil
-				}
-				final = fmt.Sprintf("Done. Last observation:\n%s", lastToolObservation(observations))
-			}
-			a.storeMemory(sessionID, "assistant", final, map[string]string{"source": "tool_loop"})
-			return true, final, nil
-		}
-
-		toolName := strings.TrimSpace(tc.ToolName)
-		if toolName == "" {
-			return true, "", fmt.Errorf("tool loop selected empty tool name")
-		}
-		if !toolSpecExists(toolList, toolName) {
-			observations = append(observations, fmt.Sprintf("[step %d] planner_error=unknown_tool requested=%q; choose ONLY an exact name from AVAILABLE UTCP TOOLS.", step, toolName))
-			continue
+		if err := json.Unmarshal([]byte(jsonText), &tc); err != nil {
+			return toolPlan{}, fmt.Errorf("planner_invalid_json: %w", err)
 		}
 		if tc.Arguments == nil {
 			tc.Arguments = map[string]any{}
 		}
-
-		var plannedMutation bool
-		if toolName == "codemode.run_code" {
-			code, ok := tc.Arguments["code"].(string)
-			if !ok {
-				observations = append(observations, fmt.Sprintf("[step %d] planner_error=codemode_invalid_code", step))
-				continue
-			}
-			if err := validateCodeModeCode(code, toolList); err != nil {
-				observations = append(observations, fmt.Sprintf("[step %d] planner_error=%v; CodeMode execution was blocked before execution.", step, err))
-				continue
-			}
-			plannedMutation = codeModeMutates(code)
-		} else {
-			plannedMutation = toolMutates(toolName)
+		if !tc.UseTool {
+			return toolPlan{useTool: false, finalAnswer: toolChoiceFinalAnswer(tc)}, nil
 		}
-
-		toolCallKey := toolName + "\x00" + compactJSON(tc.Arguments)
-		if toolCallKey == lastToolCallKey {
-			if !toolLoopCompletionAllowed(userInput, mutationDone) {
-				observations = append(observations, fmt.Sprintf(
-					"[step %d] planner_error=duplicate_call tool=%s args=%s; repeating the same read-only call will not satisfy this request. Call the exact registered mutation tool (write/edit/patch) instead of re-reading.",
-					step,
-					toolName,
-					compactJSON(tc.Arguments),
-				))
-				continue
-			}
-
-			if mutationDone && plannedMutation {
-				observations = append(observations, fmt.Sprintf(
-					"[step %d] planner_error=duplicate_mutation_after_success tool=%s args=%s; the mutation already succeeded. Continue with verification or report completion.",
-					step,
-					toolName,
-					compactJSON(tc.Arguments),
-				))
-				continue
-			}
-
-			return true, lastToolCallValue, nil
+		toolName := strings.TrimSpace(tc.ToolName)
+		if toolName == "" {
+			return toolPlan{}, fmt.Errorf("tool name must not be empty")
 		}
-		result, err := a.executeTool(ctx, sessionID, toolName, tc.Arguments)
-		if err != nil {
-			a.storeMemory(sessionID, "assistant", fmt.Sprintf("tool %s error: %v", toolName, err), map[string]string{"tool": toolName, "source": "tool_loop"})
-			return true, "", err
-		}
-		// A mutation only counts after the tool actually returned successfully.
-		if plannedMutation {
-			mutationDone = true
-		}
-		rawOut := fmt.Sprint(result)
-		lastToolCallKey, lastToolCallValue = toolCallKey, rawOut
-		observations = append(observations, formatToolObservation(step, toolName, tc.Arguments, rawOut))
-		toonBytes, _ := gotoon.Encode(rawOut)
-		a.storeMemory(sessionID, "assistant", fmt.Sprintf("%s\n\n.toon:\n%s", rawOut, string(toonBytes)), map[string]string{"tool": toolName, "source": "tool_loop"})
+		return toolPlan{useTool: true, toolCalls: []plannedTool{{toolName: toolName, arguments: tc.Arguments}}}, nil
 	}
 
-	final := fmt.Sprintf("Stopped after %d tool step(s) before the planner reported completion. Last observation:\n%s", maxSteps, lastToolObservation(observations))
-	a.storeMemory(sessionID, "assistant", final, map[string]string{"source": "tool_loop"})
-	return true, final, nil
+	return a.runToolLoop(ctx, sessionID, userInput, toolList, planFromModel, runOptions{
+		stepLimit: configuredToolLoopMaxSteps(),
+		sourceTag: "tool_loop",
+	})
 }
+
+type toolPlanFromModel func(context.Context, int, []string) (toolPlan, error)
 
 func (a *Agent) toolOrchestratorNative(ctx context.Context, sessionID, userInput string, records []memory.MemoryRecord, toolList []tools.Tool, native models.ToolCallingAgent) (bool, string, error) {
 	definitions := nativeToolDefinitions(toolList)
@@ -440,14 +360,9 @@ func (a *Agent) toolOrchestratorNative(ctx context.Context, sessionID, userInput
 		return false, "", nil
 	}
 	memoryDesc := a.renderMemory(records)
-	maxSteps := configuredToolLoopMaxSteps()
-	requiresMutation := requestRequiresMutation(userInput)
-	mutationDone := false
-	var observations []string
-	var lastToolCallKey, lastToolCallValue string
 
-	for step := 1; step <= maxSteps; step++ {
-		prompt := fmt.Sprintf(`
+	planPrompt := func(step int, observations []string) string {
+		return fmt.Sprintf(`
 You are an agentic tool execution loop using native tool calls.
 
 SYSTEM INSTRUCTIONS:
@@ -467,75 +382,156 @@ Continue until the user request is complete.
 
 For refactor/edit/write/create/change/fix requests, discovery is not completion. A real mutation tool must execute before you answer. After mutation, verify the result when practical. Use ONLY exact names supplied by the native tool definitions. Return tool calls until the requested mutation is actually complete.
 `, a.systemInstructions(), userInput, memoryDesc, strings.Join(observations, "\n\n"))
-		response, err := native.GenerateWithTools(ctx, prompt, definitions)
+	}
+
+	planFromModel := func(ctx context.Context, step int, observations []string) (toolPlan, error) {
+		response, err := native.GenerateWithTools(ctx, planPrompt(step, observations), definitions)
 		if err != nil {
-			return false, "", err
+			return toolPlan{}, err
 		}
 		if len(response.ToolCalls) == 0 {
-			if requiresMutation && !mutationDone {
-				observations = append(observations, fmt.Sprintf("[step %d] planner_error=mutation_required; discovery/read-only execution is insufficient for this request. Continue with the exact registered mutation tool.", step))
+			return toolPlan{
+				useTool:     false,
+				finalAnswer: strings.TrimSpace(response.Content),
+			}, nil
+		}
+		calls := make([]plannedTool, 0, len(response.ToolCalls))
+		for _, call := range response.ToolCalls {
+			callName := strings.TrimSpace(call.Name)
+			if callName == "" {
+				return toolPlan{}, fmt.Errorf("native tool call name must not be empty")
+			}
+			args := call.Arguments
+			if args == nil {
+				args = map[string]any{}
+			}
+			calls = append(calls, plannedTool{
+				toolName:  callName,
+				arguments: args,
+			})
+		}
+		return toolPlan{useTool: true, toolCalls: calls}, nil
+	}
+
+	return a.runToolLoop(ctx, sessionID, userInput, toolList, planFromModel, runOptions{
+		stepLimit: configuredToolLoopMaxSteps(),
+		sourceTag: "native_tool_loop",
+	})
+}
+
+type runOptions struct {
+	stepLimit int
+	sourceTag string
+}
+
+func (a *Agent) runToolLoop(
+	ctx context.Context,
+	sessionID string,
+	userInput string,
+	toolList []tools.Tool,
+	plan toolPlanFromModel,
+	opts runOptions,
+) (bool, string, error) {
+	requiresMutation := requestRequiresMutation(userInput)
+	mutationDone := false
+	var observations []string
+	var lastToolCallKey, lastToolCallValue string
+
+	maxSteps := opts.stepLimit
+	if maxSteps <= 0 {
+		maxSteps = configuredToolLoopMaxSteps()
+	}
+
+	for step := 1; step <= maxSteps; step++ {
+		decision, err := plan(ctx, step, observations)
+		if err != nil {
+			switch {
+			case strings.HasPrefix(err.Error(), "planner_invalid_json"):
+				observations = append(observations, fmt.Sprintf("[planner] invalid_json: planner response was not valid JSON: %v", err))
+				continue
+			default:
+				return false, "", err
+			}
+		}
+		if !decision.useTool {
+			if !toolLoopCompletionAllowed(userInput, mutationDone) {
+				observations = append(observations, fmt.Sprintf("[step %d] planner_error=mutation_required; the request is a refactor/edit/write task and only discovery/read tools have executed. Continue with the exact registered mutation tool before completion.", step))
 				continue
 			}
-			final := strings.TrimSpace(response.Content)
+			final := strings.TrimSpace(decision.finalAnswer)
 			if final == "" {
 				if len(observations) == 0 {
 					return false, "", nil
 				}
 				final = fmt.Sprintf("Done. Last observation:\n%s", lastToolObservation(observations))
 			}
-			a.storeMemory(sessionID, "assistant", final, map[string]string{"source": "native_tool_loop"})
+			a.storeMemory(sessionID, "assistant", final, map[string]string{"source": opts.sourceTag})
 			return true, final, nil
 		}
 
-		for _, call := range response.ToolCalls {
-			toolName := strings.TrimSpace(call.Name)
-			if toolName == "" {
-				return true, "", fmt.Errorf("native tool loop selected empty tool name")
-			}
-			if !toolSpecExists(toolList, toolName) {
-				observations = append(observations, fmt.Sprintf("[step %d] planner_error=unknown_tool requested=%q; use ONLY the provided native tool definitions.", step, toolName))
+		for _, call := range decision.toolCalls {
+			if !toolSpecExists(toolList, call.toolName) {
+				observations = append(observations, fmt.Sprintf("[step %d] planner_error=unknown_tool requested=%q; choose ONLY an exact name from AVAILABLE UTCP TOOLS.", step, call.toolName))
 				continue
-			}
-			if call.Arguments == nil {
-				call.Arguments = map[string]any{}
 			}
 
 			var plannedMutation bool
-			if toolName == "codemode.run_code" {
-				if code, ok := call.Arguments["code"].(string); ok {
-					plannedMutation = codeModeMutates(code)
+			if call.toolName == "codemode.run_code" {
+				code, ok := call.arguments["code"].(string)
+				if !ok {
+					observations = append(observations, fmt.Sprintf("[step %d] planner_error=codemode_invalid_code", step))
+					continue
 				}
+				if err := validateCodeModeCode(code, toolList); err != nil {
+					observations = append(observations, fmt.Sprintf("[step %d] planner_error=%v; CodeMode execution was blocked before execution.", step, err))
+					continue
+				}
+				plannedMutation = codeModeMutates(code)
 			} else {
-				plannedMutation = toolMutates(toolName)
+				plannedMutation = toolMutates(call.toolName)
 			}
 
-			toolCallKey := toolName + "\x00" + compactJSON(call.Arguments)
+			toolCallKey := call.toolName + "\x00" + compactJSON(call.arguments)
 			if toolCallKey == lastToolCallKey {
 				if requiresMutation && !mutationDone {
-					observations = append(observations, fmt.Sprintf("[step %d] planner_error=duplicate_call tool=%s args=%s; repeating the same read-only call will not satisfy this request. Call the exact registered mutation tool (write/edit/patch) instead of re-reading.", step, toolName, compactJSON(call.Arguments)))
+					observations = append(observations, fmt.Sprintf(
+						"[step %d] planner_error=duplicate_call tool=%s args=%s; repeating the same read-only call will not satisfy this request. Call the exact registered mutation tool (write/edit/patch) instead of re-reading.",
+						step,
+						call.toolName,
+						compactJSON(call.arguments),
+					))
+					continue
+				}
+				if mutationDone && plannedMutation {
+					observations = append(observations, fmt.Sprintf(
+						"[step %d] planner_error=duplicate_mutation_after_success tool=%s args=%s; the mutation already succeeded. Continue with verification or report completion.",
+						step,
+						call.toolName,
+						compactJSON(call.arguments),
+					))
 					continue
 				}
 				return true, lastToolCallValue, nil
 			}
-			result, err := a.executeTool(ctx, sessionID, toolName, call.Arguments)
+
+			result, err := a.executeTool(ctx, sessionID, call.toolName, call.arguments)
 			if err != nil {
-				a.storeMemory(sessionID, "assistant", fmt.Sprintf("tool %s error: %v", toolName, err), map[string]string{"tool": toolName, "source": "native_tool_loop"})
+				a.storeMemory(sessionID, "assistant", fmt.Sprintf("tool %s error: %v", call.toolName, err), map[string]string{"tool": call.toolName, "source": opts.sourceTag})
 				return true, "", err
 			}
-			// A mutation only counts after the CodeMode/native call actually succeeds.
 			if plannedMutation {
 				mutationDone = true
 			}
 			rawOut := fmt.Sprint(result)
 			lastToolCallKey, lastToolCallValue = toolCallKey, rawOut
-			observations = append(observations, formatToolObservation(step, toolName, call.Arguments, rawOut))
+			observations = append(observations, formatToolObservation(step, call.toolName, call.arguments, rawOut))
 			toonBytes, _ := gotoon.Encode(rawOut)
-			a.storeMemory(sessionID, "assistant", fmt.Sprintf("%s\n\n.toon:\n%s", rawOut, string(toonBytes)), map[string]string{"tool": toolName, "source": "native_tool_loop"})
+			a.storeMemory(sessionID, "assistant", fmt.Sprintf("%s\n\n.toon:\n%s", rawOut, string(toonBytes)), map[string]string{"tool": call.toolName, "source": opts.sourceTag})
 		}
 	}
 
-	final := fmt.Sprintf("Stopped after %d native tool step(s) before the model reported completion. Last observation:\n%s", maxSteps, lastToolObservation(observations))
-	a.storeMemory(sessionID, "assistant", final, map[string]string{"source": "native_tool_loop"})
+	final := fmt.Sprintf("Stopped after %d tool step(s) before the planner reported completion. Last observation:\n%s", maxSteps, lastToolObservation(observations))
+	a.storeMemory(sessionID, "assistant", final, map[string]string{"source": opts.sourceTag})
 	return true, final, nil
 }
 
