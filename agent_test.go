@@ -901,7 +901,7 @@ func TestCodeMode_ExecutesCallToolInsideDSL(t *testing.T) {
 
 	// stub model instructs to run CodeMode
 	model := &stubModel{
-		response: `{"use_tool": true, "tool_name": "codemode.run_code", "arguments": { "code": "codemode.CallTool(\"echo\", map[string]any{\"input\": \"hi\"})" }}`,
+		response: `{"use_tool": true, "tool_name": "codemode.run_code", "arguments": { "code": "let result = codemode.CallTool(\"echo\", {\"input\": \"hi\"}); result" }}`,
 	}
 
 	mem := memory.NewSessionMemory(&memory.MemoryBank{}, 4)
@@ -956,7 +956,7 @@ func TestCodeMode_ExecutesCallToolStreamInsideDSL(t *testing.T) {
 	ctx := context.Background()
 
 	model := &stubModel{
-		response: `{"use_tool": true, "tool_name": "codemode.run_code", "arguments": { "code": "s, _ := codemode.CallToolStream(\"stream.echo\", map[string]any{\"input\": \"x\"}); __out, _ = s.Next()" }}`,
+		response: `{"use_tool": true, "tool_name": "codemode.run_code", "arguments": { "code": "codemode.CallToolStream(\"stream.echo\", {\"input\": \"x\"})" }}`,
 	}
 
 	mem := memory.NewSessionMemory(&memory.MemoryBank{}, 4)
@@ -1057,14 +1057,8 @@ func TestCodeMode_StoresToonMemory(t *testing.T) {
 func TestCodeMode_ComplexLogicAndToolChain(t *testing.T) {
 	ctx := context.Background()
 
-	// This Go code snippet iterates three times, calling the "echo" tool in each loop.
-	codeSnippet := `		
-		var out any 
-		for i := 0; i < 3; i++ {
-			out, _ = codemode.CallTool("echo", map[string]any{"input": "ping"})
-		}
-		__out = out
-	`
+	// This Expr snippet calls the "echo" tool three times.
+	codeSnippet := `let a1 = codemode.CallTool("echo", {"input": "ping"}); let a2 = codemode.CallTool("echo", {"input": "ping"}); let a3 = codemode.CallTool("echo", {"input": "ping"}); a3`
 
 	model := &stubModel{
 		response: fmt.Sprintf(`{"use_tool": true, "tool_name": "codemode.run_code", "arguments": { "code": %q }}`, codeSnippet),
@@ -1602,7 +1596,7 @@ func TestCodeModeOrchestrator_ToolsNeededButNoneSelected(t *testing.T) {
 func TestCodeModeOrchestrator_SnippetGenerationError(t *testing.T) {
 	ctx := context.Background()
 
-	const plannerPromptMarker = "Decide which UTCP tools are required"
+	const plannerPromptMarker = "You are a strict UTCP CodeMode planner and executor"
 
 	model := &dynamicStubModel{
 		responses: map[string]string{
@@ -1670,17 +1664,10 @@ func TestCodeModeOrchestrator_SnippetGenerationError(t *testing.T) {
 func TestCodeModeOrchestrator_SnippetExecutionSuccess(t *testing.T) {
 	ctx := context.Background()
 
-	codeSnippet := `
-result, err := codemode.CallTool("echo", map[string]any{"input": "hello"})
-if err != nil {
-	__out = err
-	return __out
-}
-__out = result
-`
+	codeSnippet := `let result = codemode.CallTool("echo", {"input": "hello"}); result`
 	model := &dynamicStubModel{
 		responses: map[string]string{
-			"Decide which UTCP tools are required and generate the complete CodeMode Go snippet in this same response.": fmt.Sprintf(`{"tools":["echo"],"code":%q,"stream":false}`, codeSnippet),
+			"You are a strict UTCP CodeMode planner and executor": fmt.Sprintf(`{"tools":["echo"],"code":%q,"stream":false}`, codeSnippet),
 		},
 	}
 	mem := memory.NewSessionMemory(&memory.MemoryBank{}, 4)
@@ -1716,9 +1703,6 @@ __out = result
 		t.Fatalf("Generate returned error: %v", err)
 	}
 
-	// Generate returns CodeMode's raw execution envelope when CodeMode handles
-	// the request directly. Use checked assertions so regressions fail cleanly
-	// instead of panicking with an interface conversion error.
 	result, ok := out.(codemode.CodeModeResult)
 	if !ok {
 		t.Fatalf("expected codemode.CodeModeResult, got %T (%v)", out, out)
@@ -1750,7 +1734,7 @@ func TestCodeMode_ExecutesCallToolInsideDSL2(t *testing.T) {
 			"use_tool": true,
 			"tool_name": "codemode.run_code",
 			"arguments": {
-				"code": "codemode.CallTool(\"echo\", map[string]any{\"input\": \"hi\"})"
+				"code": "let result = codemode.CallTool(\"echo\", {\"input\": \"hi\"}); result"
 			}
 		}`,
 	}
