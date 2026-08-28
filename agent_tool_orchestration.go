@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Protocol-Lattice/go-agent/src/memory"
 	"github.com/Protocol-Lattice/go-agent/src/models"
@@ -20,6 +22,22 @@ const (
 	defaultToolLoopMaxSteps        = 12
 	defaultToolObservationMaxBytes = 4000
 )
+
+func orchestratorLoggingEnabled() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("AGENT_ORCHESTRATOR_LOG"))) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
+}
+
+func orchestratorLogf(format string, args ...any) {
+	if !orchestratorLoggingEnabled() {
+		return
+	}
+	log.Printf("[orchestrator] "+format, args...)
+}
 
 type ToolChoice struct {
 	UseTool     bool           `json:"use_tool"`
@@ -236,8 +254,12 @@ type toolPlan struct {
 }
 
 func (a *Agent) toolOrchestrator(ctx context.Context, sessionID, userInput string, records []memory.MemoryRecord, files ...models.File) (bool, string, error) {
+	startedAt := time.Now()
+	orchestratorLogf("request started input_bytes=%d memory_records=%d files=%d", len(userInput), len(records), len(files))
+
 	lowerInput := strings.ToLower(strings.TrimSpace(userInput))
 	if !a.likelyNeedsToolCall(lowerInput) {
+		orchestratorLogf("request skipped reason=no_tool_intent duration=%s", time.Since(startedAt))
 		return false, "", nil
 	}
 
@@ -246,15 +268,21 @@ func (a *Agent) toolOrchestrator(ctx context.Context, sessionID, userInput strin
 		toolList = appendCodeModeToolSpec(toolList)
 	}
 	if len(toolList) == 0 {
+		orchestratorLogf("request skipped reason=no_registered_tools duration=%s", time.Since(startedAt))
 		return false, "", nil
 	}
+	orchestratorLogf("tools ready count=%d codemode=%t", len(toolList), a.CodeMode != nil)
 
 	if native, ok := a.model.(models.ToolCallingAgent); ok && len(files) == 0 {
+		orchestratorLogf("route selected mode=native")
 		handled, output, err := a.toolOrchestratorNative(ctx, sessionID, userInput, records, toolList, native)
 		if !errors.Is(err, models.ErrToolCallingUnsupported) {
+			orchestratorLogf("request finished mode=native handled=%t output_bytes=%d duration=%s err=%v", handled, len(output), time.Since(startedAt), err)
 			return handled, output, err
 		}
+		orchestratorLogf("native unsupported; falling back to json planner")
 	}
+	orchestratorLogf("route selected mode=json_planner")
 
 	toolDesc := a.cachedToolPrompt(toolList)
 	memoryDesc := a.renderMemory(records)
@@ -312,25 +340,31 @@ JSON shape:
 `, a.systemInstructions(), userInput, memoryDesc, fileDesc, workspaceRules, toolDesc, canonicalToolNames, strings.Join(observations, "\n\n"))
 	}
 
-	planFromModel := func(ctx context.Context, _step int, observations []string) (toolPlan, error) {
+	planFromModel := func(ctx context.Context, step int, observations []string) (toolPlan, error) {
 		prompt := planPrompt(observations)
 		var raw any
 		var err error
+		modelStartedAt := time.Now()
+		orchestratorLogf("planner request mode=json step=%d observations=%d prompt_bytes=%d", step, len(observations), len(prompt))
 		if len(files) > 0 {
 			raw, err = a.model.GenerateWithFiles(ctx, prompt, files)
 		} else {
 			raw, err = a.model.Generate(ctx, prompt)
 		}
 		if err != nil {
+			orchestratorLogf("planner failed mode=json step=%d duration=%s err=%v", step, time.Since(modelStartedAt), err)
 			return toolPlan{}, err
 		}
 		rawText := fmt.Sprint(raw)
+		orchestratorLogf("planner response mode=json step=%d response_bytes=%d duration=%s", step, len(rawText), time.Since(modelStartedAt))
 		jsonText := extractJSON(rawText)
 		if jsonText == "" {
+			orchestratorLogf("planner invalid response mode=json step=%d reason=no_json", step)
 			return toolPlan{}, fmt.Errorf("planner_invalid_json")
 		}
 		var tc ToolChoice
 		if err := json.Unmarshal([]byte(jsonText), &tc); err != nil {
+			orchestratorLogf("planner invalid response mode=json step=%d reason=decode_error err=%v", step, err)
 			return toolPlan{}, fmt.Errorf("planner_invalid_json: %w", err)
 		}
 		if tc.Arguments == nil {
@@ -385,10 +419,14 @@ For refactor/edit/write/create/change/fix requests, discovery is not completion.
 	}
 
 	planFromModel := func(ctx context.Context, step int, observations []string) (toolPlan, error) {
+		modelStartedAt := time.Now()
+		orchestratorLogf("planner request mode=native step=%d observations=%d", step, len(observations))
 		response, err := native.GenerateWithTools(ctx, planPrompt(step, observations), definitions)
 		if err != nil {
+			orchestratorLogf("planner failed mode=native step=%d duration=%s err=%v", step, time.Since(modelStartedAt), err)
 			return toolPlan{}, err
 		}
+		orchestratorLogf("planner response mode=native step=%d tool_calls=%d content_bytes=%d duration=%s", step, len(response.ToolCalls), len(response.Content), time.Since(modelStartedAt))
 		if len(response.ToolCalls) == 0 {
 			return toolPlan{
 				useTool:     false,
@@ -432,6 +470,7 @@ func (a *Agent) runToolLoop(
 	plan toolPlanFromModel,
 	opts runOptions,
 ) (bool, string, error) {
+	startedAt := time.Now()
 	requiresMutation := requestRequiresMutation(userInput)
 	mutationDone := false
 	var observations []string
@@ -441,20 +480,26 @@ func (a *Agent) runToolLoop(
 	if maxSteps <= 0 {
 		maxSteps = configuredToolLoopMaxSteps()
 	}
+	orchestratorLogf("loop started source=%s max_steps=%d tools=%d requires_mutation=%t", opts.sourceTag, maxSteps, len(toolList), requiresMutation)
 
 	for step := 1; step <= maxSteps; step++ {
+		stepStartedAt := time.Now()
+		orchestratorLogf("step started source=%s step=%d observations=%d mutation_done=%t", opts.sourceTag, step, len(observations), mutationDone)
 		decision, err := plan(ctx, step, observations)
 		if err != nil {
 			switch {
 			case strings.HasPrefix(err.Error(), "planner_invalid_json"):
+				orchestratorLogf("step retry source=%s step=%d reason=planner_invalid_json duration=%s", opts.sourceTag, step, time.Since(stepStartedAt))
 				observations = append(observations, fmt.Sprintf("[planner] invalid_json: planner response was not valid JSON: %v", err))
 				continue
 			default:
+				orchestratorLogf("loop failed source=%s step=%d duration=%s err=%v", opts.sourceTag, step, time.Since(startedAt), err)
 				return false, "", err
 			}
 		}
 		if !decision.useTool {
 			if !toolLoopCompletionAllowed(userInput, mutationDone) {
+				orchestratorLogf("step blocked source=%s step=%d reason=mutation_required", opts.sourceTag, step)
 				observations = append(observations, fmt.Sprintf("[step %d] planner_error=mutation_required; the request is a refactor/edit/write task and only discovery/read tools have executed. Continue with the exact registered mutation tool before completion.", step))
 				continue
 			}
@@ -466,11 +511,14 @@ func (a *Agent) runToolLoop(
 				final = fmt.Sprintf("Done. Last observation:\n%s", lastToolObservation(observations))
 			}
 			a.storeMemory(sessionID, "assistant", final, map[string]string{"source": opts.sourceTag})
+			orchestratorLogf("loop completed source=%s step=%d output_bytes=%d duration=%s", opts.sourceTag, step, len(final), time.Since(startedAt))
 			return true, final, nil
 		}
+		orchestratorLogf("step planned source=%s step=%d tool_calls=%d planning_duration=%s", opts.sourceTag, step, len(decision.toolCalls), time.Since(stepStartedAt))
 
 		for _, call := range decision.toolCalls {
 			if !toolSpecExists(toolList, call.toolName) {
+				orchestratorLogf("tool rejected source=%s step=%d tool=%q reason=unknown_tool", opts.sourceTag, step, call.toolName)
 				observations = append(observations, fmt.Sprintf("[step %d] planner_error=unknown_tool requested=%q; choose ONLY an exact name from AVAILABLE UTCP TOOLS.", step, call.toolName))
 				continue
 			}
@@ -479,10 +527,12 @@ func (a *Agent) runToolLoop(
 			if call.toolName == "codemode.run_code" {
 				code, ok := call.arguments["code"].(string)
 				if !ok {
+					orchestratorLogf("tool rejected source=%s step=%d tool=%q reason=invalid_code", opts.sourceTag, step, call.toolName)
 					observations = append(observations, fmt.Sprintf("[step %d] planner_error=codemode_invalid_code", step))
 					continue
 				}
 				if err := validateCodeModeCode(code, toolList); err != nil {
+					orchestratorLogf("tool rejected source=%s step=%d tool=%q reason=validation_failed err=%v", opts.sourceTag, step, call.toolName, err)
 					observations = append(observations, fmt.Sprintf("[step %d] planner_error=%v; CodeMode execution was blocked before execution.", step, err))
 					continue
 				}
@@ -494,6 +544,7 @@ func (a *Agent) runToolLoop(
 			toolCallKey := call.toolName + "\x00" + compactJSON(call.arguments)
 			if toolCallKey == lastToolCallKey {
 				if requiresMutation && !mutationDone {
+					orchestratorLogf("tool skipped source=%s step=%d tool=%q reason=duplicate_before_mutation", opts.sourceTag, step, call.toolName)
 					observations = append(observations, fmt.Sprintf(
 						"[step %d] planner_error=duplicate_call tool=%s args=%s; repeating the same read-only call will not satisfy this request. Call the exact registered mutation tool (write/edit/patch) instead of re-reading.",
 						step,
@@ -503,6 +554,7 @@ func (a *Agent) runToolLoop(
 					continue
 				}
 				if mutationDone && plannedMutation {
+					orchestratorLogf("tool skipped source=%s step=%d tool=%q reason=duplicate_mutation", opts.sourceTag, step, call.toolName)
 					observations = append(observations, fmt.Sprintf(
 						"[step %d] planner_error=duplicate_mutation_after_success tool=%s args=%s; the mutation already succeeded. Continue with verification or report completion.",
 						step,
@@ -511,11 +563,15 @@ func (a *Agent) runToolLoop(
 					))
 					continue
 				}
+				orchestratorLogf("loop completed source=%s step=%d reason=duplicate_read output_bytes=%d duration=%s", opts.sourceTag, step, len(lastToolCallValue), time.Since(startedAt))
 				return true, lastToolCallValue, nil
 			}
 
+			toolStartedAt := time.Now()
+			orchestratorLogf("tool started source=%s step=%d tool=%q argument_fields=%d mutation=%t", opts.sourceTag, step, call.toolName, len(call.arguments), plannedMutation)
 			result, err := a.executeTool(ctx, sessionID, call.toolName, call.arguments)
 			if err != nil {
+				orchestratorLogf("tool failed source=%s step=%d tool=%q duration=%s err=%v", opts.sourceTag, step, call.toolName, time.Since(toolStartedAt), err)
 				a.storeMemory(sessionID, "assistant", fmt.Sprintf("tool %s error: %v", call.toolName, err), map[string]string{"tool": call.toolName, "source": opts.sourceTag})
 				return true, "", err
 			}
@@ -523,6 +579,7 @@ func (a *Agent) runToolLoop(
 				mutationDone = true
 			}
 			rawOut := fmt.Sprint(result)
+			orchestratorLogf("tool completed source=%s step=%d tool=%q output_bytes=%d duration=%s", opts.sourceTag, step, call.toolName, len(rawOut), time.Since(toolStartedAt))
 			lastToolCallKey, lastToolCallValue = toolCallKey, rawOut
 			observations = append(observations, formatToolObservation(step, call.toolName, call.arguments, rawOut))
 			toonBytes, _ := gotoon.Encode(rawOut)
@@ -532,6 +589,7 @@ func (a *Agent) runToolLoop(
 
 	final := fmt.Sprintf("Stopped after %d tool step(s) before the planner reported completion. Last observation:\n%s", maxSteps, lastToolObservation(observations))
 	a.storeMemory(sessionID, "assistant", final, map[string]string{"source": opts.sourceTag})
+	orchestratorLogf("loop stopped source=%s reason=step_limit max_steps=%d output_bytes=%d duration=%s", opts.sourceTag, maxSteps, len(final), time.Since(startedAt))
 	return true, final, nil
 }
 
