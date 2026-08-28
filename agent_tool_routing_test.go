@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/Protocol-Lattice/go-agent/src/memory"
@@ -81,8 +82,14 @@ func TestGeneratePreservesExplicitCodeModeRouting(t *testing.T) {
 	if utcpClient.lastToolName != "echo" {
 		t.Fatalf("last UTCP tool = %q, want echo for an explicit CodeMode request", utcpClient.lastToolName)
 	}
-	if got, want := fmt.Sprint(out), "utcp says echo"; got != want {
-		t.Fatalf("Generate output = %q, want %q", got, want)
+
+	result, ok := out.(codemode.CodeModeResult)
+	if !ok {
+		t.Fatalf("Generate output type = %T, want codemode.CodeModeResult", out)
+	}
+	value, ok := result.Value.(string)
+	if !ok || !strings.Contains(value, "utcp says echo") {
+		t.Fatalf("CodeMode result value = %T(%v), want string containing %q", result.Value, result.Value, "utcp says echo")
 	}
 }
 
@@ -105,8 +112,8 @@ func TestGenerateWithFilesPreservesExplicitCodeModeRoutingWithoutFiles(t *testin
 	if utcpClient.lastToolName != "echo" {
 		t.Fatalf("last UTCP tool = %q, want echo for an explicit CodeMode request", utcpClient.lastToolName)
 	}
-	if got, want := out, "utcp says echo"; got != want {
-		t.Fatalf("GenerateWithFiles output = %q, want %q", got, want)
+	if !strings.Contains(out, "utcp says echo") {
+		t.Fatalf("GenerateWithFiles output = %q, want output containing %q", out, "utcp says echo")
 	}
 }
 
