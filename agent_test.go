@@ -213,7 +213,7 @@ type stubUTCPClient struct {
 	searchTools     []utcpTools.Tool
 	lastSearchQuery string
 	lastSearchLimit int
-	fakeStream      *FakeStream
+	fakeStream      transports.StreamResult
 	callResult      any
 }
 
@@ -1334,6 +1334,18 @@ func TestExtractJSONStopsAtFirstObjectBeforePromptBraces(t *testing.T) {
 
 	got := extractJSON(response)
 	want := `{"use_tool":true,"tool_name":"echo","arguments":{"input":"hi"}}`
+	if got != want {
+		t.Fatalf("extractJSON() = %q, want %q", got, want)
+	}
+}
+
+func TestExtractJSONFindsFencedObjectAfterProse(t *testing.T) {
+	response := "Mutation plan:\n```json\n" +
+		`{"use_tool":true,"tool_name":"filesystem.write","arguments":{"path":"main.go"}}` +
+		"\n```"
+
+	got := extractJSON(response)
+	want := `{"use_tool":true,"tool_name":"filesystem.write","arguments":{"path":"main.go"}}`
 	if got != want {
 		t.Fatalf("extractJSON() = %q, want %q", got, want)
 	}

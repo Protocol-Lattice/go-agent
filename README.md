@@ -1,6 +1,6 @@
 # go-agent
 
-[![Go Version](https://img.shields.io/badge/Go-1.25-00ADD8?logo=go&logoColor=white)](https://go.dev/dl/)
+[![Go Version](https://img.shields.io/badge/Go-1.25.10-00ADD8?logo=go&logoColor=white)](https://go.dev/dl/)
 [![CI Status](https://github.com/Protocol-Lattice/go-agent/actions/workflows/go.yml/badge.svg)](https://github.com/Protocol-Lattice/go-agent/actions/workflows/go.yml)
 [![Go Reference](https://pkg.go.dev/badge/github.com/Protocol-Lattice/go-agent.svg)](https://pkg.go.dev/github.com/Protocol-Lattice/go-agent)
 [![Go Report Card](https://goreportcard.com/badge/github.com/Protocol-Lattice/go-agent)](https://goreportcard.com/report/github.com/Protocol-Lattice/go-agent)
@@ -455,6 +455,13 @@ a, err := agent.New(agent.Options{
 For model-selected tool execution across providers and processes, wire execution through UTCP. Agents can also be exposed as UTCP tools.
 
 Models that implement `models.ToolCallingAgent` use provider-native tool calls automatically. The OpenAI adapter supports this path; other models continue through the prompt-based planner. Native tool calls are not cached because they may execute side effects.
+
+Enable tool-orchestration diagnostics with `AGENT_ORCHESTRATOR_LOG=1` (`true`,
+`yes`, and `on` are also accepted). The logs distinguish planner latency,
+dispatch overhead, local/CodeMode/UTCP execution, stream setup, chunk count,
+completion, and errors. Prompt text, argument values, and tool results are not
+written to the log. Observed UTCP `tool_result` events also include
+`duration_ms`, so gateways can expose the same timing to streaming clients.
 
 ## Agents As Tools
 

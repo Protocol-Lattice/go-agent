@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"regexp"
 	"strconv"
@@ -185,24 +186,30 @@ func (a *Agent) executeTool(
 	sessionID, toolName string,
 	args map[string]any,
 ) (any, error) {
+	startedAt := time.Now()
 	if args == nil {
 		args = map[string]any{}
 	}
+	orchestratorLogf("tool dispatch started tool=%q argument_fields=%d", toolName, len(args))
 
 	// 0. Built-in CodeMode tool.
 	if toolName == codemode.CodeModeToolName || toolName == "codemode.run_code" {
 		if a.CodeMode == nil {
+			orchestratorLogf("tool dispatch rejected tool=%q backend=codemode reason=not_configured duration=%s", toolName, time.Since(startedAt))
 			return nil, fmt.Errorf("codemode is not configured")
 		}
 		if !a.AllowUnsafeTools {
+			orchestratorLogf("tool dispatch rejected tool=%q backend=codemode reason=unauthorized duration=%s", toolName, time.Since(startedAt))
 			return nil, fmt.Errorf("unauthorized tool execution: %s is restricted", toolName)
 		}
 
 		code, ok := args["code"].(string)
 		if !ok || strings.TrimSpace(code) == "" {
+			orchestratorLogf("tool dispatch rejected tool=%q backend=codemode reason=invalid_code duration=%s", toolName, time.Since(startedAt))
 			return nil, fmt.Errorf("codemode.run_code requires non-empty string field: code")
 		}
 		if err := a.validateCodeModeToolCalls(code); err != nil {
+			orchestratorLogf("tool dispatch rejected tool=%q backend=codemode reason=validation_failed duration=%s err=%v", toolName, time.Since(startedAt), err)
 			return nil, err
 		}
 
@@ -220,16 +227,20 @@ func (a *Agent) executeTool(
 			}
 		}
 
+		orchestratorLogf("tool backend started tool=%q backend=codemode timeout_ms=%d", toolName, timeout)
 		result, err := a.CodeMode.Execute(ctx, codemode.CodeModeArgs{
 			Code:    code,
 			Timeout: timeout,
 		})
 		if err != nil {
+			orchestratorLogf("tool backend failed tool=%q backend=codemode duration=%s err=%v", toolName, time.Since(startedAt), err)
 			return nil, err
 		}
 		if strings.TrimSpace(result.Stderr) != "" {
+			orchestratorLogf("tool backend failed tool=%q backend=codemode duration=%s reason=stderr stderr_bytes=%d", toolName, time.Since(startedAt), len(result.Stderr))
 			return nil, fmt.Errorf("codemode script produced stderr: %s", result.Stderr)
 		}
+		orchestratorLogf("tool backend completed tool=%q backend=codemode duration=%s stdout_bytes=%d result_type=%T", toolName, time.Since(startedAt), len(result.Stdout), result.Value)
 
 		if result.Stdout != "" {
 			return map[string]any{
@@ -242,42 +253,68 @@ func (a *Agent) executeTool(
 	}
 
 	if tool, _, ok := a.lookupTool(toolName); ok {
+		orchestratorLogf("tool backend started tool=%q backend=local", toolName)
 		response, err := tool.Invoke(ctx, ToolRequest{
 			SessionID: sessionID,
 			Arguments: args,
 		})
 		if err != nil {
+			orchestratorLogf("tool backend failed tool=%q backend=local duration=%s err=%v", toolName, time.Since(startedAt), err)
 			return nil, err
 		}
+		orchestratorLogf("tool backend completed tool=%q backend=local duration=%s result_type=%T", toolName, time.Since(startedAt), response.Content)
 		return response.Content, nil
 	}
 
 	if a.UTCPClient != nil {
 		if streamFlag, ok := args["stream"].(bool); ok && streamFlag {
+			orchestratorLogf("tool backend started tool=%q backend=utcp stream=true", toolName)
 			stream, err := a.UTCPClient.CallToolStream(ctx, toolName, args)
 			if err != nil {
+				orchestratorLogf("tool backend failed tool=%q backend=utcp stream=true duration=%s err=%v", toolName, time.Since(startedAt), err)
 				return nil, err
 			}
 			if stream == nil {
+				orchestratorLogf("tool backend failed tool=%q backend=utcp stream=true duration=%s reason=nil_stream", toolName, time.Since(startedAt))
 				return nil, fmt.Errorf("CallToolStream returned nil stream for %s", toolName)
 			}
 
 			var sb strings.Builder
+			chunks := 0
 			for {
-				chunk, err := stream.Next()
-				if err != nil {
+				chunk, nextErr := stream.Next()
+				if errors.Is(nextErr, io.EOF) {
 					break
 				}
+				if nextErr != nil {
+					_ = stream.Close()
+					orchestratorLogf("tool backend failed tool=%q backend=utcp stream=true chunks=%d duration=%s err=%v", toolName, chunks, time.Since(startedAt), nextErr)
+					return nil, fmt.Errorf("stream tool %s: %w", toolName, nextErr)
+				}
 				if chunk != nil {
+					chunks++
 					sb.WriteString(fmt.Sprint(chunk))
 				}
 			}
+			if closeErr := stream.Close(); closeErr != nil {
+				orchestratorLogf("tool backend failed tool=%q backend=utcp stream=true phase=close chunks=%d duration=%s err=%v", toolName, chunks, time.Since(startedAt), closeErr)
+				return nil, fmt.Errorf("close stream tool %s: %w", toolName, closeErr)
+			}
+			orchestratorLogf("tool backend completed tool=%q backend=utcp stream=true chunks=%d output_bytes=%d duration=%s", toolName, chunks, sb.Len(), time.Since(startedAt))
 			return sb.String(), nil
 		}
 
-		return a.UTCPClient.CallTool(ctx, toolName, args)
+		orchestratorLogf("tool backend started tool=%q backend=utcp stream=false", toolName)
+		result, err := a.UTCPClient.CallTool(ctx, toolName, args)
+		if err != nil {
+			orchestratorLogf("tool backend failed tool=%q backend=utcp stream=false duration=%s err=%v", toolName, time.Since(startedAt), err)
+			return nil, err
+		}
+		orchestratorLogf("tool backend completed tool=%q backend=utcp stream=false duration=%s result_type=%T", toolName, time.Since(startedAt), result)
+		return result, nil
 	}
 
+	orchestratorLogf("tool dispatch rejected tool=%q reason=unknown_tool duration=%s", toolName, time.Since(startedAt))
 	return nil, fmt.Errorf("unknown tool: %s", toolName)
 }
 
@@ -655,9 +692,10 @@ func (a *Agent) likelyNeedsToolCall(lowerInput string) bool {
 	if len(lowerInput) < 2 {
 		return false
 	}
+	normalizedGreeting := strings.Trim(lowerInput, " \t\r\n.,!?;:")
 	greetings := []string{"hello", "hi", "hey", "good morning", "good afternoon", "thanks", "thank you"}
 	for _, g := range greetings {
-		if lowerInput == g || strings.HasPrefix(lowerInput, g+" ") || strings.HasPrefix(lowerInput, g+",") {
+		if normalizedGreeting == g || normalizedGreeting == g+" there" {
 			return false
 		}
 	}

@@ -235,7 +235,10 @@ func (a *Agent) Generate(ctx context.Context, sessionID, userInput string) (any,
 	// ---------------------------------------------
 	// 2. CODEMODE (Go-like DSL)
 	// ---------------------------------------------
-	if a.CodeMode != nil && shouldUseDirectCodeMode(trimmed) {
+	if a.CodeMode != nil && explicitlyRequestsCodeMode(trimmed) && !a.AllowUnsafeTools {
+		return "", fmt.Errorf("unauthorized tool execution: codemode.run_code is restricted")
+	}
+	if a.CodeMode != nil && a.AllowUnsafeTools && shouldUseDirectCodeMode(trimmed) {
 		handled, output, err := a.CodeMode.CallTool(ctx, userInput)
 		if err != nil {
 			return "", err
@@ -249,10 +252,11 @@ func (a *Agent) Generate(ctx context.Context, sessionID, userInput string) (any,
 	// 3. TOOL ORCHESTRATOR (normal UTCP tools)
 	// ---------------------------------------------
 	prefetchWG.Wait() // Ensure memory is ready for orchestrator
-	if handled, output, err := a.toolOrchestrator(ctx, sessionID, userInput, records); handled {
-		if err != nil {
-			return "", err
-		}
+	handled, output, orchestratorErr := a.toolOrchestrator(ctx, sessionID, userInput, records)
+	if orchestratorErr != nil {
+		return "", orchestratorErr
+	}
+	if handled {
 		// Tool executed → do NOT store user memory
 		return output, nil
 	}
@@ -401,7 +405,10 @@ func (a *Agent) GenerateWithFiles(
 
 	// Direct CodeMode does not receive files.
 	// If files are present, CodeMode must be disabled unless it receives full attachment context.
-	if trimmed != "" && !fileBacked && a.CodeMode != nil && shouldUseDirectCodeMode(trimmed) {
+	if trimmed != "" && !fileBacked && a.CodeMode != nil && explicitlyRequestsCodeMode(trimmed) && !a.AllowUnsafeTools {
+		return "", fmt.Errorf("unauthorized tool execution: codemode.run_code is restricted")
+	}
+	if trimmed != "" && !fileBacked && a.CodeMode != nil && a.AllowUnsafeTools && shouldUseDirectCodeMode(trimmed) {
 		handled, output, err := a.CodeMode.CallTool(ctx, userInput)
 		if err != nil {
 			return "", err
@@ -467,10 +474,11 @@ func (a *Agent) GenerateWithFiles(
 		orchestratorInput = ob.String()
 	}
 
-	if handled, output, err := a.toolOrchestrator(ctx, sessionID, orchestratorInput, records, allFiles...); handled {
-		if err != nil {
-			return "", err
-		}
+	handled, output, orchestratorErr := a.toolOrchestrator(ctx, sessionID, orchestratorInput, records, allFiles...)
+	if orchestratorErr != nil {
+		return "", orchestratorErr
+	}
+	if handled {
 		return output, nil
 	}
 

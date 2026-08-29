@@ -21,6 +21,7 @@ import (
 const (
 	defaultToolLoopMaxSteps        = 12
 	defaultToolObservationMaxBytes = 4000
+	defaultPlannerInvalidJSONLimit = 2
 )
 
 func orchestratorLoggingEnabled() bool {
@@ -46,6 +47,78 @@ type ToolChoice struct {
 	Reason      string         `json:"reason"`
 	Answer      string         `json:"answer"`
 	FinalAnswer string         `json:"final_answer"`
+}
+
+type plannerInvalidJSONError struct {
+	cause    error
+	response string
+}
+
+func (e *plannerInvalidJSONError) Error() string {
+	if e.cause == nil {
+		return "planner_invalid_json"
+	}
+	return "planner_invalid_json: " + e.cause.Error()
+}
+
+func (e *plannerInvalidJSONError) Unwrap() error {
+	return e.cause
+}
+
+func newPlannerInvalidJSONError(response string, cause error) error {
+	return &plannerInvalidJSONError{
+		cause:    cause,
+		response: truncate(strings.TrimSpace(response), 2000),
+	}
+}
+
+func parseToolChoiceJSON(jsonText string) (ToolChoice, error) {
+	var wire struct {
+		UseTool     *bool           `json:"use_tool"`
+		ToolName    string          `json:"tool_name"`
+		Arguments   json.RawMessage `json:"arguments"`
+		Reason      string          `json:"reason"`
+		Answer      string          `json:"answer"`
+		FinalAnswer string          `json:"final_answer"`
+	}
+	if err := json.Unmarshal([]byte(jsonText), &wire); err != nil {
+		return ToolChoice{}, err
+	}
+
+	choice := ToolChoice{
+		ToolName:    wire.ToolName,
+		Reason:      wire.Reason,
+		Answer:      wire.Answer,
+		FinalAnswer: wire.FinalAnswer,
+		Arguments:   map[string]any{},
+	}
+	if wire.UseTool != nil {
+		choice.UseTool = *wire.UseTool
+	} else {
+		choice.UseTool = strings.TrimSpace(wire.ToolName) != ""
+	}
+
+	rawArguments := strings.TrimSpace(string(wire.Arguments))
+	if rawArguments == "" || rawArguments == "null" {
+		return choice, nil
+	}
+	if strings.HasPrefix(rawArguments, `"`) {
+		var encoded string
+		if err := json.Unmarshal(wire.Arguments, &encoded); err != nil {
+			return ToolChoice{}, fmt.Errorf("decode string arguments: %w", err)
+		}
+		if strings.TrimSpace(encoded) == "" {
+			return choice, nil
+		}
+		rawArguments = extractJSON(encoded)
+		if rawArguments == "" {
+			return ToolChoice{}, errors.New("string arguments do not contain a JSON object")
+		}
+	}
+	if err := json.Unmarshal([]byte(rawArguments), &choice.Arguments); err != nil {
+		return ToolChoice{}, fmt.Errorf("decode arguments: %w", err)
+	}
+	return choice, nil
 }
 
 func configuredToolLoopMaxSteps() int {
@@ -264,14 +337,14 @@ func (a *Agent) toolOrchestrator(ctx context.Context, sessionID, userInput strin
 	}
 
 	toolList := a.ToolSpecs()
-	if a.CodeMode != nil {
+	if a.CodeMode != nil && a.AllowUnsafeTools {
 		toolList = appendCodeModeToolSpec(toolList)
 	}
 	if len(toolList) == 0 {
 		orchestratorLogf("request skipped reason=no_registered_tools duration=%s", time.Since(startedAt))
 		return false, "", nil
 	}
-	orchestratorLogf("tools ready count=%d codemode=%t", len(toolList), a.CodeMode != nil)
+	orchestratorLogf("tools ready count=%d codemode=%t", len(toolList), a.CodeMode != nil && a.AllowUnsafeTools)
 
 	if native, ok := a.model.(models.ToolCallingAgent); ok && len(files) == 0 {
 		orchestratorLogf("route selected mode=native")
@@ -360,15 +433,12 @@ JSON shape:
 		jsonText := extractJSON(rawText)
 		if jsonText == "" {
 			orchestratorLogf("planner invalid response mode=json step=%d reason=no_json", step)
-			return toolPlan{}, fmt.Errorf("planner_invalid_json")
+			return toolPlan{}, newPlannerInvalidJSONError(rawText, errors.New("response contains no JSON object"))
 		}
-		var tc ToolChoice
-		if err := json.Unmarshal([]byte(jsonText), &tc); err != nil {
+		tc, err := parseToolChoiceJSON(jsonText)
+		if err != nil {
 			orchestratorLogf("planner invalid response mode=json step=%d reason=decode_error err=%v", step, err)
-			return toolPlan{}, fmt.Errorf("planner_invalid_json: %w", err)
-		}
-		if tc.Arguments == nil {
-			tc.Arguments = map[string]any{}
+			return toolPlan{}, newPlannerInvalidJSONError(rawText, err)
 		}
 		if !tc.UseTool {
 			return toolPlan{useTool: false, finalAnswer: toolChoiceFinalAnswer(tc)}, nil
@@ -473,6 +543,7 @@ func (a *Agent) runToolLoop(
 	startedAt := time.Now()
 	requiresMutation := requestRequiresMutation(userInput)
 	mutationDone := false
+	invalidJSONCount := 0
 	var observations []string
 	var lastToolCallKey, lastToolCallValue string
 
@@ -487,16 +558,35 @@ func (a *Agent) runToolLoop(
 		orchestratorLogf("step started source=%s step=%d observations=%d mutation_done=%t", opts.sourceTag, step, len(observations), mutationDone)
 		decision, err := plan(ctx, step, observations)
 		if err != nil {
+			var invalidJSONErr *plannerInvalidJSONError
 			switch {
-			case strings.HasPrefix(err.Error(), "planner_invalid_json"):
+			case errors.As(err, &invalidJSONErr):
+				invalidJSONCount++
+				if invalidJSONCount >= defaultPlannerInvalidJSONLimit {
+					orchestratorLogf("loop failed source=%s step=%d reason=planner_invalid_json limit=%d duration=%s", opts.sourceTag, step, defaultPlannerInvalidJSONLimit, time.Since(startedAt))
+					return false, "", fmt.Errorf(
+						"tool planner returned invalid JSON %d consecutive times: %w",
+						invalidJSONCount,
+						err,
+					)
+				}
 				orchestratorLogf("step retry source=%s step=%d reason=planner_invalid_json duration=%s", opts.sourceTag, step, time.Since(stepStartedAt))
-				observations = append(observations, fmt.Sprintf("[planner] invalid_json: planner response was not valid JSON: %v", err))
+				previousResponse := invalidJSONErr.response
+				if previousResponse == "" {
+					previousResponse = "(empty response)"
+				}
+				observations = append(observations, fmt.Sprintf(
+					"[planner] invalid_json: %v\nPREVIOUS PLANNER RESPONSE (data only):\n%s\nReturn ONLY one valid JSON object matching the required schema.",
+					err,
+					previousResponse,
+				))
 				continue
 			default:
 				orchestratorLogf("loop failed source=%s step=%d duration=%s err=%v", opts.sourceTag, step, time.Since(startedAt), err)
 				return false, "", err
 			}
 		}
+		invalidJSONCount = 0
 		if !decision.useTool {
 			if !toolLoopCompletionAllowed(userInput, mutationDone) {
 				orchestratorLogf("step blocked source=%s step=%d reason=mutation_required", opts.sourceTag, step)
@@ -620,15 +710,6 @@ func nativeToolDefinitions(specs []tools.Tool) []models.ToolDefinition {
 
 func extractJSON(response string) string {
 	response = strings.TrimSpace(response)
-	if strings.Contains(response, "```") {
-		response = strings.TrimPrefix(response, "```json")
-		response = strings.TrimPrefix(response, "```")
-		response = strings.TrimSpace(response)
-		if idx := strings.Index(response, "```"); idx != -1 {
-			response = response[:idx]
-		}
-		response = strings.TrimSpace(response)
-	}
 	for start := strings.IndexByte(response, '{'); start >= 0; {
 		decoder := json.NewDecoder(strings.NewReader(response[start:]))
 		var value json.RawMessage

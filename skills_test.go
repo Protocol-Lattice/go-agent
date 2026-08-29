@@ -169,11 +169,17 @@ type skillPromptModel struct {
 
 func (m *skillPromptModel) Generate(_ context.Context, prompt string) (any, error) {
 	m.prompts = append(m.prompts, prompt)
+	if strings.Contains(prompt, "You are an agentic UTCP tool execution loop") {
+		return `{"use_tool":false,"final_answer":"ok"}`, nil
+	}
 	return "ok", nil
 }
 
 func (m *skillPromptModel) GenerateWithFiles(_ context.Context, prompt string, _ []models.File) (any, error) {
 	m.prompts = append(m.prompts, prompt)
+	if strings.Contains(prompt, "You are an agentic UTCP tool execution loop") {
+		return `{"use_tool":false,"final_answer":"ok"}`, nil
+	}
 	return "ok", nil
 }
 

@@ -37,6 +37,26 @@ func TestGenerateRoutesRepositoryWorkThroughToolOrchestrator(t *testing.T) {
 	}
 }
 
+func TestLikelyNeedsToolCallDoesNotDropPoliteToolCommands(t *testing.T) {
+	a := &Agent{}
+
+	for _, input := range []string{"hello", "Hello!", "thanks", "Good morning."} {
+		if a.likelyNeedsToolCall(strings.ToLower(input)) {
+			t.Errorf("likelyNeedsToolCall(%q) = true, want false for standalone small talk", input)
+		}
+	}
+
+	for _, input := range []string{
+		"Hello, run the echo tool.",
+		"Hey, inspect the repository files.",
+		"Thanks, now call the deploy tool.",
+	} {
+		if !a.likelyNeedsToolCall(strings.ToLower(input)) {
+			t.Errorf("likelyNeedsToolCall(%q) = false, want true for a tool command", input)
+		}
+	}
+}
+
 func TestGenerateWithFilesRoutesRepositoryWorkThroughToolOrchestrator(t *testing.T) {
 	agent, utcpClient := newToolRoutingTestAgent(t)
 
@@ -114,6 +134,55 @@ func TestGenerateWithFilesPreservesExplicitCodeModeRoutingWithoutFiles(t *testin
 	}
 	if !strings.Contains(out, "utcp says echo") {
 		t.Fatalf("GenerateWithFiles output = %q, want output containing %q", out, "utcp says echo")
+	}
+}
+
+func TestGenerateRejectsExplicitCodeModeWhenUnsafeToolsAreDisabled(t *testing.T) {
+	model := &dynamicStubModel{responses: map[string]string{}}
+	utcpClient := &stubUTCPClient{}
+	a, err := New(Options{
+		Model:      model,
+		Memory:     memory.NewSessionMemory(&memory.MemoryBank{}, 4),
+		UTCPClient: utcpClient,
+		CodeMode:   codemode.NewCodeModeUTCP(utcpClient, model),
+	})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+
+	_, err = a.Generate(context.Background(), "session", "Run code with CodeMode using the echo tool.")
+	if err == nil || !strings.Contains(err.Error(), "unauthorized tool execution") {
+		t.Fatalf("Generate error = %v, want unauthorized CodeMode error", err)
+	}
+	if utcpClient.callCount != 0 {
+		t.Fatalf("UTCP call count = %d, want 0", utcpClient.callCount)
+	}
+}
+
+func TestGenerateUsesNormalToolLoopWhenCodeModeIsRestricted(t *testing.T) {
+	model := &dynamicStubModel{responses: map[string]string{
+		"You are an agentic UTCP tool execution loop": `{"use_tool":true,"tool_name":"echo","arguments":{"input":"hello"}}`,
+	}}
+	utcpClient := &stubUTCPClient{searchTools: []utcpTools.Tool{{Name: "echo", Description: "Echo input"}}}
+	a, err := New(Options{
+		Model:      model,
+		Memory:     memory.NewSessionMemory(&memory.MemoryBank{}, 4),
+		UTCPClient: utcpClient,
+		CodeMode:   codemode.NewCodeModeUTCP(utcpClient, model),
+	})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+
+	out, err := a.Generate(context.Background(), "session", "Run the echo tool with hello.")
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	if got, want := fmt.Sprint(out), "utcp says echo"; got != want {
+		t.Fatalf("Generate output = %q, want %q", got, want)
+	}
+	if utcpClient.callCount != 1 {
+		t.Fatalf("UTCP call count = %d, want 1", utcpClient.callCount)
 	}
 }
 

@@ -20,6 +20,17 @@ var explicitSingleToolRequestPattern = regexp.MustCompile(
 // Broad repository work must go through the normal tool orchestrator so the
 // planner can inspect, edit, validate, and repeat tool calls across many steps.
 func shouldUseDirectCodeMode(input string) bool {
+	if explicitlyRequestsCodeMode(input) {
+		return true
+	}
+
+	// Keep compatibility with natural-language requests for one named tool,
+	// such as "Run the echo tool". Plural or broad requests such as "inspect
+	// the repository with the available tools" intentionally do not match.
+	return explicitSingleToolRequestPattern.MatchString(strings.ToLower(strings.TrimSpace(input)))
+}
+
+func explicitlyRequestsCodeMode(input string) bool {
 	lower := strings.ToLower(strings.TrimSpace(input))
 	for _, marker := range []string{
 		"codemode",
@@ -32,11 +43,7 @@ func shouldUseDirectCodeMode(input string) bool {
 			return true
 		}
 	}
-
-	// Keep compatibility with natural-language requests for one named tool,
-	// such as "Run the echo tool". Plural or broad requests such as "inspect
-	// the repository with the available tools" intentionally do not match.
-	return explicitSingleToolRequestPattern.MatchString(lower)
+	return false
 }
 
 // GenerateStream provides a streaming interface for the agent's generation process.
@@ -99,7 +106,10 @@ func (a *Agent) GenerateStream(ctx context.Context, sessionID, userInput string)
 	// 2. CODEMODE
 	// Do not automatically short-circuit every request into one CodeMode call.
 	// In particular, repository-wide refactors need the multi-step tool loop.
-	if a.CodeMode != nil && shouldUseDirectCodeMode(trimmed) {
+	if a.CodeMode != nil && explicitlyRequestsCodeMode(trimmed) && !a.AllowUnsafeTools {
+		return nil, fmt.Errorf("unauthorized tool execution: codemode.run_code is restricted")
+	}
+	if a.CodeMode != nil && a.AllowUnsafeTools && shouldUseDirectCodeMode(trimmed) {
 		handled, output, err := a.CodeMode.CallTool(ctx, userInput)
 		if err != nil {
 			return immediateStream(output, err)
@@ -114,8 +124,12 @@ func (a *Agent) GenerateStream(ctx context.Context, sessionID, userInput string)
 	// The orchestrator can perform up to configuredToolLoopMaxSteps sequential
 	// tool steps instead of returning after the first tool invocation.
 	prefetchWG.Wait()
-	if handled, output, err := a.toolOrchestrator(ctx, sessionID, userInput, records); handled {
-		return immediateStream(output, err)
+	handled, output, orchestratorErr := a.toolOrchestrator(ctx, sessionID, userInput, records)
+	if orchestratorErr != nil {
+		return nil, orchestratorErr
+	}
+	if handled {
+		return immediateStream(output, nil)
 	}
 
 	// 5. STORE USER MEMORY
