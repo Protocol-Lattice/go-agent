@@ -4,11 +4,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"sync"
 
 	"github.com/Protocol-Lattice/go-agent/src/memory"
 	"github.com/Protocol-Lattice/go-agent/src/models"
+)
+
+var explicitSingleToolRequestPattern = regexp.MustCompile(
+	`\b(?:run|call|invoke|execute|use)\s+(?:the\s+)?[a-z0-9][a-z0-9_.:/-]*\s+tool\b`,
 )
 
 // shouldUseDirectCodeMode keeps CodeMode as an explicit execution strategy.
@@ -27,7 +32,11 @@ func shouldUseDirectCodeMode(input string) bool {
 			return true
 		}
 	}
-	return false
+
+	// Keep compatibility with natural-language requests for one named tool,
+	// such as "Run the echo tool". Plural or broad requests such as "inspect
+	// the repository with the available tools" intentionally do not match.
+	return explicitSingleToolRequestPattern.MatchString(lower)
 }
 
 // GenerateStream provides a streaming interface for the agent's generation process.
