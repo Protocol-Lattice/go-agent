@@ -245,7 +245,7 @@ func (a *Agent) Generate(ctx context.Context, sessionID, userInput string) (any,
 		return "", fmt.Errorf("unauthorized tool execution: codemode.run_code is restricted")
 	}
 	if a.CodeMode != nil && a.AllowUnsafeTools && shouldUseDirectCodeMode(trimmed) {
-		handled, output, err := a.CodeMode.CallTool(ctx, userInput)
+		handled, output, err := a.callCodeMode(ctx, userInput)
 		if err != nil {
 			return "", err
 		}
@@ -415,7 +415,7 @@ func (a *Agent) GenerateWithFiles(
 		return "", fmt.Errorf("unauthorized tool execution: codemode.run_code is restricted")
 	}
 	if trimmed != "" && !fileBacked && a.CodeMode != nil && a.AllowUnsafeTools && shouldUseDirectCodeMode(trimmed) {
-		handled, output, err := a.CodeMode.CallTool(ctx, userInput)
+		handled, output, err := a.callCodeMode(ctx, userInput)
 		if err != nil {
 			return "", err
 		}
