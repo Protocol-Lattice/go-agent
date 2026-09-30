@@ -3,6 +3,7 @@ package models
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -50,7 +51,15 @@ func firstChoiceText(result *components.ChatResult) (string, error) {
 		return "", errors.New("no response from OpenRouter")
 	}
 
-	content, ok := result.Choices[0].Message.Content.GetOrZero()
+	message := result.Choices[0].Message
+	if message.Content.IsNull() {
+		if refusal, ok := message.Refusal.GetOrZero(); ok && !message.Refusal.IsNull() && strings.TrimSpace(refusal) != "" {
+			return "", fmt.Errorf("OpenRouter refused the request: %s", refusal)
+		}
+		return "", errors.New("empty response content from OpenRouter")
+	}
+
+	content, ok := message.Content.GetOrZero()
 	if !ok {
 		return "", errors.New("empty response content from OpenRouter")
 	}
@@ -66,10 +75,26 @@ func firstChoiceText(result *components.ChatResult) (string, error) {
 				sb.WriteString(item.ChatContentText.Text)
 			}
 		}
-		return sb.String(), nil
+		if sb.Len() > 0 {
+			return sb.String(), nil
+		}
 	}
 
-	return "", errors.New("unsupported response content shape from OpenRouter")
+	// OpenRouter go-sdk v0.5.12 also exposes an Any union member. Providers
+	// can use it for structured JSON/object content; encode that value back to
+	// JSON so downstream planners can parse it exactly like text JSON.
+	if content.Any != nil {
+		if text, ok := content.Any.(string); ok {
+			return text, nil
+		}
+		encoded, err := json.Marshal(content.Any)
+		if err != nil {
+			return "", fmt.Errorf("encode structured OpenRouter response content: %w", err)
+		}
+		return string(encoded), nil
+	}
+
+	return "", errors.New("empty response content from OpenRouter")
 }
 
 func (o *OpenRouterLLM) Generate(ctx context.Context, prompt string) (any, error) {
