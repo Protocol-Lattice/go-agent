@@ -574,6 +574,55 @@ Lattice can integrate with UTCP CodeMode and chain execution:
 
 Use these features only in trusted environments. CodeMode executes generated Go snippets through the configured UTCP runtime.
 
+### Jev decision layer for UTCP CodeMode
+
+CodeMode can put OpenRouter Jev 1.13 in front of its generative planner. Jev
+selects the exact UTCP tool from a bounded candidate set; the CodeMode model
+then generates only the Expr arguments/code for that selected tool.
+
+```go
+kit, err := adk.New(
+    ctx,
+    adk.WithUTCP(client),
+    adk.WithCodeModeUtcp(client, codeModeModel),
+    adk.WithOpenRouterJevCodeMode(agent.OpenRouterJevConfig{
+        // Uses OPENROUTER_API_KEY (or OPENROUTER_KEY) by default.
+        MinConfidence: 0.60,
+    }),
+)
+```
+
+The default model is pinned to `typesafe/jev-1.13` and calls OpenRouter's
+Decisions API. Before the Jev request, CodeMode deterministically ranks the
+available UTCP registry and keeps at most 20 candidates by default; override
+that with `UTCP_CODEMODE_JEV_CANDIDATE_LIMIT`.
+
+```text
+user request
+    │
+    ▼
+UTCP registry
+    │
+    ├── deterministic candidate ranking (top 20)
+    ▼
+OpenRouter Jev 1.13
+    │
+    └── exact selected UTCP tool + confidence
+    ▼
+CodeMode generative model
+    │
+    └── Expr arguments/code for that tool only
+    ▼
+CodeMode.Execute
+    │
+    ▼
+UTCP tool execution
+```
+
+If the Jev backend is unavailable, the integration fails open to the existing
+native CodeMode planner. Once Jev successfully selects a tool, generated code
+is validated and rejected if it attempts to call a different UTCP tool.
+
 ## Examples
 
 No-key examples:
