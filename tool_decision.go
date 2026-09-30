@@ -228,11 +228,22 @@ func (l *OpenRouterJevDecisionLayer) DecideTool(ctx context.Context, input ToolD
 		return ToolDecision{}, fmt.Errorf("OpenRouter Jev confidence %.3f below minimum %.3f", answer.Confidence, l.minConfidence)
 	}
 
+	probabilities := make(map[string]float64, len(answer.Probabilities))
+	for key, probability := range answer.Probabilities {
+		if key == "finish" {
+			probabilities["finish"] = probability
+			continue
+		}
+		if toolName, ok := keyToTool[key]; ok {
+			probabilities[toolName] = probability
+		}
+	}
+
 	if answer.Choice == "finish" {
 		return ToolDecision{
 			UseTool:       false,
 			Confidence:    answer.Confidence,
-			Probabilities: answer.Probabilities,
+			Probabilities: probabilities,
 			RequestID:     decoded.ID,
 			Provider:      decoded.Provider,
 		}, nil
@@ -247,7 +258,7 @@ func (l *OpenRouterJevDecisionLayer) DecideTool(ctx context.Context, input ToolD
 		UseTool:       true,
 		ToolName:      toolName,
 		Confidence:    answer.Confidence,
-		Probabilities: answer.Probabilities,
+		Probabilities: probabilities,
 		RequestID:     decoded.ID,
 		Provider:      decoded.Provider,
 	}, nil
