@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -48,7 +49,7 @@ func (a *Agent) callCodeMode(ctx context.Context, userInput string) (bool, any, 
 	for _, spec := range specs {
 		decisionTools = append(decisionTools, ToolDecisionTool{
 			Name:        spec.Name,
-			Description: spec.Description,
+			Description: codeModeDecisionToolDescription(spec),
 		})
 	}
 
@@ -61,6 +62,10 @@ func (a *Agent) callCodeMode(ctx context.Context, userInput string) (bool, any, 
 	if err != nil {
 		if ctx.Err() != nil {
 			return false, "", ctx.Err()
+		}
+		var confidenceErr *ToolDecisionConfidenceError
+		if errors.As(err, &confidenceErr) {
+			return true, "", confidenceErr
 		}
 		orchestratorLogf("codemode decision layer failed err=%v; falling back to native codemode planner", err)
 		return a.CodeMode.CallTool(ctx, userInput)
@@ -202,6 +207,32 @@ func (a *Agent) validateSelectedCodeModePlan(plan codeModeDecisionPlan, selected
 		return fmt.Errorf("codemode stream flag does not match generated code")
 	}
 	return nil
+}
+
+func codeModeDecisionToolDescription(spec tools.Tool) string {
+	parts := make([]string, 0, 4)
+	if description := strings.TrimSpace(spec.Description); description != "" {
+		parts = append(parts, description)
+	}
+	if len(spec.Tags) > 0 {
+		tags := append([]string(nil), spec.Tags...)
+		sort.Strings(tags)
+		parts = append(parts, "tags: "+strings.Join(tags, ", "))
+	}
+	if len(spec.Inputs.Properties) > 0 {
+		fields := make([]string, 0, len(spec.Inputs.Properties))
+		for field := range spec.Inputs.Properties {
+			fields = append(fields, field)
+		}
+		sort.Strings(fields)
+		parts = append(parts, "input fields: "+strings.Join(fields, ", "))
+	}
+	if len(spec.Inputs.Required) > 0 {
+		required := append([]string(nil), spec.Inputs.Required...)
+		sort.Strings(required)
+		parts = append(parts, "required: "+strings.Join(required, ", "))
+	}
+	return strings.Join(parts, "; ")
 }
 
 func codeModeToolByName(specs []tools.Tool, name string) (tools.Tool, bool) {
