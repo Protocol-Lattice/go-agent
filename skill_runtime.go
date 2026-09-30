@@ -78,6 +78,7 @@ func (a *Agent) generateWithRouting(ctx context.Context, sessionID, userInput st
         Model: a.model, Memory: a.memory, SystemPrompt: prompt, ContextLimit: a.contextLimit,
         SkillsDir: a.skillsDir, DisableSkills: true, ToolCatalog: toolCatalog,
         SubAgentDirectory: a.subAgentDirectory, UTCPClient: requestUTCP, CodeMode: codeMode,
+        CodeModeDecisionLayer: a.codeModeDecisionLayer, CodeModePlannerModel: a.codeModePlannerModel,
         Shared: a.Shared, AllowUnsafeTools: a.AllowUnsafeTools, Guardrails: a.Guardrails,
         InputGuardrails: a.InputGuardrails,
     })

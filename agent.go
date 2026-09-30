@@ -22,8 +22,10 @@ const defaultSystemPrompt = "You are the primary coordinator for an AI agent tea
 type Agent struct {
 	model        models.Agent
 	memory       *memory.SessionMemory
-	systemPrompt string
-	contextLimit int
+	systemPrompt      string
+	contextLimit      int
+	codeModeDecisionLayer ToolDecisionLayer
+	codeModePlannerModel   models.Agent
 
 	toolCatalog       ToolCatalog
 	subAgentDirectory SubAgentDirectory
@@ -55,8 +57,10 @@ type Agent struct {
 type Options struct {
 	Model        models.Agent
 	Memory       *memory.SessionMemory
-	SystemPrompt string
-	ContextLimit int
+	SystemPrompt      string
+	ContextLimit      int
+	CodeModeDecisionLayer ToolDecisionLayer
+	CodeModePlannerModel   models.Agent
 	// SkillsDir is scanned for local skill instructions. When empty, .skills
 	// in the process working directory is used.
 	SkillsDir string
@@ -147,6 +151,8 @@ func New(opts Options) (*Agent, error) {
 		memory:            opts.Memory,
 		systemPrompt:      systemPrompt,
 		contextLimit:      ctxLimit,
+		codeModeDecisionLayer: opts.CodeModeDecisionLayer,
+		codeModePlannerModel:   opts.CodeModePlannerModel,
 		skillsDir:         skillsDir,
 		skills:            skills,
 		disableSkills:     opts.DisableSkills,
@@ -239,7 +245,7 @@ func (a *Agent) Generate(ctx context.Context, sessionID, userInput string) (any,
 		return "", fmt.Errorf("unauthorized tool execution: codemode.run_code is restricted")
 	}
 	if a.CodeMode != nil && a.AllowUnsafeTools && shouldUseDirectCodeMode(trimmed) {
-		handled, output, err := a.CodeMode.CallTool(ctx, userInput)
+		handled, output, err := a.callCodeMode(ctx, userInput)
 		if err != nil {
 			return "", err
 		}
@@ -409,7 +415,7 @@ func (a *Agent) GenerateWithFiles(
 		return "", fmt.Errorf("unauthorized tool execution: codemode.run_code is restricted")
 	}
 	if trimmed != "" && !fileBacked && a.CodeMode != nil && a.AllowUnsafeTools && shouldUseDirectCodeMode(trimmed) {
-		handled, output, err := a.CodeMode.CallTool(ctx, userInput)
+		handled, output, err := a.callCodeMode(ctx, userInput)
 		if err != nil {
 			return "", err
 		}
