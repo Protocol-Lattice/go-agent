@@ -22,8 +22,9 @@ const defaultSystemPrompt = "You are the primary coordinator for an AI agent tea
 type Agent struct {
 	model        models.Agent
 	memory       *memory.SessionMemory
-	systemPrompt string
-	contextLimit int
+	systemPrompt      string
+	contextLimit      int
+	toolDecisionLayer ToolDecisionLayer
 
 	toolCatalog       ToolCatalog
 	subAgentDirectory SubAgentDirectory
@@ -55,8 +56,9 @@ type Agent struct {
 type Options struct {
 	Model        models.Agent
 	Memory       *memory.SessionMemory
-	SystemPrompt string
-	ContextLimit int
+	SystemPrompt      string
+	ContextLimit      int
+	ToolDecisionLayer ToolDecisionLayer
 	// SkillsDir is scanned for local skill instructions. When empty, .skills
 	// in the process working directory is used.
 	SkillsDir string
@@ -147,6 +149,7 @@ func New(opts Options) (*Agent, error) {
 		memory:            opts.Memory,
 		systemPrompt:      systemPrompt,
 		contextLimit:      ctxLimit,
+		toolDecisionLayer: opts.ToolDecisionLayer,
 		skillsDir:         skillsDir,
 		skills:            skills,
 		disableSkills:     opts.DisableSkills,
