@@ -337,7 +337,12 @@ func (a *Agent) toolOrchestrator(ctx context.Context, sessionID, userInput strin
 	}
 
 	toolList := a.ToolSpecs()
-	if a.CodeMode != nil && a.AllowUnsafeTools {
+	if a.CodeMode != nil && a.AllowUnsafeTools && a.codeModeDecisionLayer == nil {
+		// With an external CodeMode decision layer configured, codemode.run_code
+		// is intentionally not exposed to the generic planner. Explicit CodeMode
+		// requests go through callCodeMode(), where Jev owns the UTCP tool choice.
+		// This prevents the normal planner from bypassing the decision layer by
+		// generating CodeMode source that selects tools itself.
 		toolList = appendCodeModeToolSpec(toolList)
 	}
 	if len(toolList) == 0 {
