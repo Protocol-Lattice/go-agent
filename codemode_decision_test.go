@@ -127,6 +127,39 @@ func TestCodeModeJevDecisionRejectsDifferentGeneratedTool(t *testing.T) {
 	}
 }
 
+
+func TestCodeModeLowConfidenceDoesNotBypassJevWithNativeFallback(t *testing.T) {
+	model := &dynamicStubModel{responses: map[string]string{
+		"You are a strict UTCP CodeMode planner and executor": "{\"tools\":[\"alpha\"],\"code\":\"codemode.CallTool(\\\"alpha\\\", {})\",\"stream\":false}",
+	}}
+	client := &stubUTCPClient{searchTools: []utcpTools.Tool{{Name: "alpha", Description: "Alpha tool"}}}
+	layer := &stubCodeModeDecisionLayer{err: &ToolDecisionConfidenceError{
+		Confidence: 0.42,
+		Minimum:    0.80,
+	}}
+
+	a, err := New(Options{
+		Model:                 model,
+		Memory:                memory.NewSessionMemory(&memory.MemoryBank{}, 4),
+		UTCPClient:            client,
+		CodeMode:              codemode.NewCodeModeUTCP(client, model),
+		CodeModePlannerModel:  model,
+		CodeModeDecisionLayer: layer,
+		AllowUnsafeTools:      true,
+	})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+
+	_, err = a.Generate(context.Background(), "session", "Run code with CodeMode using alpha.")
+	if err == nil || !strings.Contains(err.Error(), "below minimum") {
+		t.Fatalf("Generate error = %v, want Jev confidence error", err)
+	}
+	if client.callCount != 0 {
+		t.Fatalf("UTCP call count = %d, want 0 when Jev is below confidence threshold", client.callCount)
+	}
+}
+
 func TestCodeModeDecisionLayerFailureFallsBackToNativePlanner(t *testing.T) {
 	model := &dynamicStubModel{responses: map[string]string{
 		"You are a strict UTCP CodeMode planner and executor": "{\"tools\":[\"alpha\"],\"code\":\"codemode.CallTool(\\\"alpha\\\", {})\",\"stream\":false}",
