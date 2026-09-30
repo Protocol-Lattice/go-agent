@@ -110,7 +110,7 @@ func (a *Agent) GenerateStream(ctx context.Context, sessionID, userInput string)
 		return nil, fmt.Errorf("unauthorized tool execution: codemode.run_code is restricted")
 	}
 	if a.CodeMode != nil && a.AllowUnsafeTools && shouldUseDirectCodeMode(trimmed) {
-		handled, output, err := a.CodeMode.CallTool(ctx, userInput)
+		handled, output, err := a.callCodeMode(ctx, userInput)
 		if err != nil {
 			return immediateStream(output, err)
 		}
