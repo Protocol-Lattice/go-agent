@@ -24,7 +24,8 @@ type Agent struct {
 	memory       *memory.SessionMemory
 	systemPrompt      string
 	contextLimit      int
-	toolDecisionLayer ToolDecisionLayer
+	codeModeDecisionLayer ToolDecisionLayer
+	codeModePlannerModel   models.Agent
 
 	toolCatalog       ToolCatalog
 	subAgentDirectory SubAgentDirectory
@@ -58,7 +59,8 @@ type Options struct {
 	Memory       *memory.SessionMemory
 	SystemPrompt      string
 	ContextLimit      int
-	ToolDecisionLayer ToolDecisionLayer
+	CodeModeDecisionLayer ToolDecisionLayer
+	CodeModePlannerModel   models.Agent
 	// SkillsDir is scanned for local skill instructions. When empty, .skills
 	// in the process working directory is used.
 	SkillsDir string
@@ -149,7 +151,8 @@ func New(opts Options) (*Agent, error) {
 		memory:            opts.Memory,
 		systemPrompt:      systemPrompt,
 		contextLimit:      ctxLimit,
-		toolDecisionLayer: opts.ToolDecisionLayer,
+		codeModeDecisionLayer: opts.CodeModeDecisionLayer,
+		codeModePlannerModel:   opts.CodeModePlannerModel,
 		skillsDir:         skillsDir,
 		skills:            skills,
 		disableSkills:     opts.DisableSkills,
