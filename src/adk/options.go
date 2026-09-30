@@ -93,6 +93,26 @@ func WithCodeModeUtcp(client utcp.UtcpClientInterface, model models.Agent) Optio
 			return fmt.Errorf("codemode UTCP client cannot be nil")
 		}
 		kit.CodeMode = codemode.NewCodeModeUTCP(client, model)
+		kit.UseAgentOption(func(opts *agent.Options) {
+			opts.CodeModePlannerModel = model
+		})
 		return nil
 	}
+}
+
+// WithCodeModeDecisionLayer routes CodeMode tool selection through a bounded
+// decision layer before the generative model produces Expr arguments/code.
+func WithCodeModeDecisionLayer(layer agent.ToolDecisionLayer) Option {
+	return func(kit *AgentDevelopmentKit) error {
+		kit.UseAgentOption(func(opts *agent.Options) {
+			opts.CodeModeDecisionLayer = layer
+		})
+		return nil
+	}
+}
+
+// WithOpenRouterJevCodeMode enables the pinned TypeSafe Jev 1.13 model through
+// OpenRouter's Decisions API as the UTCP CodeMode tool-selection layer.
+func WithOpenRouterJevCodeMode(cfg agent.OpenRouterJevConfig) Option {
+	return WithCodeModeDecisionLayer(agent.NewOpenRouterJevDecisionLayer(cfg))
 }
