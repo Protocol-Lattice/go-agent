@@ -26,7 +26,7 @@ func (s *stubCodeModeDecisionLayer) DecideTool(_ context.Context, input ToolDeci
 
 func TestCodeModeJevDecisionRestrictsGeneratedTool(t *testing.T) {
 	model := &dynamicStubModel{responses: map[string]string{
-		"A separate decision model (Jev) already selected the exact next UTCP tool": `{"tools":["beta"],"code":"let result = codemode.CallTool(\\"beta\\", {\\"input\\": \\"hello\\"}); result","stream":false}`,
+		"A separate decision model (Jev) already selected the exact next UTCP tool": "{\"tools\":[\"beta\"],\"code\":\"let result = codemode.CallTool(\\\"beta\\\", {\\\"input\\\": \\\"hello\\\"}); result\",\"stream\":false}",
 	}}
 	client := &stubUTCPClient{searchTools: []utcpTools.Tool{
 		{
@@ -97,7 +97,7 @@ func TestCodeModeJevDecisionRestrictsGeneratedTool(t *testing.T) {
 
 func TestCodeModeJevDecisionRejectsDifferentGeneratedTool(t *testing.T) {
 	model := &dynamicStubModel{responses: map[string]string{
-		"A separate decision model (Jev) already selected the exact next UTCP tool": `{"tools":["beta"],"code":"codemode.CallTool(\\"alpha\\", {\\"input\\": \\"hello\\"})","stream":false}`,
+		"A separate decision model (Jev) already selected the exact next UTCP tool": "{\"tools\":[\"beta\"],\"code\":\"codemode.CallTool(\\\"alpha\\\", {\\\"input\\\": \\\"hello\\\"})\",\"stream\":false}",
 	}}
 	client := &stubUTCPClient{searchTools: []utcpTools.Tool{
 		{Name: "alpha", Description: "Alpha tool"},
@@ -129,7 +129,7 @@ func TestCodeModeJevDecisionRejectsDifferentGeneratedTool(t *testing.T) {
 
 func TestCodeModeDecisionLayerFailureFallsBackToNativePlanner(t *testing.T) {
 	model := &dynamicStubModel{responses: map[string]string{
-		"You are a strict UTCP CodeMode planner and executor": `{"tools":["alpha"],"code":"codemode.CallTool(\\"alpha\\", {})","stream":false}`,
+		"You are a strict UTCP CodeMode planner and executor": "{\"tools\":[\"alpha\"],\"code\":\"codemode.CallTool(\\\"alpha\\\", {})\",\"stream\":false}",
 	}}
 	client := &stubUTCPClient{searchTools: []utcpTools.Tool{{Name: "alpha", Description: "Alpha tool"}}}
 	layer := &stubCodeModeDecisionLayer{err: errors.New("decision backend unavailable")}
