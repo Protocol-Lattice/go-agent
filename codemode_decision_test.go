@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"github.com/Protocol-Lattice/go-agent/src/memory"
-	"github.com/Protocol-Lattice/go-agent/src/models"
 	"github.com/universal-tool-calling-protocol/go-utcp/src/plugins/codemode"
 	utcpTools "github.com/universal-tool-calling-protocol/go-utcp/src/tools"
 )
@@ -156,5 +155,3 @@ func TestCodeModeDecisionLayerFailureFallsBackToNativePlanner(t *testing.T) {
 		t.Fatalf("fallback execution = count %d tool %q, want one alpha call", client.callCount, client.lastToolName)
 	}
 }
-
-var _ models.Agent = (*dynamicStubModel)(nil)
