@@ -60,6 +60,17 @@ type OpenRouterJevConfig struct {
 	MinConfidence float64
 }
 
+// ToolDecisionConfidenceError means Jev returned a valid choice distribution,
+// but its confidence did not satisfy the caller's configured execution floor.
+type ToolDecisionConfidenceError struct {
+	Confidence float64
+	Minimum    float64
+}
+
+func (e *ToolDecisionConfidenceError) Error() string {
+	return fmt.Sprintf("OpenRouter Jev confidence %.3f below minimum %.3f", e.Confidence, e.Minimum)
+}
+
 // OpenRouterJevDecisionLayer calls OpenRouter's Decisions API with Jev.
 type OpenRouterJevDecisionLayer struct {
 	apiKey        string
@@ -225,7 +236,10 @@ func (l *OpenRouterJevDecisionLayer) DecideTool(ctx context.Context, input ToolD
 		return ToolDecision{}, fmt.Errorf("OpenRouter Jev returned unexpected answer type %q", answer.Type)
 	}
 	if l.minConfidence > 0 && answer.Confidence < l.minConfidence {
-		return ToolDecision{}, fmt.Errorf("OpenRouter Jev confidence %.3f below minimum %.3f", answer.Confidence, l.minConfidence)
+		return ToolDecision{}, &ToolDecisionConfidenceError{
+			Confidence: answer.Confidence,
+			Minimum:    l.minConfidence,
+		}
 	}
 
 	probabilities := make(map[string]float64, len(answer.Probabilities))

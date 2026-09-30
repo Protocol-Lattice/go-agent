@@ -572,7 +572,7 @@ Lattice can integrate with UTCP CodeMode and chain execution:
 - `adk.WithCodeModeUtcp(client, model)` enables Go-code tool orchestration through CodeMode.
 - `Agent.AllowUnsafeTools` must be enabled before `codemode.run_code` can execute.
 
-Use these features only in trusted environments. CodeMode executes generated Go snippets through the configured UTCP runtime.
+Use these features only in trusted environments. CodeMode executes generated Expr programs through the configured UTCP runtime.
 
 ### Jev decision layer for UTCP CodeMode
 
@@ -620,8 +620,12 @@ UTCP tool execution
 ```
 
 If the Jev backend is unavailable, the integration fails open to the existing
-native CodeMode planner. Once Jev successfully selects a tool, generated code
-is validated and rejected if it attempts to call a different UTCP tool.
+native CodeMode planner. A configured minimum-confidence floor is authoritative:
+low-confidence Jev decisions do not fall back to LLM tool selection. Once Jev
+successfully selects a tool, generated code is validated and rejected if it
+attempts to call a different UTCP tool. While this layer is enabled,
+`codemode.run_code` is not exposed to the generic tool planner, preventing a
+second planning path from bypassing Jev.
 
 ## Examples
 
